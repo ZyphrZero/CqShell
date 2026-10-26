@@ -15,6 +15,7 @@
 - [BBR 与 TCP 调优](#bbr-与-tcp-调优)
 - [第三方内核管理](#第三方内核管理)
 - [SSH 与 Docker 配置](#ssh-与-docker-配置)
+- [终端美化配置与还原](#终端美化配置与还原)
 - [远程脚本执行](#远程脚本执行)
 - [故障定位与能力边界](#故障定位与能力边界)
 - [测试与验证](#测试与验证)
@@ -54,6 +55,7 @@ flowchart TD
 | BBR / TCP | `enable_bbr`、`tcp_tune`、`calculate_tcp_buffer` | 算法检测、队列选择、缓冲区计算 |
 | 内核管理 | `bbrv3_install_kernel`、`bbrv3_remove_kernel` | 下载、校验、安装、引导检查、指定版本卸载 |
 | 服务配置 | `system_ssh`、`docker_set_ipv6` | 候选配置校验、服务更新与失败恢复 |
+| 终端美化 | `terminal_menu`、`terminal_config` | 组件安装、提示符配置、恢复基线和失败回退 |
 | 远程脚本 | `run_https_script` | 下载完成并检查语法后执行 |
 | 综合操作 | `onekey_optimization` | 按顺序调用多个独立操作，不构成整体事务 |
 
@@ -96,6 +98,7 @@ flowchart TD
 | SSH 端口修改 | root、运行中的 `ssh.service`、`sshd`、`systemctl`、`flock`、`ss` |
 | Docker IPv6 修改 | root、`python3`、支持 `--validate` 的 `dockerd`、`systemctl`、`flock` |
 | 远程脚本 | `curl`、Bash；非 root 需要提权执行时还需要 `sudo` |
+| 终端美化 | Python 3.8+、`flock`、`readlink`、Starship；配置 zsh 时还需要 zsh；安装组件需要 root 与 apt |
 
 网络、内核和服务配置入口通常在缺少依赖时返回错误；传统测速、软件安装等流程可能自行调用包管理器安装依赖。因此不能将“缺依赖不自动安装”视为整个脚本的统一行为。
 
@@ -106,7 +109,8 @@ flowchart TD
 | 变量或文件 | 默认位置 | 用途 |
 | --- | --- | --- |
 | `CQS_INSTALL_PATH` | `/usr/local/bin/cqs` | 安装后的快捷命令 |
-| `CQS_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/cqs` | 存放 `agreement.accepted` |
+| `CQS_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/cqs` | 存放 `agreement.accepted` 和 `terminal/` 状态 |
+| `CQS_TERMINAL_CONFIG` | `${XDG_CONFIG_HOME:-$HOME/.config}/cqs/terminal.toml` | CqShell 独立的 Starship 提示符配置 |
 | `CQS_KERNEL_LOCK` | `/run/lock/cqs-bbrv3.lock` | 本工具内核相关操作的共享锁 |
 | `CQS_KERNEL_BACKUP` | `/var/backups/cqs-bbrv3` | GRUB 操作前快照 |
 | `CQS_BBR_CONFIG` | `/etc/sysctl.d/99-cqs-bbr.conf` | 拥塞算法与默认队列 |
@@ -125,6 +129,7 @@ flowchart TD
 - 网络应用与撤销使用同一个配置文件锁。
 - SSH 与 Docker IPv6 各自使用目标配置文件锁。
 - 内核安装、卸载、`system_update` 和 `system_clean` 共用 `CQS_KERNEL_LOCK`。
+- 终端配置、状态查看和还原共用 `$CQS_STATE_DIR/terminal/config.lock`。
 
 锁只协调使用该锁的代码路径，不协调外部 `apt`、人工编辑或其他工具。不要删除锁文件来“解锁”：旧进程仍可能持有原文件的锁，新进程却锁住另一文件，互斥将失效。
 
@@ -313,6 +318,49 @@ BDP = W × 1000000 ÷ 8 × R ÷ 1000
 
 生成 ULA 子网不等于配置了公网 IPv6 路由，服务 active 也不等于容器端到端网络已经验证。镜像源修改 `docker_mirrors` 目前不复用此 JSON 事务流程。
 
+## 终端美化配置与还原
+
+入口为“常用工具 → 11. 终端美化（配置 / 还原）”，包含安装组件、配置并启用、查看配置、还原四个操作。
+
+### 安装和配置
+
+`terminal_install` 安装 zsh、curl 和 Python 3，仅在 Starship 不存在时调用内嵌安装器，并检查可执行文件及版本命令。安装器运行在独立 Bash 中，避免菜单的错误处理使 `set -e` 失效；安装失败返回错误，不写启动文件。“一键安装所有”同样只安装组件。
+
+`terminal_configure` 接收以下枚举项。回车保留持久化设置，首次采用默认值，输入 `q` 或 EOF 取消；无效值不会写配置。
+
+| 配置项 | 取值 | 首次默认值 |
+| --- | --- | --- |
+| Shell | `bash`、`zsh`、`both` | `bash` |
+| 样式 | `compact` 单行、`full` 双行并显示较慢命令耗时 | `full` |
+| 主色 | `cyan`、`green`、`magenta` | `cyan` |
+| 时间 | `on`、`off` | `off` |
+| Git 分支与状态 | `on`、`off` | `on` |
+
+提示符包含用户、主机和工作目录；root 用户与失败命令使用红色，图标采用普通字符，无需 Nerd Font。配置通过 `STARSHIP_CONFIG` 指向独立文件，不覆盖已有的 `~/.config/starship.toml`（除非显式将 `CQS_TERMINAL_CONFIG` 指向该文件）。
+
+只配置当前 `HOME` 下的 `.bashrc`、`${ZDOTDIR:-$HOME}/.zshrc`，不读取 `SUDO_USER` 代操作其他用户，也不执行 `chsh`。选择 zsh 仅配置其提示符，需要启动 zsh 才能看到效果。已有非导出的 `ZDOTDIR` 不会传入脚本，使用自定义目录时须显式导出。
+
+初始化采用 `# >>> cqs terminal >>>` / `# <<< cqs terminal <<<` 区块。重复配置替换区块，切换目标 Shell 时移除原目标的区块，保留其余内容；旧版逐字追加的 `eval "$(starship init bash)"` / `eval "$(starship init zsh)"` 行会去重并纳入管理。其他手工编写的初始化语句不自动识别。区块标记不完整时拒绝写入。
+
+### 备份、还原和失败边界
+
+`$CQS_STATE_DIR/terminal/` 中的文件：
+
+| 文件 | 用途 |
+| --- | --- |
+| `options.json` | 配置项；按固定枚举解析，不执行其中内容 |
+| `original.json` | 首次启用前两个启动文件及提示符文件的路径、原始字节、权限和不存在标记 |
+| `pending.json` | 本次修改前的状态，正常完成或成功回退后删除 |
+| `config.lock` | 应用与还原共享的非阻塞锁 |
+
+首次基线不会被后续配置覆盖。输入 `RESTORE` 后按首次基线逐字节还原，原来不存在的文件会删除；成功后清除基线与选项，下次启用重新建立基线。还原会覆盖启用后对受管理文件的手动编辑，因此菜单要求确认。损坏的选项文件不妨碍使用有效基线还原。
+
+配置和恢复材料使用私有权限，新建文件为 `0600`；已有启动文件保留权限。拒绝符号链接、非普通文件、重复目标路径及与基线不一致的 `HOME` / `ZDOTDIR` / 配置路径。候选在同目录写临时文件后原子替换，多文件写入失败或可捕获中断会尝试回到本次操作之前的状态。还原失败同样回退，并保留首次基线供重试。
+
+多个文件不构成操作系统级原子事务；断电、`SIGKILL` 或回退失败会保留 `pending.json`，后续操作拒绝覆盖它。需管理员核对其中的绝对路径和 Base64 文件内容、恢复或保存所需材料后再处理该文件，不应直接删除以绕过检查。不要将恢复 JSON 当成 Shell 脚本执行。
+
+启用或还原后关闭当前终端并重新登录；已初始化的当前进程不会被强制更换。还原不卸载 zsh / Starship，不更改登录 Shell，不撤销旧版本在基线建立前执行过的 `chsh`。
+
 ## 远程脚本执行
 
 `run_https_script` 依次检查 URL、完整下载、非空内容和 Bash 语法，之后才执行文件。curl 限制请求及重定向协议为 HTTPS，设置 15 秒连接超时与 300 秒总超时；远程脚本的退出状态向上传递。
@@ -388,14 +436,17 @@ python3 -B -m unittest discover -s tests -p 'test_bbr_kernel.py' -v
 | [test_https_downloads.py](../tests/test_https_downloads.py) | 本地 TLS 服务与真实 curl，验证降级跳转、残缺下载、语法错误和退出状态 |
 | [test_memory_limits.py](../tests/test_memory_limits.py) | 合成 proc/cgroup 层级，验证子组、祖先、挂载根与非法路径 |
 | [test_native_config.py](../tests/test_native_config.py) | 使用真实 sshd/dockerd 校验候选配置，不启动真实服务 |
+| [test_terminal.py](../tests/test_terminal.py) | 持久配置、初始化去重、首次基线、还原、写入失败回退、锁与路径保护；可选真实 Starship 渲染 |
 
 测试用临时目录和明确的系统命令替身隔离写操作。内核测试会用真实 `dpkg-deb` 构建和检查测试包，但不会安装或启动这些包；原生 sysctl 检查使用 `--dry-run`。
 
 可选的原生验证工具从 PATH 查找，也可通过 `CQS_TEST_SSHD`、`CQS_TEST_DOCKERD` 指定可执行文件。SSH 测试另需 `ssh-keygen`；缺少工具或 `sysctl --dry-run` 时会明确跳过相应测试。原生服务测试故意让 reload/restart 失败，以检查解析与恢复流程，不证明服务切换已通过。
 
+终端 TOML 解析测试使用 Python 3.11+ 的 `tomllib`，更早版本明确跳过该项。真实提示符验证从 PATH 查找 Starship，或通过 `CQS_TEST_STARSHIP` 指定测试二进制；验证全部样式、配色和开关组合。安装与文件故障测试中的替身仅验证控制流程，不证明 apt 或远程安装已成功。
+
 ### 验证记录与实机验收
 
-当前源码最近一次验证环境为 x86_64 WSL Debian，日期 2026-10-26：Bash 语法检查通过；101 项测试中 98 项通过，3 项因缺少原生 sshd/dockerd 跳过。此处为本次验证记录，后续以实际测试输出为准。
+当前源码验证环境为 x86_64 WSL Debian，日期 2026-10-26：Bash 语法检查通过；全量测试结果以实际输出为准。终端专项额外使用经官方 SHA-256 校验的 Starship 1.27.0 二进制，验证真实提示符渲染，未实际执行 apt 安装或更改登录 Shell。缺少原生 sshd/dockerd 的三项服务测试仍会跳过。
 
 以下工作不能由该记录替代：真实第三方内核安装与重启、不同硬件/云平台启动、arm64 实机运行、SSH 外部连接、容器 IPv6 连通性以及实际线路吞吐和延迟测试。WSL 可执行自动化检查，但本项目主动拒绝在 WSL 内安装、卸载第三方内核。
 

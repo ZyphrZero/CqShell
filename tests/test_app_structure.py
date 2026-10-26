@@ -129,7 +129,7 @@ cqs_menu
 
     def test_submenus_exit_on_zero_or_eof(self):
         for menu in ("system_related", "test_script", "useful_tools", "docker_manage",
-                     "bbr_manage", "bbrv3_kernel_menu", "system_swap"):
+                     "bbr_manage", "bbrv3_kernel_menu", "system_swap", "terminal_menu"):
             for stdin in ("0\n", ""):
                 with self.subTest(menu=menu, stdin=stdin):
                     result = self.run_shell('require_root() { :; }; ' + menu, stdin)
@@ -163,7 +163,7 @@ menu_loop() {
         declare -F "${args[0]}" >/dev/null || return 1
     done
 }
-for menu in system_related test_script useful_tools docker_manage bbr_manage bbrv3_kernel_menu system_swap; do
+for menu in system_related test_script useful_tools docker_manage bbr_manage bbrv3_kernel_menu system_swap terminal_menu; do
     "$menu" || exit 1
 done
 ''')

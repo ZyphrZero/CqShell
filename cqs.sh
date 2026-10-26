@@ -8,6 +8,7 @@ CQS_BBR_CONFIG="${CQS_BBR_CONFIG:-/etc/sysctl.d/99-cqs-bbr.conf}"
 CQS_TCP_CONFIG="${CQS_TCP_CONFIG:-/etc/sysctl.d/99-cqs-tcp.conf}"
 CQS_KERNEL_LOCK="${CQS_KERNEL_LOCK:-/run/lock/cqs-bbrv3.lock}"
 CQS_KERNEL_BACKUP="${CQS_KERNEL_BACKUP:-/var/backups/cqs-bbrv3}"
+CQS_TERMINAL_CONFIG="${CQS_TERMINAL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/cqs/terminal.toml}"
 
 # ─── 颜色定义 ────────────────────────────────────────────────
 white='\033[0m'
@@ -1855,23 +1856,337 @@ starship_install() {
     set +eu
 }
 
-# 3.11 zsh + Starship 终端美化
-download_zsh() {
-    clear
-    apt install zsh -y && apt install curl -y
-    chsh -s "$(which zsh)"
-    ( starship_install -y ) || echo -e "${yellow}Starship 安装失败，已跳过${white}"
-    echo 'eval "$(starship init zsh)"'  >> ~/.zshrc
-    echo 'eval "$(starship init bash)"' >> ~/.bashrc
-    echo "zsh+Starship安装完成,重新登录终端即可启用"
+# 3.11 终端美化：安装、配置和恢复各自独立，不修改登录 Shell。
+terminal_install() {
+    require_root || return 1
+    apt install zsh curl python3 -y || return 1
+    if ! command -v starship >/dev/null 2>&1; then
+        # 独立 Bash 保持安装器的 errexit，不受菜单的 || 错误处理影响。
+        bash -c "$(declare -f starship_install)"$'\nstarship_install -y' || {
+            echo "Starship 安装失败，未启用终端美化" >&2; return 1;
+        }
+    fi
+    require_commands starship || return 1
+    starship --version || return 1
+    echo "终端组件已安装，请在终端美化菜单中配置并启用"
+}
+
+# 首次恢复基线和本次失败回退分别保存；配置按枚举解析，不 source 状态文件。
+terminal_config() (
+    local action="$1" lock_fd state="$CQS_STATE_DIR/terminal"
+    shift
+    require_commands python3 flock readlink || return 1
+    [[ "$state" == "$(readlink -m -- "$state")" ]] || {
+        echo "终端状态目录必须为不含符号链接的绝对路径: $state" >&2; return 1;
+    }
+    (umask 077; mkdir -p -- "$state") || return 1
+    acquire_lock lock_fd "$state/config.lock" || return 1
+    python3 - "$action" "$state" "$HOME" "${ZDOTDIR:-$HOME}" "$CQS_TERMINAL_CONFIG" "$@" <<'PY'
+import base64
+import json
+import os
+from pathlib import Path
+import shlex
+import signal
+import stat
+import sys
+import tempfile
+
+action, state_dir, home, zdotdir, config, *values = sys.argv[1:]
+state_dir = Path(state_dir)
+paths = {"bash": Path(home) / ".bashrc", "zsh": Path(zdotdir) / ".zshrc", "config": Path(config)}
+backup = state_dir / "original.json"
+options = state_dir / "options.json"
+recovery = state_dir / "pending.json"
+lock = state_dir / "config.lock"
+choices = {"shell": ("bash", "zsh", "both"), "style": ("compact", "full"),
+           "color": ("cyan", "green", "magenta"), "time": ("on", "off"), "git": ("on", "off")}
+defaults = dict(zip(choices, ("bash", "full", "cyan", "off", "on")))
+begin, end = b"# >>> cqs terminal >>>", b"# <<< cqs terminal <<<"
+
+
+def interrupted(signum, frame):
+    raise RuntimeError(f"终端操作被信号 {signum} 中断")
+
+
+signal.signal(signal.SIGTERM, interrupted)
+
+
+def check_path(path):
+    if not path.is_absolute() or any(ord(c) < 32 for c in str(path)) or ".." in path.parts:
+        raise ValueError(f"需要无控制字符的绝对路径: {path}")
+    for parent in (path, *path.parents):
+        if parent.is_symlink():
+            raise ValueError(f"拒绝符号链接路径: {parent}")
+    if path.exists() and not path.is_file():
+        raise ValueError(f"目标不是普通文件: {path}")
+
+
+def capture(path):
+    check_path(path)
+    if not path.exists():
+        return None
+    return {"data": base64.b64encode(path.read_bytes()).decode("ascii"),
+            "mode": stat.S_IMODE(path.stat().st_mode)}
+
+
+def content(data, mode=0o600):
+    return {"data": base64.b64encode(data).decode("ascii"), "mode": mode}
+
+
+def json_content(data):
+    return content((json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode())
+
+
+def write(path, saved):
+    check_path(path)
+    if saved is None:
+        path.unlink(missing_ok=True)
+        return
+    data = base64.b64decode(saved["data"], validate=True)
+    mode = saved["mode"]
+    if type(mode) is not int or not 0 <= mode <= 0o7777:
+        raise ValueError("恢复文件权限无效")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.cqs-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), mode)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def load_options():
+    data = json.loads(options.read_text()) if options.exists() else defaults.copy()
+    if not isinstance(data, dict) or set(data) != set(choices) or any(data[k] not in choices[k] for k in choices):
+        raise ValueError(f"终端配置项无效: {options}")
+    return data
+
+
+def edit_rc(raw, shell, enabled):
+    # 仅接管带标记的区块与旧版本逐字追加的初始化行，保留其余字节。
+    result, inside = [], False
+    legacy = f'eval "$(starship init {shell})"'.encode()
+    for line in raw.splitlines(keepends=True):
+        stripped = line.rstrip(b"\r\n")
+        if stripped == begin:
+            if inside:
+                raise ValueError("终端初始化区块嵌套，请先检查启动文件")
+            inside = True
+        elif stripped == end:
+            if not inside:
+                raise ValueError("终端初始化区块缺少起始标记")
+            inside = False
+        elif not inside and stripped != legacy:
+            result.append(line)
+    if inside:
+        raise ValueError("终端初始化区块缺少结束标记")
+    raw = b"".join(result)
+    if enabled:
+        if raw and not raw.endswith(b"\n"):
+            raw += b"\n"
+        block = (f'{begin.decode()}\n'
+                 'if command -v starship >/dev/null 2>&1; then\n'
+                 f'    export STARSHIP_CONFIG={shlex.quote(str(paths["config"]))}\n'
+                 f'    eval "$(starship init {shell})"\n'
+                 f'fi\n{end.decode()}\n')
+        raw += block.encode()
+    return raw
+
+
+def render(settings):
+    color = settings["color"]
+    full = settings["style"] == "full"
+    prompt = "$username$hostname$directory$git_branch$git_status$cmd_duration$time$line_break$character"
+    return f"""# Managed by CqShell; configure from the terminal menu.
+add_newline = {str(full).lower()}
+format = '{prompt}'
+
+[username]
+show_always = true
+style_user = 'bold {color}'
+style_root = 'bold red'
+format = '[$user]($style)'
+
+[hostname]
+ssh_only = false
+style = 'bold {color}'
+format = '[@$hostname]($style) '
+
+[directory]
+style = 'bold {color}'
+truncation_length = 3
+truncation_symbol = '.../'
+read_only = ' ro'
+format = '[$path]($style)[$read_only](red) '
+
+[git_branch]
+disabled = {str(settings['git'] == 'off').lower()}
+symbol = 'git:'
+style = 'bold {color}'
+format = '[$symbol$branch]($style) '
+
+[git_status]
+disabled = {str(settings['git'] == 'off').lower()}
+style = 'yellow'
+format = '([$all_status$ahead_behind]($style) )'
+ahead = 'up${{count}}'
+behind = 'down${{count}}'
+diverged = 'up${{ahead_count}}/down${{behind_count}}'
+
+[cmd_duration]
+disabled = {str(not full).lower()}
+min_time = 2000
+format = '[took $duration](yellow) '
+
+[time]
+disabled = {str(settings['time'] == 'off').lower()}
+time_format = '%H:%M:%S'
+format = '[$time](dimmed white) '
+
+[line_break]
+disabled = {str(not full).lower()}
+
+[character]
+success_symbol = '[>](bold {color})'
+error_symbol = '[>](bold red)'
+vimcmd_symbol = '[<](bold {color})'
+""".encode()
+
+
+try:
+    for path in (*paths.values(), backup, options, recovery, lock):
+        check_path(path)
+    all_paths = [os.path.normpath(str(p)) for p in (*paths.values(), backup, options, recovery, lock)]
+    if len(set(all_paths)) != len(all_paths):
+        raise ValueError("终端配置、启动文件和状态文件路径不能重合")
+    if recovery.exists():
+        raise ValueError(f"上次终端操作未完成，请先检查恢复材料: {recovery}")
+    mapping = {key: str(path) for key, path in paths.items()}
+    original = json.loads(backup.read_text()) if backup.exists() else None
+    if backup.exists():
+        if (not isinstance(original, dict) or original.get("paths") != mapping
+                or not isinstance(original.get("files"), dict) or set(original["files"]) != set(paths)):
+            raise ValueError(f"恢复基线与当前 HOME/ZDOTDIR/配置路径不一致: {backup}")
+        for saved in original["files"].values():
+            if saved is not None:
+                base64.b64decode(saved["data"], validate=True)
+                if type(saved["mode"]) is not int or not 0 <= saved["mode"] <= 0o7777:
+                    raise ValueError("恢复基线权限无效")
+    settings = load_options() if action != "restore" else defaults.copy()
+    if action == "status":
+        print("状态: " + ("已启用" if original else "未启用"))
+        print("配置: " + ", ".join(f"{k}={v}" for k, v in settings.items()))
+        print(f"提示符文件: {paths['config']}\n恢复基线: {backup}")
+        sys.exit(0)
+    if action == "defaults":
+        print(" ".join(settings[k] for k in choices))
+        sys.exit(0)
+    current = {key: capture(path) for key, path in paths.items()}
+    if action == "apply":
+        if len(values) != len(choices) or any(v not in choices[k] for k, v in zip(choices, values)):
+            raise ValueError("终端配置参数无效")
+        settings = dict(zip(choices, values))
+        candidate = {}
+        for shell in ("bash", "zsh"):
+            saved = current[shell]
+            raw = base64.b64decode(saved["data"]) if saved else b""
+            enabled = settings["shell"] in (shell, "both")
+            data = edit_rc(raw, shell, enabled)
+            candidate[paths[shell]] = content(data, saved["mode"] if saved else 0o600) if data or saved else None
+        candidate[paths["config"]] = content(render(settings))
+        if original is None:
+            original = {"paths": mapping, "files": current}
+        updates = {backup: json_content(original), **candidate, options: json_content(settings)}
+    elif action == "restore":
+        if original is None:
+            raise ValueError("没有终端恢复基线，未修改任何配置")
+        updates = {paths[k]: saved for k, saved in original["files"].items()}
+        updates.update({options: None, backup: None})
+    else:
+        raise ValueError("未知终端配置操作")
+    before = {path: capture(path) for path in updates}
+    # 提交前持久保存本次状态；断电或强制终止后拒绝覆盖恢复线索。
+    write(recovery, json_content({str(p): saved for p, saved in before.items()}))
+    changed = []
+    try:
+        for path, saved in updates.items():
+            changed.append(path)
+            write(path, saved)
+    except BaseException as error:
+        failures = []
+        for path in reversed(changed):
+            try:
+                write(path, before[path])
+            except (OSError, ValueError) as rollback_error:
+                failures.append(f"{path}: {rollback_error}")
+        if failures:
+            raise RuntimeError(f"{error}; 回退失败: {'; '.join(failures)}; 恢复材料: {recovery}")
+        recovery.unlink()
+        raise
+    recovery.unlink()
+    print("已保存终端美化配置" if action == "apply" else "已还原首次美化前的配置")
+    print("请关闭当前终端并重新登录后生效；登录 Shell 和已安装软件保持不变")
+except (OSError, ValueError, KeyError, TypeError, RuntimeError, KeyboardInterrupt) as error:
+    print(f"终端配置失败: {error}", file=sys.stderr)
+    sys.exit(1)
+PY
+)
+
+terminal_apply() {
+    require_commands starship python3 || return 1
+    case "$1" in
+        zsh|both) require_commands zsh || return 1 ;;
+    esac
+    terminal_config apply "$@"
+}
+
+terminal_configure() {
+    local current target style color clock git answer
+    current=$(terminal_config defaults) || return 1
+    read -r target style color clock git <<< "$current"
+    echo "配置当前用户的终端提示符；所有输入均可回车保留，输入 q 取消。"
+    read -rp "Shell (bash/zsh/both) [$target]: " answer || return 0
+    [[ "$answer" != q ]] || return 0; target="${answer:-$target}"
+    read -rp "样式 (compact 单行/full 双行与耗时) [$style]: " answer || return 0
+    [[ "$answer" != q ]] || return 0; style="${answer:-$style}"
+    read -rp "主色 (cyan/green/magenta) [$color]: " answer || return 0
+    [[ "$answer" != q ]] || return 0; color="${answer:-$color}"
+    read -rp "显示时间 (on/off) [$clock]: " answer || return 0
+    [[ "$answer" != q ]] || return 0; clock="${answer:-$clock}"
+    read -rp "显示 Git (on/off) [$git]: " answer || return 0
+    [[ "$answer" != q ]] || return 0; git="${answer:-$git}"
+    terminal_apply "$target" "$style" "$color" "$clock" "$git"
+}
+
+terminal_restore() {
+    local answer
+    echo "还原会覆盖受管理的 .bashrc、.zshrc 和提示符文件，包括启用后手动编辑的内容。"
+    read -rp "输入 RESTORE 还原首次美化前的配置（其他输入取消）: " answer || return 0
+    [[ "$answer" == RESTORE ]] || return 0
+    terminal_config restore
+}
+
+terminal_menu() {
+    menu_loop "终端美化（当前用户；保留登录 Shell）" \
+        "1|安装 zsh / Starship 组件|terminal_install" \
+        "2|配置并启用美化|terminal_configure" \
+        "3|查看当前配置|terminal_config status" \
+        "4|还原首次美化前的配置|terminal_restore"
 }
 
 # 3.12 一键安装所有常用工具
 download_all() {
     clear
-    apt install curl wget nano unzip tar tmux iftop btop gdu fzf -y
-    download_zsh
-    echo "已全部安装"
+    require_root || return 1
+    apt install curl wget nano unzip tar tmux iftop btop gdu fzf -y || return 1
+    terminal_install || return 1
+    echo "已全部安装；终端美化可在常用工具 → 终端美化中配置并启用"
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -2115,7 +2430,7 @@ useful_tools() {
         "8|btop 系统监控|pkg_install btop" \
         "9|gdu 磁盘分析|pkg_install gdu" \
         "10|fzf 模糊搜索|pkg_install fzf" \
-        "11|zsh + Starship 终端美化|download_zsh" \
+        "11|终端美化（配置 / 还原）|terminal_menu" \
         "12|一键安装所有|download_all"
 }
 
