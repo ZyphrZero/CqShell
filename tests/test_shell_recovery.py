@@ -207,10 +207,22 @@ bbrv3_install_kernel standard
         backup = self.root / "backups"
         backup.mkdir(mode=0o777)
         backup.chmod(0o777)
-        result = self.run_shell("umask 022; bbrv3_backup_grub", CQS_KERNEL_BACKUP=str(backup))
+        boot = self.root / "boot"
+        boot.mkdir()
+        (boot / "grub.cfg").write_bytes(b"isolated test menu\n")
+        (boot / "grub.cfg").chmod(0o640)
+        definition = self.run_shell("declare -f bbrv3_backup_grub")
+        self.assertEqual(definition.returncode, 0, definition.stderr)
+        self.assertIn('${1:-/boot/grub}', definition.stdout,
+                      "Refuse to run a backup helper that cannot isolate its boot source")
+        result = self.run_shell('umask 022; bbrv3_backup_grub "$GRUB_BOOT"',
+                                CQS_KERNEL_BACKUP=str(backup), GRUB_BOOT=str(boot))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o700)
         snapshot = Path(result.stdout.strip())
+        self.assertEqual((snapshot / "grub.cfg").read_bytes(), b"isolated test menu\n")
+        self.assertEqual(stat.S_IMODE((snapshot / "grub.cfg").stat().st_mode), 0o640)
+        self.assertTrue((snapshot / "no-grubenv").is_file())
         self.assertEqual(stat.S_IMODE((snapshot / "running-kernel").stat().st_mode), 0o600)
         for marker in snapshot.glob("no-*"):
             self.assertEqual(stat.S_IMODE(marker.stat().st_mode), 0o600)

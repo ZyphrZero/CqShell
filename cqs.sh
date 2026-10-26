@@ -369,16 +369,18 @@ bbrv3_check_hyperv() {
     done
 }
 
+# The optional boot directory isolates backup tests; CLI keeps /boot/grub.
 bbrv3_backup_grub() (
-    local backup name
+    local backup name boot="${1:-/boot/grub}"
     umask 077
     cqs_check_path "$CQS_KERNEL_BACKUP" directory || return 1
     mkdir -p -- "$CQS_KERNEL_BACKUP" && chmod 700 -- "$CQS_KERNEL_BACKUP" || return 1
-    for name in grub.cfg grubenv; do cqs_check_path "/boot/grub/$name" || return 1; done
+    cqs_check_path "$boot" directory || return 1
+    for name in grub.cfg grubenv; do cqs_check_path "$boot/$name" || return 1; done
     backup=$(mktemp -d "$CQS_KERNEL_BACKUP/boot.XXXXXX") || return 1
     for name in grub.cfg grubenv; do
-        if [[ -f "/boot/grub/$name" ]]; then
-            cp -p -- "/boot/grub/$name" "$backup/$name" || return 1
+        if [[ -f "$boot/$name" ]]; then
+            cp -p -- "$boot/$name" "$backup/$name" || return 1
         else
             touch "$backup/no-$name" || return 1
         fi
@@ -486,7 +488,7 @@ bbrv3_install_kernel() (
     echo "两个安装包的 SHA-256、架构、版本和内核配置检查通过"
     echo "即将安装 $release；保留当前内核 $(uname -r)。请确认可以使用服务器控制台或救援模式"
     cqs_confirm "Install $release; retain console/rescue access." INSTALL || return $?
-    backup=$(bbrv3_backup_grub) || return 1
+    backup=$(bbrv3_backup_grub /boot/grub) || return 1
     echo "引导备份: $backup"
     # 内核包的安装钩子负责 initramfs；任何钩子/DKMS 失败均停止，绝不跳过。
     install_started=1
@@ -542,7 +544,7 @@ bbrv3_remove_kernel() (
     done <<< "$plan"
     printf '仅卸载:\n%s\n' "${packages[@]}"
     cqs_confirm "Remove $release" REMOVE || return $?
-    backup=$(bbrv3_backup_grub) || return 1
+    backup=$(bbrv3_backup_grub /boot/grub) || return 1
     if apt-get purge -y "${packages[@]}" && update-grub; then
         echo "指定的非运行内核已卸载；当前内核及网络参数保持不变"
     else
