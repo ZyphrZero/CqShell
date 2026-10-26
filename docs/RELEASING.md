@@ -37,7 +37,7 @@ sudo /root/cqs --lang zh-CN
 
 ## CI 和构建
 
-- `.github/workflows/ci.yml`：分支推送、PR、手动运行，以及被发布流程复用。执行 fmt、Clippy、Rust 测试、release 构建、Rust 1.88 最低版本检查、Windows 检查、ShellCheck 和安装器 HTTPS 集成测试。
+- `.github/workflows/ci.yml`：分支推送、PR、手动运行，以及被发布流程复用。仅在 Linux 执行 fmt、Clippy、Rust 测试、release 构建、Rust 1.88 最低版本检查、ShellCheck 和安装器 HTTPS 集成测试。
 - `.github/workflows/build.yml`：推送 `v*` 标签或手动运行。先核对版本并运行完整 CI，再分别在原生 amd64 / ARM64 Ubuntu runner 上构建 musl 程序、检查版本与语言命令、打包并测试安装器，最后上传 Actions 产物。
 - 只有标签推送才进入 Release 发布作业；手动运行（包括选择标签）只构建。发布作业必须等待两个架构都成功，并再次校验压缩包 SHA-256。
 
