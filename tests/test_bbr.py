@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -10,8 +9,7 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "yuju.sh"
-SOURCE = SCRIPT.read_text(encoding="utf-8")
+from shell_support import SCRIPT, load_script
 CC = "net.ipv4.tcp_congestion_control"
 QDISC = "net.core.default_qdisc"
 AVAILABLE = "net.ipv4.tcp_available_congestion_control"
@@ -22,20 +20,6 @@ def setUpModule():
         raise unittest.SkipTest(
             "Run these shell tests with Linux Python inside Debian/Ubuntu or WSL"
         )
-
-
-def functions(*names):
-    # Extract only named, top-level functions: sourcing yuju.sh starts the menu
-    # and performs installation/authorization work outside any function.
-    definitions = []
-    for name in names:
-        match = re.search(
-            rf"^{re.escape(name)}\(\) [{{(]\n.*?^[}})]$", SOURCE, re.M | re.S
-        )
-        if match is None:
-            raise AssertionError(f"Missing function: {name}")
-        definitions.append(match.group())
-    return "\n".join(definitions)
 
 
 # This test double models the OS boundary, including partial writes and denied
@@ -76,13 +60,22 @@ sysctl() {
 
 class BbrTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="yuju-bbr-")
+        self.temp = tempfile.TemporaryDirectory(prefix="cqs-bbr-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.conf = self.root / "99-bbr.conf"
         self.write(CC, "cubic")
         self.write(QDISC, "fq_codel")
         self.write(AVAILABLE, "reno cubic bbr")
+        for key, value in {
+            "net.core.rmem_max": "212992", "net.core.wmem_max": "212992",
+            "net.ipv4.tcp_rmem": "4096 131072 6291456",
+            "net.ipv4.tcp_wmem": "4096 16384 4194304",
+            "net.ipv4.tcp_moderate_rcvbuf": "1", "net.ipv4.tcp_mtu_probing": "0",
+            "net.ipv4.tcp_limit_output_bytes": "1048576",
+            "net.ipv4.tcp_slow_start_after_idle": "1",
+        }.items():
+            self.write(key, value)
 
     def write(self, key, value):
         (self.root / key).write_text(value + "\n", encoding="utf-8")
@@ -93,11 +86,7 @@ class BbrTests(unittest.TestCase):
     def run_shell(self, body, **settings):
         env = dict(os.environ, TEST_ROOT=str(self.root), CONF=str(self.conf))
         env.update(settings)
-        definitions = functions(
-            "check_bbr_status", "check_bbr_available", "load_bbr_module",
-            "sysctl_apply_file", "restore_bbr_runtime", "apply_bbr_config",
-            "require_root", "enable_bbr",
-        )
+        definitions = load_script()
         return subprocess.run(
             ["bash"], input="red= white= yellow= green= cyan=\n"
             + definitions + "\n" + SYSCTL_DOUBLE + "\n" + body,
@@ -111,7 +100,7 @@ class BbrTests(unittest.TestCase):
     def assert_restored(self):
         self.assertEqual(self.read(CC), "cubic")
         self.assertEqual(self.read(QDISC), "fq_codel")
-        self.assertEqual(list(self.root.glob("99-bbr.conf.*")), [])
+        self.assertEqual(list(self.root.glob("99-bbr.conf.work.*")), [])
 
     def test_full_script_parses_in_linux_bash(self):
         result = subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True, text=True)
@@ -161,7 +150,8 @@ load_bbr_module
         self.assertEqual(self.read(QDISC), "fq")
         assignments = [line for line in self.conf.read_text().splitlines() if line.startswith("net.")]
         self.assertEqual(assignments, [f"{QDISC} = fq", f"{CC} = bbr"])
-        self.assertEqual(list(self.root.glob("99-bbr.conf.*")), [])
+        self.assertEqual(list(self.root.glob("99-bbr.conf.work.*")), [])
+        self.assertTrue((self.root / "99-bbr.conf.yuju-backup/runtime.conf").is_file())
 
     def test_already_enabled_bbr_still_creates_persistent_config(self):
         self.write(CC, "bbr")
@@ -199,18 +189,25 @@ load_bbr_module
         self.assert_restored()
 
     def test_persistence_failure_rolls_back_runtime(self):
-        self.conf.mkdir()
-        result = self.apply()
+        self.conf.write_text("# existing config\n")
+        result = self.run_shell('''
+mv() {
+    if [[ "$*" == *desired.conf* ]]; then return 1; fi
+    command mv "$@"
+}
+apply_bbr_config "$CONF"
+''')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("保存失败", result.stderr)
-        self.assertTrue(self.conf.is_dir())
+        self.assertEqual(self.conf.read_text(), "# existing config\n")
         self.assert_restored()
 
     def test_rollback_failure_reports_previous_values(self):
         result = self.apply(WRITE_FAIL_KEY=CC, FAIL_PAIR=f"{QDISC}=fq_codel")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("恢复原参数失败", result.stderr)
-        self.assertIn("fq_codel", result.stderr)
+        snapshot = self.root / "99-bbr.conf.yuju-backup/runtime.conf"
+        self.assertIn("fq_codel", snapshot.read_text())
         self.assertEqual(self.read(QDISC), "fq")
         self.assertFalse(self.conf.exists())
 
@@ -229,6 +226,128 @@ load_bbr_module
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "calls").exists())
 
+    def test_all_queue_choices_are_supported_and_other_names_rejected(self):
+        for qdisc in ["fq", "fq_codel", "fq_pie", "cake"]:
+            with self.subTest(qdisc=qdisc):
+                result = self.run_shell(f'apply_bbr_config "$CONF" {qdisc}')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.read(QDISC), qdisc)
+        self.assertNotEqual(self.run_shell('apply_bbr_config "$CONF" invalid').returncode, 0)
+        self.assertEqual(self.read(QDISC), "cake")
+
+    def test_undo_preserves_first_runtime_snapshot_across_repeated_changes(self):
+        self.conf.write_text("# original configuration\n")
+        self.assertEqual(self.apply().returncode, 0)
+        self.assertEqual(self.run_shell('apply_bbr_config "$CONF" cake').returncode, 0)
+        result = self.run_shell('network_restore_config "$CONF"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_restored()
+        self.assertEqual(self.conf.read_text(), "# original configuration\n")
+        self.assertFalse((self.root / "99-bbr.conf.yuju-backup").exists())
+
+    def test_undo_removes_new_config_and_refuses_without_snapshot(self):
+        self.assertNotEqual(self.run_shell('network_restore_config "$CONF"').returncode, 0)
+        self.assertEqual(self.apply().returncode, 0)
+        self.assertEqual(self.run_shell('network_restore_config "$CONF"').returncode, 0)
+        self.assertFalse(self.conf.exists())
+        self.assert_restored()
+
+    def test_failed_undo_retains_snapshot_for_retry(self):
+        self.assertEqual(self.apply().returncode, 0)
+        result = self.run_shell('network_restore_config "$CONF"', FAIL_PAIR=f"{CC}=cubic")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.read(CC), "bbr")
+        self.assertEqual(self.read(QDISC), "fq")
+        self.assertTrue((self.root / "99-bbr.conf.yuju-backup/runtime.conf").exists())
+
+    def test_running_version_is_not_guessed_from_kernel_name(self):
+        result = self.run_shell('get_bbr_version "$TEST_ROOT/missing"')
+        self.assertIn("未知", result.stdout)
+        self.write("version", "3")
+        self.assertEqual(self.run_shell('get_bbr_version "$TEST_ROOT/version"').stdout.strip(), "v3")
+        self.write("version", "not-a-version")
+        self.assertIn("未知", self.run_shell('get_bbr_version "$TEST_ROOT/version"').stdout)
+
+    def test_bandwidth_and_rtt_both_affect_buffer_with_memory_cap(self):
+        for bw, rtt, memory, expected_mib in [
+            (100, 10, 1048576, 1), (1000, 10, 1048576, 3),
+            (1000, 80, 1048576, 20), (1000, 200, 1048576, 32),
+            (10000, 200, 8388608, 64), (1000, 80, 262144, 8),
+        ]:
+            with self.subTest(bw=bw, rtt=rtt, memory=memory):
+                result = self.run_shell(f"calculate_tcp_buffer {bw} {rtt} {memory}")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(int(result.stdout), expected_mib * 1048576)
+
+    def test_invalid_buffer_inputs_are_rejected(self):
+        for values in ["0 50 1048576", "1000 -1 1048576", "1e9 10 1048576",
+                       "100001 10 1048576", "1000 10001 1048576", "1000 50 32768"]:
+            with self.subTest(values=values):
+                self.assertNotEqual(self.run_shell(f"calculate_tcp_buffer {values}").returncode, 0)
+
+    def test_tcp_profile_is_transactional_and_does_not_modify_global_memory(self):
+        result = self.run_shell('apply_tcp_profile "$CONF" 8388608')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read("net.ipv4.tcp_rmem"), "4096 131072 8388608")
+        self.assertNotIn("tcp_mem", self.conf.read_text())
+        self.assertNotIn("nf_conntrack", self.conf.read_text())
+        result = self.run_shell('network_restore_config "$CONF"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read("net.ipv4.tcp_rmem"), "4096 131072 6291456")
+
+    def test_tcp_failure_restores_all_applied_values(self):
+        result = self.run_shell('apply_tcp_profile "$CONF" 8388608',
+                                WRITE_FAIL_KEY="net.ipv4.tcp_mtu_probing")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.read("net.core.rmem_max"), "212992")
+        self.assertEqual(self.read("net.ipv4.tcp_rmem"), "4096 131072 6291456")
+        self.assertFalse(self.conf.exists())
+
+    def test_concurrent_update_is_rejected_before_runtime_writes(self):
+        import fcntl
+        with (self.root / "99-bbr.conf.yuju-lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.apply()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("另一个进程", result.stderr)
+        self.assertFalse((self.root / "calls").exists())
+
+    def test_new_parameter_set_cannot_overwrite_an_existing_recovery_baseline(self):
+        self.assertEqual(self.apply().returncode, 0)
+        original = self.conf.read_bytes()
+        result = self.run_shell('apply_tcp_profile "$CONF" 8388608')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("参数集合不同", result.stderr)
+        self.assertEqual(self.conf.read_bytes(), original)
+        self.assertEqual(self.read("net.core.rmem_max"), "212992")
+
+    def test_empty_recovery_snapshot_is_rejected(self):
+        self.assertEqual(self.apply().returncode, 0)
+        (self.root / "99-bbr.conf.yuju-backup/runtime.conf").write_text("")
+        self.assertNotEqual(self.run_shell('network_restore_config "$CONF"').returncode, 0)
+        self.assertEqual(self.read(CC), "bbr")
+
+    def test_failed_undo_file_restore_rolls_back_current_runtime(self):
+        self.conf.write_text("# original configuration\n")
+        self.assertEqual(self.apply().returncode, 0)
+        active = self.conf.read_bytes()
+        result = self.run_shell('''
+mv() { return 1; }
+network_restore_config "$CONF"
+''')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.read(CC), "bbr")
+        self.assertEqual(self.read(QDISC), "fq")
+        self.assertEqual(self.conf.read_bytes(), active)
+        self.assertTrue((self.root / "99-bbr.conf.yuju-backup/runtime.conf").is_file())
+
+    def test_invalid_network_key_and_multiline_value_are_rejected(self):
+        for argument in ["=bbr", "kernel.hostname=bad", "net.core.rmem_max=1\nnet.core.wmem_max=1"]:
+            with self.subTest(argument=argument):
+                result = self.run_shell('network_apply_config "$CONF" "$ARGUMENT"', ARGUMENT=argument)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(self.conf.exists())
+
 
 class NativeSysctlTests(unittest.TestCase):
     def setUp(self):
@@ -242,13 +361,13 @@ class NativeSysctlTests(unittest.TestCase):
             self.skipTest("Native sysctl lacks --dry-run; refusing to change host values")
 
     def run_native(self, content):
-        with tempfile.TemporaryDirectory(prefix="yuju-procps-") as directory:
+        with tempfile.TemporaryDirectory(prefix="cqs-procps-") as directory:
             conf = Path(directory) / "tcp.conf"
             conf.write_bytes(content)
             return subprocess.run(
                 ["bash"], text=True, capture_output=True,
                 env=dict(os.environ, NATIVE_SYSCTL=self.sysctl, CONF=str(conf)),
-                input="red= white=\n" + functions("sysctl_apply_file") + '''
+                input="red= white=\n" + load_script() + '''
 sysctl() { "$NATIVE_SYSCTL" --dry-run "$@"; }
 sysctl_apply_file "$CONF"
 ''', timeout=10,
