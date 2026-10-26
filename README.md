@@ -5,6 +5,8 @@
 ## 简介
 集成系统管理、BBR/TCP 网络调优、第三方内核管理、服务器测试、常用工具安装和 Docker 管理。
 
+CqShell 基于 [yuju520/YujuToolBox](https://github.com/yuju520/YujuToolBox) 二次开发，由 [ZyphrZero](https://github.com/ZyphrZero) 独立维护。保留上游提交历史，并在此基础上增加 BBRv3 内核管理、配置校验与回滚、自动化测试及命令行入口重构。上游与相关参考项目见文末的“项目参考与上游”。
+
 ## 支持列表
 仅支持Debian、Ubuntu系统
 
@@ -24,14 +26,14 @@ apt update -y  && apt install -y wget
 ### 下载并执行
 用curl下载
 ```
-curl -fSs -O https://raw.githubusercontent.com/ZyphrZero/YujuToolBox/main/cqs.sh && chmod +x cqs.sh && ./cqs.sh
+curl -fSs -O https://raw.githubusercontent.com/ZyphrZero/CqShell/main/cqs.sh && chmod +x cqs.sh && ./cqs.sh
 ```
 用wget下载
 ```
-wget -q https://raw.githubusercontent.com/ZyphrZero/YujuToolBox/main/cqs.sh && chmod +x cqs.sh && ./cqs.sh
+wget -q https://raw.githubusercontent.com/ZyphrZero/CqShell/main/cqs.sh && chmod +x cqs.sh && ./cqs.sh
 ```
 
-脚本入口现为 `cqs.sh`；源码仓库地址仍沿用 `ZyphrZero/YujuToolBox`。
+脚本入口为 `cqs.sh`；项目独立仓库：[ZyphrZero/CqShell](https://github.com/ZyphrZero/CqShell)。
 
 首次以 root 运行并确认协议后，会将当前脚本安装到 `/usr/local/bin/cqs`。也可显式安装快捷命令：
 
@@ -146,7 +148,15 @@ python3 -B -m unittest discover -s tests -v
 
 测试使用临时目录和明确的系统命令替身验证控制流程，不修改宿主机内核参数、引导或 `/etc` 文件。包含真实 `sysctl --dry-run` 解析、`flock` 锁竞争、`dpkg-deb` 测试包构建与校验、嵌套 cgroup 路径解析、SSH/Docker 失败回滚；本地 TLS 服务配合真实 `curl` 验证 HTTPS 降级、残缺下载和执行退出状态。测试需要 `dpkg-deb`；TLS 测试另需 `curl openssl`。原生配置解析测试使用 PATH 中的 `sshd`/`dockerd`，也可通过 `CQS_TEST_SSHD`、`CQS_TEST_DOCKERD` 指定解压后的可执行文件；不会启动真实服务。缺少可选原生工具时相应测试会明确跳过。这些检查不能代替目标服务器上的真实内核启动、服务切换、重启持久化和吞吐量验证。
 
-## 项目参考
-https://github.com/kejilion/sh
+## 项目参考与上游
 
-https://github.com/xykt/IPQuality
+感谢以下上游作者和项目：
+
+| 项目 | 关系与用途 |
+| --- | --- |
+| [yuju520/YujuToolBox](https://github.com/yuju520/YujuToolBox) | 基础上游，CqShell 由该 Shell 工具箱继续开发，并保留原始提交历史 |
+| [byJoey/Actions-bbr-v3](https://github.com/byJoey/Actions-bbr-v3) | BBRv3 管理功能的实现参考及第三方内核安装包来源 |
+| [kejilion/sh](https://github.com/kejilion/sh) | 原工具箱列出的系统管理脚本参考项目，保留上游署名 |
+| [xykt/IPQuality](https://github.com/xykt/IPQuality) | IP 质量检测相关参考项目，保留上游署名 |
+
+此前的开发仓库 [ZyphrZero/YujuToolBox](https://github.com/ZyphrZero/YujuToolBox) 保留；后续 CqShell 开发在本独立仓库进行。现有许可证随源码保留，见 [LICENSE](LICENSE)。
