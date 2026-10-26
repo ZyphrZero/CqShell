@@ -109,29 +109,93 @@ authorization_false
 # ─── BBR 工具函数 ──────────────────────────────────────────────
 
 check_bbr_status() {
-    [[ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" == "bbr" ]]
+    local congestion_control
+    congestion_control=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null) || return 1
+    [[ "$congestion_control" == "bbr" ]]
 }
 
-check_kernel_bbr() {
-    local kver major minor
-    kver=$(uname -r | cut -d- -f1)
-    major=$(echo "$kver" | cut -d. -f1)
-    minor=$(echo "$kver" | cut -d. -f2)
-    [[ $major -gt 4 ]] || [[ $major -eq 4 && $minor -ge 9 ]]
+check_bbr_available() {
+    local available
+    available=$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null) || return 1
+    [[ "$available" =~ (^|[[:space:]])bbr($|[[:space:]]) ]]
+}
+
+load_bbr_module() {
+    check_bbr_available && return 0
+    if ! command -v modprobe >/dev/null 2>&1; then
+        echo -e "${red}BBR 尚不可用，且未找到 modprobe；请检查 kmod 软件包或宿主机内核支持${white}" >&2
+        return 1
+    fi
+    if ! modprobe tcp_bbr; then
+        echo -e "${red}加载 tcp_bbr 失败，请检查内核模块及容器权限${white}" >&2
+        return 1
+    fi
+    if ! check_bbr_available; then
+        echo -e "${red}加载后仍未检测到 BBR 可用算法${white}" >&2
+        return 1
+    fi
 }
 
 sysctl_apply_file() {
     local conf_file="$1"
-    while IFS= read -r line; do
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "${line// }" ]] && continue
-        local key value
-        key=$(echo "$line" | cut -d= -f1 | tr -d ' ')
-        value=$(echo "$line" | cut -d= -f2- | tr -d ' ')
-        [[ -z "$key" || -z "$value" ]] && continue
-        sysctl -w "${key}=${value}" 2>/dev/null || true
-    done < "$conf_file"
+    if [[ ! -r "$conf_file" ]]; then
+        echo -e "${red}配置文件不存在或不可读: ${conf_file}${white}" >&2
+        return 1
+    fi
+    if ! command -v sysctl >/dev/null 2>&1; then
+        echo -e "${red}未找到 sysctl，无法应用内核参数${white}" >&2
+        return 1
+    fi
+    sysctl -p "$conf_file"
 }
+
+restore_bbr_runtime() {
+    local old_congestion="$1" old_qdisc="$2" failed=0
+    if [[ "$(sysctl -n net.ipv4.tcp_congestion_control)" != "$old_congestion" ]]; then
+        sysctl -w "net.ipv4.tcp_congestion_control=$old_congestion" || failed=1
+    fi
+    if [[ "$(sysctl -n net.core.default_qdisc)" != "$old_qdisc" ]]; then
+        sysctl -w "net.core.default_qdisc=$old_qdisc" || failed=1
+    fi
+    [[ "$(sysctl -n net.ipv4.tcp_congestion_control)" == "$old_congestion" ]] || failed=1
+    [[ "$(sysctl -n net.core.default_qdisc)" == "$old_qdisc" ]] || failed=1
+    if (( failed )); then
+        echo -e "${red}恢复原参数失败，请检查上方错误；原拥塞算法: $old_congestion，原默认队列: $old_qdisc${white}" >&2
+        return 1
+    fi
+    echo -e "${yellow}运行参数已恢复为操作前的值${white}"
+}
+
+# 先验证运行参数，再原子替换配置，避免把失败的设置保留到下次启动。
+apply_bbr_config() (
+    local conf_file="$1" temp_file old_congestion old_qdisc
+    old_congestion=$(sysctl -n net.ipv4.tcp_congestion_control) || return 1
+    old_qdisc=$(sysctl -n net.core.default_qdisc) || return 1
+    temp_file=$(mktemp "${conf_file}.XXXXXX") || return 1
+    trap 'rm -f -- "$temp_file"' EXIT
+
+    if ! cat > "$temp_file" <<'EOF'
+# Managed by YujuToolBox: BBR and default queue only.
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+    then
+        return 1
+    fi
+    chmod 644 "$temp_file" || return 1
+
+    if sysctl_apply_file "$temp_file" && check_bbr_status &&
+        [[ "$(sysctl -n net.core.default_qdisc)" == "fq" ]]; then
+        if mv -fT -- "$temp_file" "$conf_file"; then
+            return 0
+        fi
+        echo -e "${red}BBR 配置保存失败: $conf_file${white}" >&2
+    else
+        echo -e "${red}BBR/fq 参数应用或读回验证失败，请检查内核支持及容器权限${white}" >&2
+    fi
+    restore_bbr_runtime "$old_congestion" "$old_qdisc"
+    return 1
+)
 
 # 主菜单系统信息面板（紧凑双栏布局，直接嵌入主界面）
 show_sysinfo() {
@@ -171,17 +235,15 @@ show_sysinfo() {
     else
         bbr_st="${red}❌ 未启用${white}"
     fi
-    if lsmod 2>/dev/null | grep -q bbr; then
-        bbr_mod_st="${green}✅ 已加载${white}"
-    elif grep -q 'CONFIG_TCP_CONG_BBR=y' /boot/config-$(uname -r) 2>/dev/null; then
-        bbr_mod_st="${green}✅ 已内置${white}"
+    if check_bbr_available; then
+        bbr_mod_st="${green}✅ 可用${white}"
     else
-        bbr_mod_st="${red}❌ 未加载${white}"
+        bbr_mod_st="${red}❌ 不可用${white}"
     fi
     if [[ -f /etc/sysctl.d/99-tcp-tune.conf ]]; then
-        tcp_tune_st="${green}✅ 已应用${white}"
+        tcp_tune_st="${green}✅ 已配置${white}"
     else
-        tcp_tune_st="${yellow}⬜ 未应用${white}"
+        tcp_tune_st="${yellow}⬜ 未配置${white}"
     fi
 
     local L="${pink}─────────────────────────────────────────────────${white}"
@@ -307,8 +369,9 @@ system_clean() {
 
 # 1.3 TCP 调优
 tcp_tune() {
-    local auto="${1:-}"
+    local auto="${1:-}" confirm_tune
     clear
+    require_root || return 1
     echo -e "${cyan}正在应用 TCP 深度调优...${white}"
     echo ""
     echo "本操作将优化以下参数："
@@ -325,7 +388,7 @@ tcp_tune() {
         [[ ! "$confirm_tune" =~ ^[Yy]$ ]] && { echo -e "${yellow}已取消${white}"; return; }
     fi
 
-    cat > /etc/sysctl.d/99-tcp-tune.conf <<'EOF'
+    if ! cat > /etc/sysctl.d/99-tcp-tune.conf <<'EOF'
 net.ipv4.tcp_tw_reuse           = 1
 net.ipv4.tcp_max_tw_buckets     = 20000
 net.ipv4.tcp_keepalive_time     = 60
@@ -356,11 +419,18 @@ net.netfilter.nf_conntrack_max              = 1000000
 net.netfilter.nf_conntrack_tcp_timeout_established = 7200
 fs.file-max                     = 1000000
 EOF
+    then
+        echo -e "${red}TCP 调优配置写入失败${white}" >&2
+        return 1
+    fi
 
-    sysctl_apply_file /etc/sysctl.d/99-tcp-tune.conf
+    if ! sysctl_apply_file /etc/sysctl.d/99-tcp-tune.conf; then
+        echo -e "${red}TCP 调优未全部应用，部分参数可能已生效；请检查上方错误和配置文件${white}" >&2
+        return 1
+    fi
 
     if ! grep -q "# tcp-tune" /etc/security/limits.conf 2>/dev/null; then
-        cat >> /etc/security/limits.conf <<'EOF'
+        if ! cat >> /etc/security/limits.conf <<'EOF'
 
 # tcp-tune
 * soft nofile 1000000
@@ -368,63 +438,41 @@ EOF
 root soft nofile 1000000
 root hard nofile 1000000
 EOF
+        then
+            echo -e "${red}文件描述符限制写入失败${white}" >&2
+            return 1
+        fi
     fi
 
     echo ""
     echo -e "${green}✅ TCP 调优配置已写入${white}"
     echo "   配置文件: /etc/sysctl.d/99-tcp-tune.conf"
-    echo "   无需重启，参数立即生效"
+    echo "   sysctl 参数已应用；文件描述符限制需要重新登录后生效"
 }
 
-# 1.4 BBR及TCP优化
+# 1.4 启用内核提供的 BBR
 
 enable_bbr() {
     clear
-    if check_bbr_status; then
-        echo -e "${green}BBR 已处于启用状态，无需重复操作${white}"
-        return 0
-    fi
-
-    if ! check_kernel_bbr; then
-        echo -e "${red}当前内核 $(uname -r) 不支持 BBR，需要内核版本 4.9+${white}"
+    if ! require_root; then
         return 1
     fi
 
-    echo -e "${cyan}正在写入 BBR 配置...${white}"
-
-    cat > /etc/sysctl.d/99-bbr.conf <<'EOF'
-net.core.default_qdisc         = fq
-net.ipv4.tcp_congestion_control = bbr
-net.core.rmem_max               = 33554432
-net.core.wmem_max               = 33554432
-net.ipv4.tcp_rmem               = 4096 87380 33554432
-net.ipv4.tcp_wmem               = 4096 65536 33554432
-net.core.netdev_max_backlog     = 10000
-net.ipv4.tcp_max_syn_backlog    = 8192
-net.core.somaxconn              = 8192
-net.ipv4.tcp_fastopen           = 3
-net.ipv4.tcp_slow_start_after_idle = 0
-EOF
-
-    sysctl_apply_file /etc/sysctl.d/99-bbr.conf
-    sysctl -w net.core.default_qdisc=fq 2>/dev/null || true
-    sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || true
-
-    if check_bbr_status; then
-        echo -e "${green}✅ BBR 启用成功！网络加速已生效${white}"
-    else
-        echo -e "${red}❌ BBR 启用失败，当前环境可能不支持修改拥塞控制算法${white}"
-        echo ""
-        echo "可能原因："
-        echo "  1. LXC/OpenVZ 容器且宿主机未授予 net_admin 权限"
-        echo "  2. 内核未编译 BBR 模块（运行: modprobe tcp_bbr 验证）"
-        echo "  3. 容器平台锁定了该参数"
-        echo ""
-        echo "手动验证："
-        echo "  modprobe tcp_bbr && echo ok"
-        echo "  echo bbr > /proc/sys/net/ipv4/tcp_congestion_control"
+    if ! load_bbr_module; then
+        echo -e "${red}当前内核未提供 BBR 拥塞控制算法，无法启用${white}"
+        echo "可用算法: $(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || echo 未知)"
         return 1
     fi
+
+    mkdir -p /etc/sysctl.d || return 1
+    echo -e "${cyan}正在应用并保存 BBR/fq 配置...${white}"
+    if ! apply_bbr_config /etc/sysctl.d/99-bbr.conf; then
+        echo -e "${red}BBR 配置未保存，请处理上方错误后重试${white}" >&2
+        return 1
+    fi
+    echo -e "${green}✅ BBR 已启用，默认队列参数为 fq${white}"
+    echo "配置文件: /etc/sysctl.d/99-bbr.conf（重启时仍可能被其他 sysctl 配置覆盖）"
+    echo "现有连接和网卡队列可能保持原设置，实际吞吐量请通过测速验证"
 }
 
 # 1.5 将时区改为上海
@@ -1289,7 +1337,7 @@ system_related() {
         echo "1. 更新系统软件包"
         echo "2. 系统清理"
         echo "3. TCP调优"
-        echo "4. 安装并启用 BBR"
+        echo "4. 启用 BBR（内核自带）"
         echo "5. 将时区改为上海"
         echo "6. 修改SWAP"
         echo "7. 修改SSH端口"
@@ -1425,6 +1473,7 @@ docker_manage() {
 # ═══════════════════════════════════════════════════════════════
 
 onekey_optimization() {
+    local network_failed=0
     root_test
     echo "一键优化"
     echo -e "${pink}============================${white}"
@@ -1432,7 +1481,7 @@ onekey_optimization() {
     echo "- 更新系统软件包"
     echo "- 系统清理"
     echo -e "- TCP调优"
-    echo -e "- 安装并启用 BBR"
+    echo -e "- 启用 BBR（内核自带）"
     echo -e "- 设置时区到${yellow}上海${white}"
     echo -e "- 自动设置${yellow}虚拟内存${white}"
     echo -e "- 安装fail2ban"
@@ -1455,12 +1504,20 @@ onekey_optimization() {
             echo -e "[${green}OK${white}] 2/10. 清理系统垃圾文件"
 
             echo -e "${pink}============================${white}"
-            tcp_tune --auto
-            echo -e "[${green}OK${white}] 3/10. TCP调优"
+            if tcp_tune --auto; then
+                echo -e "[${green}OK${white}] 3/10. TCP调优"
+            else
+                network_failed=1
+                echo -e "[${red}FAIL${white}] 3/10. TCP调优未全部完成"
+            fi
 
             echo -e "${pink}============================${white}"
-            enable_bbr
-            echo -e "[${green}OK${white}] 4/10. 安装并启用 BBR"
+            if enable_bbr; then
+                echo -e "[${green}OK${white}] 4/10. 启用 BBR"
+            else
+                network_failed=1
+                echo -e "[${red}FAIL${white}] 4/10. BBR 启用失败，已继续后续优化"
+            fi
 
 
             echo -e "${pink}============================${white}"
@@ -1490,7 +1547,11 @@ onekey_optimization() {
             echo -e "${pink}============================${white}"
 
             clear
-            echo -e "${green}一键优化已完成${white}"
+            if (( network_failed )); then
+                echo -e "${yellow}一键优化流程已结束，但 TCP/BBR 存在失败项，请单独重试${white}"
+            else
+                echo -e "${green}一键优化已完成${white}"
+            fi
             echo "您现在的SSH端口为55520，您的SSH Key如下，请牢记："
             cat ~/.ssh/id_rsa
             ;;
