@@ -1,6 +1,6 @@
 # 从 Shell 版迁移到 Rust
 
-0.1.0 将应用业务实现迁移到 Rust。旧 cqs.sh 和依赖 source 的 Python 测试由 Rust 模块及测试替代，旧版本可从 Git 历史查阅。新版不在内部调用旧业务函数。
+0.1.0 将应用业务实现迁移到 Rust，之后恢复了独立的 `cqs.sh`，并对齐当前 Rust 操作、参数与恢复记录。Rust 不在内部调用 Shell 业务函数，Shell 也不调用 Rust 二进制。原始旧脚本仍可从 Git 历史查阅；本页“旧版”指迁移前的 0.0.1，恢复后的 Shell 版见 [Shell 说明](SHELL.md)。
 
 ## 功能对应
 

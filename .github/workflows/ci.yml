@@ -1,4 +1,4 @@
-name: Rust checks
+name: Rust and Shell checks
 on:
   push:
     branches: ['**']
@@ -16,12 +16,16 @@ jobs:
         run: rustup update stable && rustup default stable && rustup component add rustfmt clippy
       - name: Test dependencies
         run: sudo apt-get update && sudo apt-get install -y curl openssl python3 dpkg-dev procps shellcheck
-      - name: Check installer syntax
-        run: bash -n install.sh && shellcheck install.sh
+      - name: Check Shell syntax and static analysis
+        run: bash -n install.sh && bash -n cqs.sh && shellcheck install.sh cqs.sh
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo build --release --locked
+      - name: Test Shell behavior and parity with Rust
+        env:
+          CQS_TEST_BINARY: target/release/cqs
+        run: python3 -m unittest discover -s tests -p 'test_shell_*.py' -v
       - name: Test installer with the built binary
         env:
           CQS_TEST_BINARY: target/release/cqs

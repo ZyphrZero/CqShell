@@ -2,9 +2,35 @@
 
 [English](README.en.md)
 
-面向 Debian / Ubuntu 的 Rust 服务器工具箱，提供 Ratatui 终端界面及共享业务层的 CLI。集成系统维护、网络调优、内核管理、服务器测试、终端美化与 Docker 管理。
+面向 Debian / Ubuntu 的服务器工具箱，提供 Rust / Ratatui 版本和独立的 `cqs.sh` Shell 版本。集成系统维护、网络调优、内核管理、服务器测试、终端美化与 Docker 管理。
 
-界面、操作说明、确认提示和应用错误使用 TOML 语言文件，内置 **简体中文与英语**。应用不再依赖原来的 `cqs.sh` 或内嵌 Python；系统工具和明确选择的第三方脚本仍是外部依赖。
+Rust 版的界面、操作说明、确认提示和应用错误使用 TOML 语言文件，内置 **简体中文与英语**。Rust 版不依赖 Shell 版或 Python；Shell 版使用 Bash 和内嵌 Python，独立执行同一套操作。系统工具和明确选择的第三方脚本仍是外部依赖。
+
+## Shell 版本
+
+`cqs.sh` 是可单独复制运行的脚本，要求 **Bash 4.4+、Python 3.11+**（Debian 12+ / Ubuntu 24.04+ 自带相应版本），不需要编译 Rust，也不需要 Node.js。下载需要 curl 和 CA 证书。
+
+通过 curl 下载仓库 `main` 分支的 Shell 版本并启动：
+
+```bash
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
+  https://raw.githubusercontent.com/ZyphrZero/CqShell/main/cqs.sh \
+  -o cqs.sh && bash cqs.sh --lang zh-CN
+```
+
+下载后也可以执行单项操作，或显式安装全局命令：
+
+```bash
+bash cqs.sh list --json
+bash cqs.sh run ai.status
+sudo bash cqs.sh run bbr.enable --set qdisc=fq
+sudo bash cqs.sh batch tcp.tune bbr.enable --set tcp.tune.rtt=80
+sudo bash cqs.sh --install     # 显式安装到 /usr/local/bin/cqs
+```
+
+Shell 版与 Rust 版提供相同的 52 个操作 ID、参数默认值与枚举，包括 AI 独立二进制安装、IPQuality、可选一键优化和终端还原。支持 `--lang`、`--config`、`--locale-dir`、`--yes`、`languages`、`list / run / batch`；启动不安装快捷命令、不查询公网信息。Shell 使用编号菜单，`o` 打开一键优化、`r` 读取本机状态、`n` 查询公网信息、`l` 切换语言；Ratatui 的鼠标、实时仪表盘与快捷键仅属于 Rust 界面。
+
+配置路径、网络/终端恢复基线及未完成事务记录与 Rust 版兼容。两个版本共用全局 `cqs` 安装目标，`--install` 会替换该目标；不要并发修改同一系统配置。详情和验证命令见 [Shell 说明](docs/SHELL.md)。下方 `install.sh` 仍安装 Rust 二进制。
 
 ## 下载与安装
 

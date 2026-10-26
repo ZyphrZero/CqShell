@@ -2,9 +2,35 @@
 
 [简体中文](README.md)
 
-A Rust server toolbox for Debian and Ubuntu with a Ratatui interface, a shared CLI backend, and TOML-based Simplified Chinese / English translations.
+A server toolbox for Debian and Ubuntu, available as a Rust/Ratatui application and a standalone `cqs.sh` Shell application, with Simplified Chinese / English action catalogs.
 
-Business logic is implemented in Rust. The application does not load the old shell application or require Python at runtime. Native system tools and explicitly selected third-party benchmark/install scripts remain external dependencies.
+The Rust application does not load the Shell application or require Python. The Shell application uses Bash and embedded Python to execute the same operations independently. Native system tools and explicitly selected third-party benchmark/install scripts remain external dependencies.
+
+## Shell version
+
+Copy and run `cqs.sh` with **Bash 4.4+ and Python 3.11+** (available in Debian 12+ / Ubuntu 24.04+). No Rust compiler, Rust executable, or Node.js is required. Downloading requires curl and CA certificates.
+
+Download the Shell version from the repository's `main` branch and start it:
+
+```bash
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
+  https://raw.githubusercontent.com/ZyphrZero/CqShell/main/cqs.sh \
+  -o cqs.sh && bash cqs.sh --lang en-US
+```
+
+After downloading, run individual actions or explicitly install the global command:
+
+```bash
+bash cqs.sh list --json
+bash cqs.sh run ai.status
+sudo bash cqs.sh run bbr.enable --set qdisc=fq
+sudo bash cqs.sh batch tcp.tune bbr.enable --set tcp.tune.rtt=80
+sudo bash cqs.sh --install
+```
+
+Both implementations expose the same 52 action IDs, parameters, defaults and choices. Shell supports `--lang`, `--config`, `--locale-dir`, `--yes`, `languages`, `list`, `run` and `batch`. Its numbered menu uses `o` for optional optimization, `r` for local status, `n` for public IP/ISP and `l` for language selection. Ratatui mouse controls and its live dashboard remain specific to the Rust UI. Startup does not install a shortcut or contact public IP services.
+
+Configuration paths, network/terminal baselines and pending recovery records are compatible. Both versions target `/usr/local/bin/cqs` for explicit `--install`; installing one replaces that command. Do not modify the same configuration concurrently. See [Shell implementation notes](docs/SHELL.md). The `install.sh` instructions below continue to install the Rust binary.
 
 ## Download and install
 
