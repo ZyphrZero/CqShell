@@ -56,13 +56,17 @@ main() {
     while (($#)); do
         case "$1" in
             --version)
-                (($# >= 2)) && [[ -n "$2" ]] || die '--version requires a release tag.'
+                if (($# < 2)) || [[ -z "$2" ]]; then
+                    die '--version requires a release tag.'
+                fi
                 version="$2"
                 valid_version "$version" || die 'Expected a release tag such as v0.1.0 or v0.2.0-rc.1.'
                 shift 2
                 ;;
             --install-dir)
-                (($# >= 2)) && [[ -n "$2" ]] || die '--install-dir requires an absolute path.'
+                if (($# < 2)) || [[ -z "$2" ]]; then
+                    die '--install-dir requires an absolute path.'
+                fi
                 install_dir="$2"
                 shift 2
                 ;;
