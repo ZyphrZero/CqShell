@@ -1802,7 +1802,14 @@ cqs_system_update() (
     # shellcheck disable=SC2034
     local lock_fd
     acquire_lock lock_fd "$CQS_KERNEL_LOCK" || return 1
-    apt-get update && apt-get upgrade -y
+    # Match the Rust upgrade policy without leaking it out of this subshell.
+    export DEBIAN_FRONTEND=noninteractive UCF_FORCE_CONFFOLD=1 UCF_FORCE_CONFFNEW=''
+    export NEEDRESTART_MODE=l APT_LISTCHANGES_FRONTEND=none
+    local -a options=(
+        -o Dpkg::Use-Pty=0 -o Dpkg::Progress-Fancy=0 -o APT::Color=0
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+    )
+    apt-get "${options[@]}" update && apt-get "${options[@]}" upgrade -y
 )
 
 cqs_download() {
@@ -2856,7 +2863,7 @@ cqs_main() (
 cqs_metadata() {
     cat <<'CQS_METADATA_JSON'
 {
-  "version": "0.1.0",
+  "version": "0.1.1",
   "actions": [
     {
       "available": true,
@@ -2884,7 +2891,7 @@ cqs_metadata() {
     },
     {
       "available": true,
-      "description": "Update apt metadata and upgrade installed packages under the shared kernel lock.",
+      "description": "Update apt metadata and upgrade packages under the shared kernel lock. Use noninteractive mode and preserve locally edited configuration. List services needing restart for later maintenance.",
       "group": "system",
       "id": "system.update",
       "interactive": false,
@@ -3329,7 +3336,7 @@ cqs_metadata() {
       "group": "ai",
       "id": "ai.pi.install",
       "interactive": false,
-      "label": "Install / update Pi 路 pi.dev",
+      "label": "Install / update Pi · pi.dev",
       "mutates": true,
       "parameters": [],
       "root": false,
@@ -3594,7 +3601,7 @@ cqs_metadata() {
       "group": "tests",
       "id": "test.ip",
       "interactive": true,
-      "label": "IP quality 路 xykt/IPQuality",
+      "label": "IP quality · xykt/IPQuality",
       "mutates": true,
       "parameters": [
         {
@@ -3705,6 +3712,7 @@ cqs_metadata() {
       "locale": "en-US",
       "name": "English",
       "messages": {
+        "notice.package_audit": "The package operation did not complete. After apt/dpkg exits, check in a separate terminal: {detail}. Finish configuration if needed. Do not delete lock files.",
         "action.tools.curl": "curl downloader",
         "description.tools.curl": "Install curl through apt for downloads and network requests.",
         "action.tools.wget": "wget downloader",
@@ -3811,10 +3819,11 @@ cqs_metadata() {
         "ui.logs": "Execution log",
         "ui.ready": "Ready",
         "ui.running": "Running — cancellation waits for cleanup",
+        "ui.cancelling": "Cancelling — waiting for child processes and recovery to finish safely",
         "ui.done": "Completed",
         "ui.failed": "Failed",
         "ui.hint": "Tab: focus  ↑↓: move  Enter: open  Esc: back  Q: quit",
-        "ui.busy_hint": "Esc / Ctrl+C: request cancellation; wait for recovery before exiting",
+        "ui.busy_hint": "Esc: cancel task; Q / Ctrl+C: cancel and exit after cleanup",
         "ui.form_hint": "Tab/↑↓: field  ←→: choice/cursor  Enter: next  Ctrl+Enter: apply  Esc: cancel",
         "ui.confirm_hint": "PgUp/PgDn: review text  Enter: confirm exact token  Esc: cancel",
         "ui.type_confirm": "Type {token} exactly, then press Enter to confirm:",
@@ -3958,7 +3967,7 @@ cqs_metadata() {
         "action.system.info": "System overview",
         "description.system.info": "Read host, CPU, memory, disk, IP and BBR status.",
         "action.system.update": "Update packages",
-        "description.system.update": "Update apt metadata and upgrade installed packages under the shared kernel lock.",
+        "description.system.update": "Update apt metadata and upgrade packages under the shared kernel lock. Use noninteractive mode and preserve locally edited configuration. List services needing restart for later maintenance.",
         "action.system.clean": "Clean system",
         "description.system.clean": "Standard: apt cache and journals older than 7 days. Full also deletes logs, temporary files, user caches and unused Docker data. All kernels are retained.",
         "action.system.timezone": "Set timezone",
@@ -4035,6 +4044,7 @@ cqs_metadata() {
       "locale": "zh-CN",
       "name": "简体中文",
       "messages": {
+        "notice.package_audit": "软件包操作未完成。请待 apt/dpkg 退出后，在独立终端检查：{detail}；如有未配置的软件包，再完成配置。不要删除锁文件。",
         "action.tools.curl": "curl 下载工具",
         "description.tools.curl": "通过 apt 安装 curl，用于下载文件与发送网络请求。",
         "action.tools.wget": "wget 下载工具",
@@ -4141,10 +4151,11 @@ cqs_metadata() {
         "ui.logs": "执行日志",
         "ui.ready": "就绪",
         "ui.running": "执行中 — 取消会等待清理完成",
+        "ui.cancelling": "正在取消 — 等待子进程与恢复操作安全结束",
         "ui.done": "已完成",
         "ui.failed": "失败",
         "ui.hint": "Tab：焦点  ↑↓：移动  Enter：打开  Esc：返回  Q：退出",
-        "ui.busy_hint": "Esc / Ctrl+C：请求取消；完成恢复后才能退出",
+        "ui.busy_hint": "Esc：取消任务；Q / Ctrl+C：取消并在清理完成后退出",
         "ui.form_hint": "Tab/↑↓：字段  ←→：选项/光标  Enter：下一项  Ctrl+Enter：提交  Esc：取消",
         "ui.confirm_hint": "PgUp/PgDn：翻阅说明  Enter：核对确认文字  Esc：取消",
         "ui.type_confirm": "准确输入 {token} 后按 Enter 确认：",
@@ -4288,7 +4299,7 @@ cqs_metadata() {
         "action.system.info": "系统概览",
         "description.system.info": "读取主机、CPU、内存、磁盘、IP 及 BBR 状态。",
         "action.system.update": "更新系统软件包",
-        "description.system.update": "在共享内核锁保护下更新 apt 索引并升级已安装软件包。",
+        "description.system.update": "在共享内核锁下更新 apt 索引并升级软件包。使用非交互模式，保留本机修改过的配置；列出需要重启的服务，供之后安排维护。",
         "action.system.clean": "清理系统",
         "description.system.clean": "标准清理：apt 缓存及超过 7 天的 journal。完整清理还会删除日志、临时文件、用户缓存和未使用的 Docker 数据。保留全部内核。",
         "action.system.timezone": "设置时区",

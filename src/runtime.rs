@@ -208,7 +208,17 @@ impl Context {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            command.process_group(0);
+            // Captured commands must not read the TUI through /dev/tty. setsid
+            // also gives cancellation a private process group. The post-fork
+            // hook calls only an async-signal-safe syscall before exec.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
         }
         let mut child = command
             .spawn()
@@ -370,9 +380,63 @@ pub fn path(path: &Path) -> Result<&str> {
         .ok_or_else(|| Error::new("error.path", path.display()))
 }
 pub fn sanitize(text: &str) -> String {
-    text.chars()
-        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
-        .collect()
+    enum State {
+        Text,
+        Escape,
+        Intermediate,
+        Csi,
+        String,
+        StringEscape,
+    }
+    let mut state = State::Text;
+    let mut clean = String::with_capacity(text.len());
+    for c in text.chars() {
+        state = match state {
+            State::Text => match c {
+                '\x1b' => State::Escape,
+                '\u{9b}' => State::Csi,
+                '\u{90}' | '\u{9d}' | '\u{9e}' | '\u{9f}' => State::String,
+                _ => {
+                    if !c.is_control() || matches!(c, '\n' | '\t') {
+                        clean.push(c);
+                    }
+                    State::Text
+                }
+            },
+            State::Escape => match c {
+                '[' => State::Csi,
+                ']' | 'P' | 'X' | '^' | '_' => State::String,
+                '\x1b' => State::Escape,
+                '\x20'..='\x2f' => State::Intermediate,
+                _ => State::Text,
+            },
+            State::Intermediate => {
+                if ('\x30'..='\x7e').contains(&c) {
+                    State::Text
+                } else {
+                    State::Intermediate
+                }
+            }
+            State::Csi => {
+                if ('\x40'..='\x7e').contains(&c) {
+                    State::Text
+                } else {
+                    State::Csi
+                }
+            }
+            State::String => match c {
+                '\x07' | '\u{9c}' => State::Text,
+                '\x1b' => State::StringEscape,
+                _ => State::String,
+            },
+            State::StringEscape => match c {
+                '\\' | '\x07' | '\u{9c}' => State::Text,
+                '\x1b' => State::StringEscape,
+                _ => State::String,
+            },
+        };
+    }
+    clean
 }
 pub fn sha256(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};

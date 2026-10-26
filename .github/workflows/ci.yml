@@ -15,12 +15,31 @@ jobs:
       - name: Toolchain
         run: rustup update stable && rustup default stable && rustup component add rustfmt clippy
       - name: Test dependencies
-        run: sudo apt-get update && sudo apt-get install -y curl openssl python3 dpkg-dev procps shellcheck
+        run: sudo apt-get update && sudo apt-get install -y curl openssl python3 dpkg-dev procps shellcheck ucf
       - name: Check Shell syntax and static analysis
         run: bash -n install.sh && bash -n cqs.sh && shellcheck install.sh cqs.sh
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - name: Verify real ucf configuration handling
+        run: |
+          cargo test --locked --lib --no-run --message-format=json > target/ucf-test-artifacts.json
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          artifacts = [json.loads(line) for line in Path('target/ucf-test-artifacts.json').read_text().splitlines()]
+          executables = [item['executable'] for item in artifacts
+                         if item.get('reason') == 'compiler-artifact'
+                         and item.get('profile', {}).get('test')
+                         and 'lib' in item.get('target', {}).get('kind', [])
+                         and item.get('executable')]
+          assert len(executables) == 1, executables
+          subprocess.run(['sudo', '--', executables[0], '--exact',
+                          'ops::packages::tests::real_ucf_preserves_edited_configuration_without_a_dialog',
+                          '--ignored'], check=True)
+          PY
       - run: cargo build --release --locked
       - name: Test Shell behavior and parity with Rust
         env:

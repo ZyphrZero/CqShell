@@ -74,6 +74,19 @@ fn bbr_tcp_optimization_is_available_independently_of_kernel_installation() {
 }
 
 #[test]
+fn terminal_escape_sequences_do_not_leak_into_task_logs() {
+    let input = "Setting up openssh-server\n\x1b[?1049h\x1b[22;0;0t\x1b[1;24r\x1b[?25l\x1b[m\x1b[37m\x1b[40m\x1b[1;1H\x1b[97m\x1b[44m\x1b[K\n\x1b[K\n";
+    assert_eq!(
+        crate::runtime::sanitize(input),
+        "Setting up openssh-server\n\n\n"
+    );
+    assert_eq!(
+        crate::runtime::sanitize("\x1b]8;;https://example.org\x07链接\x1b]8;;\x07\t完成"),
+        "链接\t完成"
+    );
+}
+
+#[test]
 fn ai_cancelled_installation_stops_before_writing() {
     for tool in [ai::Tool::Pi, ai::Tool::Claude, ai::Tool::Codex] {
         let temp = tempfile::tempdir().unwrap();
@@ -140,6 +153,7 @@ fn every_literal_translation_key_exists() {
         include_str!("ops/kernel.rs"),
         include_str!("ops/memory.rs"),
         include_str!("ops/network.rs"),
+        include_str!("ops/packages.rs"),
         include_str!("ops/service.rs"),
         include_str!("ops/ssh.rs"),
         include_str!("ops/system.rs"),
@@ -741,6 +755,59 @@ esac
     }
 
     #[test]
+    fn package_updates_disable_interactive_frontends_and_dpkg_pty() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = boundary(temp.path());
+        ctx.environment
+            .insert("DEBIAN_FRONTEND".into(), "dialog".into());
+        ctx.environment
+            .insert("UCF_FORCE_CONFFNEW".into(), "1".into());
+        executable(
+            &temp.path().join("bin/apt-get"),
+            r#"#!/usr/bin/python3
+import json, os, sys
+with open(os.path.join(os.environ['CQS_TEST_ROOT'], 'package-policy'), 'a') as output:
+    output.write(json.dumps({'args': sys.argv[1:], 'env': {key: os.environ.get(key) for key in ['DEBIAN_FRONTEND', 'UCF_FORCE_CONFFOLD', 'UCF_FORCE_CONFFNEW', 'NEEDRESTART_MODE', 'APT_LISTCHANGES_FRONTEND']}}) + '\n')
+"#,
+        );
+        system::update(&ctx).unwrap();
+        let calls = fs::read_to_string(temp.path().join("package-policy")).unwrap();
+        let calls: Vec<serde_json::Value> = calls
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["args"][0], "update");
+        assert_eq!(calls[1]["args"][0], "upgrade");
+        for call in calls {
+            assert_eq!(call["env"]["DEBIAN_FRONTEND"], "noninteractive");
+            assert_eq!(call["env"]["UCF_FORCE_CONFFOLD"], "1");
+            assert!(
+                call["env"]["UCF_FORCE_CONFFNEW"]
+                    .as_str()
+                    .is_none_or(str::is_empty)
+            );
+            assert_eq!(call["env"]["NEEDRESTART_MODE"], "l");
+            assert_eq!(call["env"]["APT_LISTCHANGES_FRONTEND"], "none");
+            for option in [
+                "Dpkg::Use-Pty=0",
+                "Dpkg::Options::=--force-confdef",
+                "Dpkg::Options::=--force-confold",
+            ] {
+                assert!(
+                    call["args"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|value| value == option),
+                    "missing {option}"
+                );
+            }
+        }
+        assert_eq!(ctx.environment["DEBIAN_FRONTEND"], "dialog");
+    }
+
+    #[test]
     fn common_packages_use_the_expected_apt_arguments_and_propagate_failure() {
         let temp = tempfile::tempdir().unwrap();
         let ctx = boundary(temp.path());
@@ -754,14 +821,13 @@ test ! -e "$CQS_TEST_ROOT/fail_packages"
         for package in tools::PACKAGES {
             tools::packages(&ctx, package).unwrap();
         }
-        let expected = tools::PACKAGES
-            .iter()
-            .map(|package| format!("install -y {package}\n"))
-            .collect::<String>();
-        assert_eq!(
-            fs::read_to_string(temp.path().join("packages")).unwrap(),
-            expected
-        );
+        let calls = fs::read_to_string(temp.path().join("packages")).unwrap();
+        assert_eq!(calls.lines().count(), tools::PACKAGES.len());
+        for (call, package) in calls.lines().zip(tools::PACKAGES) {
+            let (packages, options) = call.split_once(" -o ").unwrap();
+            assert_eq!(packages, format!("install -y {package}"));
+            assert!(options.contains("Dpkg::Use-Pty=0"));
+        }
         fs::write(temp.path().join("fail_packages"), "").unwrap();
         assert_eq!(
             tools::packages(&ctx, "curl").unwrap_err().key,

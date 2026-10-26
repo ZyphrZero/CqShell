@@ -404,8 +404,8 @@ pub(crate) fn install_verified(
     let backup = backup_grub(ctx, running)?;
     ctx.message("notice.backup", backup.display());
     let result = (|| {
-        ctx.run(
-            "apt-get",
+        super::packages::run(
+            ctx,
             &[
                 "install",
                 "-y",
@@ -488,17 +488,14 @@ pub fn remove(ctx: &Context, release: &str) -> Result<()> {
     }
     let mut args = vec!["-s", "purge"];
     args.extend(&packages);
-    let plan = ctx.output("apt-get", &args)?;
+    let plan = super::packages::output(ctx, &args)?;
     validate_removal_plan(&plan, release)?;
     ctx.log(plan);
     ctx.confirm("confirm.kernel_remove", release, "REMOVE")?;
     let backup = backup_grub(ctx, &running)?;
     let mut args = vec!["purge", "-y"];
     args.extend(packages);
-    if let Err(error) = ctx
-        .run("apt-get", &args)
-        .and_then(|_| ctx.run("update-grub", &[]))
-    {
+    if let Err(error) = super::packages::run(ctx, &args).and_then(|_| ctx.run("update-grub", &[])) {
         // Restoring a menu referencing deleted packages would make recovery less reliable.
         return Err(Error::new(
             "error.kernel_partial",

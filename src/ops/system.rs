@@ -114,15 +114,15 @@ pub fn public_ip(ctx: &Context) -> Result<()> {
 }
 pub fn update(ctx: &Context) -> Result<()> {
     let _lock = Lock::acquire(&ctx.paths.kernel_lock)?;
-    ctx.run("apt-get", &["update"])?;
-    ctx.run("apt-get", &["upgrade", "-y"])
+    super::packages::run(ctx, &["update"])?;
+    super::packages::run(ctx, &["upgrade", "-y"])
 }
 pub fn clean(ctx: &Context, scope: &str) -> Result<()> {
     if !["standard", "full"].contains(&scope) {
         return Err(Error::new("error.input", scope));
     }
     let _lock = Lock::acquire(&ctx.paths.kernel_lock)?;
-    ctx.run("apt-get", &["clean"])?;
+    super::packages::run(ctx, &["clean"])?;
     ctx.run("journalctl", &["--vacuum-time=7d"])?;
     // Kernel removal is always explicit through the kernel module; autoremove may remove fallback kernels.
     ctx.log(ctx.i18n.text("notice.preserve_kernels"));
@@ -333,7 +333,7 @@ pub fn swap(ctx: &Context, operation: &str, size: &str) -> Result<()> {
 
 pub fn fail2ban(ctx: &Context) -> Result<()> {
     let _package_lock = Lock::acquire(&ctx.paths.kernel_lock)?;
-    ctx.run("apt-get", &["install", "-y", "fail2ban"])?;
+    super::packages::run(ctx, &["install", "-y", "fail2ban"])?;
     let target = Path::new("/etc/fail2ban/jail.d/cqs.local");
     let _lock = Lock::acquire(&storage::suffix(target, ".cqs-lock"))?;
     let effective = ctx.output("sshd", &["-T"])?;

@@ -53,6 +53,7 @@ enum Focus {
 enum Phase {
     Idle,
     Running,
+    Cancelling,
     Completed,
     Failed,
     Cancelled,
@@ -62,6 +63,7 @@ impl Phase {
         match self {
             Self::Idle => "ui.ready",
             Self::Running => "ui.running",
+            Self::Cancelling => "ui.cancelling",
             Self::Completed => "ui.done",
             Self::Failed => "ui.failed",
             Self::Cancelled => "ui.cancelled",
@@ -116,6 +118,7 @@ pub struct App {
     overview: bool,
     overview_scroll: u16,
     worker: Option<JoinHandle<()>>,
+    exit_requested: bool,
     receiver: Option<Receiver<Event>>,
     pub snapshot: Snapshot,
     platform_error: Option<Error>,
@@ -149,6 +152,7 @@ impl App {
             overview: false,
             overview_scroll: 0,
             worker: None,
+            exit_requested: false,
             receiver: None,
             snapshot: Snapshot::default(),
             platform_error,
@@ -508,9 +512,7 @@ impl App {
     }
     fn confirmation_key(&mut self, key: KeyEvent) -> Effect {
         let confirm = self.confirmation.as_mut().expect("confirmation");
-        let ctrl_c =
-            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-        let answer = if key.code == KeyCode::Esc || ctrl_c {
+        let answer = if key.code == KeyCode::Esc {
             Some(false)
         } else if confirm.token == "YES" {
             match key.code {
@@ -572,12 +574,27 @@ impl App {
             let _ = confirm.reply.send(answer);
             self.confirmation = None;
         }
-        if ctrl_c {
-            self.ctx.cancel.store(true, Ordering::SeqCst);
-        }
         Effect::None
     }
+    fn request_cancel(&mut self, exit: bool) {
+        self.exit_requested |= exit;
+        self.ctx.cancel.store(true, Ordering::SeqCst);
+        self.phase = Phase::Cancelling;
+        if let Some(confirm) = self.confirmation.take() {
+            let _ = confirm.reply.send(false);
+        }
+    }
     fn key(&mut self, key: KeyEvent) -> Result<Effect> {
+        // Exit/cancel must remain reachable through logs and other modal views.
+        let interrupt = matches!(key.code, KeyCode::Char('c' | 'C'))
+            && key.modifiers.contains(KeyModifiers::CONTROL);
+        if interrupt || (self.worker.is_some() && matches!(key.code, KeyCode::Char('q' | 'Q'))) {
+            if self.worker.is_some() {
+                self.request_cancel(true);
+                return Ok(Effect::None);
+            }
+            return Ok(Effect::Quit);
+        }
         if self.confirmation.is_some() {
             return Ok(self.confirmation_key(key));
         }
@@ -614,14 +631,9 @@ impl App {
             }
             return Ok(Effect::None);
         }
-        let interrupt =
-            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-        if interrupt || (self.worker.is_some() && key.code == KeyCode::Esc) {
-            if self.worker.is_some() {
-                self.ctx.cancel.store(true, Ordering::SeqCst);
-                return Ok(Effect::None);
-            }
-            return Ok(Effect::Quit);
+        if self.worker.is_some() && key.code == KeyCode::Esc {
+            self.request_cancel(false);
+            return Ok(Effect::None);
         }
         match key.code {
             KeyCode::Char('r' | 'R') => return Ok(Effect::Refresh),
@@ -911,7 +923,8 @@ pub fn run(ctx: Context) -> Result<()> {
                 monitor.refresh();
                 app.completed_since_refresh = false;
             }
-            if app.ctx.cancel.load(Ordering::SeqCst) && app.worker.is_none() {
+            if (app.exit_requested || app.ctx.cancel.load(Ordering::SeqCst)) && app.worker.is_none()
+            {
                 break;
             }
             app.viewport = terminal.get_frame().area();
@@ -964,6 +977,32 @@ mod tests {
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
+    #[test]
+    fn cancellation_keys_work_while_task_logs_are_open() {
+        for code in [KeyCode::Char('c'), KeyCode::Char('q'), KeyCode::Char('Q')] {
+            let mut app = app();
+            app.worker = Some(thread::spawn(|| {}));
+            app.phase = Phase::Running;
+            app.log_modal = true;
+            let modifiers = if code == KeyCode::Char('c') {
+                KeyModifiers::CONTROL
+            } else {
+                KeyModifiers::NONE
+            };
+            assert!(matches!(
+                app.key(KeyEvent::new(code, modifiers)).unwrap(),
+                Effect::None
+            ));
+            assert!(app.ctx.cancel.load(Ordering::SeqCst), "{code:?}");
+            assert!(app.exit_requested);
+            assert_eq!(app.phase, Phase::Cancelling);
+            app.worker.take().unwrap().join().unwrap();
+            app.finish(Err(Error::new("error.cancelled", "")));
+            assert!(app.exit_requested);
+            assert!(!app.ctx.cancel.load(Ordering::SeqCst));
+        }
+    }
+
     #[test]
     fn common_tools_and_ai_are_reachable_without_a_package_selector() {
         let mut app = app();

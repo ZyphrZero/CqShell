@@ -25,7 +25,7 @@ pub fn packages(ctx: &Context, package: &str) -> Result<()> {
     };
     let mut args = vec!["install", "-y"];
     args.extend(chosen);
-    ctx.run("apt-get", &args)?;
+    super::packages::run(ctx, &args)?;
     if package == "all" {
         terminal_install_unlocked(ctx)?;
     }
@@ -36,10 +36,7 @@ pub fn terminal_install(ctx: &Context) -> Result<()> {
     terminal_install_unlocked(ctx)
 }
 fn terminal_install_unlocked(ctx: &Context) -> Result<()> {
-    ctx.run(
-        "apt-get",
-        &["install", "-y", "zsh", "curl", "ca-certificates"],
-    )?;
+    super::packages::run(ctx, &["install", "-y", "zsh", "curl", "ca-certificates"])?;
     if !available("starship") {
         let arch = ctx.output("uname", &["-m"])?;
         let target = match arch.as_str() {
@@ -122,7 +119,7 @@ pub fn speedtest(ctx: &Context) -> Result<()> {
             ctx,
             "https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh",
         )?;
-        ctx.run("apt-get", &["install", "-y", "speedtest"])?;
+        super::packages::run(ctx, &["install", "-y", "speedtest"])?;
     }
     ctx.confirm("confirm.speedtest", "Ookla", "ACCEPT")?;
     let output = ctx.output(

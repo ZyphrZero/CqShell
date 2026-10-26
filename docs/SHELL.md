@@ -18,6 +18,8 @@ sudo bash cqs.sh run ssh.key --set public_key=/root/client.pub
 
 语言优先级与 Rust 一致；中英文操作名称和说明内嵌，支持同一份 TOML 偏好与外部语言目录。系统命令的原生输出及部分 Shell 诊断保留原文。`list --json` 的操作 ID、权限、默认值、枚举及说明通过真实 Rust CLI 对比测试，不能只增加菜单而遗漏执行分支。
 
+系统更新与 Rust v0.1.1 一样采用非交互配置策略，保留本机修改过的配置，关闭 dpkg 独立伪终端，并让 needrestart 仅列出服务重启需求。其他操作仍按编号菜单和各自的确认流程执行。
+
 ## 安装和恢复
 
 `sudo bash cqs.sh --install` 显式复制完整脚本到 `${CQS_INSTALL_PATH:-/usr/local/bin/cqs}`。该位置可能已有 Rust 版；安装后可用 `cqs --version`、`cqs list` 检查。`--uninstall` 只删除目标命令。发布工作流同时附带 `cqs.sh` 和 `cqs.sh.sha256`；现有 `install.sh` 继续下载 Rust 程序。

@@ -124,6 +124,30 @@ cqs_terminal_install_unlocked() { printf '%s\\n' terminal >> "$CQS_TEST_LOG"; }
         result = self.shell(support + "exec 9> \"$CQS_KERNEL_LOCK\"; flock -n 9; cqs_packages curl")
         self.assertNotEqual(result.returncode, 0)
 
+    def test_system_update_matches_noninteractive_rust_policy(self):
+        support = r'''
+apt-get() {
+    printf '%s|%s|%s|%s|%s|%s\n' "$DEBIAN_FRONTEND" "$UCF_FORCE_CONFFOLD" "$UCF_FORCE_CONFFNEW" "$NEEDRESTART_MODE" "$APT_LISTCHANGES_FRONTEND" "$*" >> "$CQS_TEST_LOG"
+    if flock -n "$CQS_KERNEL_LOCK" true; then return 99; fi
+    return "${CQS_TEST_APT_EXIT:-0}"
+}
+'''
+        result = self.shell(support + 'cqs_system_update', DEBIAN_FRONTEND="dialog", UCF_FORCE_CONFFNEW="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (self.root / "commands").read_text().splitlines()
+        self.assertEqual(len(calls), 2)
+        for call in calls:
+            policy, args = call.rsplit("|", 1)
+            self.assertEqual(policy, "noninteractive|1||l|none")
+            for option in ("Dpkg::Use-Pty=0", "Dpkg::Options::=--force-confdef", "Dpkg::Options::=--force-confold"):
+                self.assertIn(option, args.split())
+        self.assertTrue(calls[0].endswith(" update"))
+        self.assertTrue(calls[1].endswith(" upgrade -y"))
+        (self.root / "commands").write_text("")
+        failed = self.shell(support + 'cqs_system_update', CQS_TEST_APT_EXIT="23")
+        self.assertEqual(failed.returncode, 23)
+        self.assertEqual(len((self.root / "commands").read_text().splitlines()), 1)
+
     def test_failed_package_install_does_not_run_terminal_installer(self):
         result = self.shell('''
 acquire_lock() { return 0; }

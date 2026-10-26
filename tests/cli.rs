@@ -198,10 +198,24 @@ fn kernel_install_exposes_standard_max_and_optional_version_in_both_languages() 
 #[cfg(target_os = "linux")]
 #[test]
 fn tui_pty_start_language_switch_and_exit_restores_terminal() {
+    tui_pty(None);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tui_pty_cancels_running_task_from_logs_and_restores_terminal() {
+    for exit_key in [&b"\x03"[..], &b"q"[..]] {
+        tui_pty(Some(exit_key));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn tui_pty(exit_key: Option<&[u8]>) {
     use std::{
         fs::File,
         io::{Read, Write},
         os::fd::{AsRawFd, FromRawFd},
+        os::unix::{fs::PermissionsExt, process::CommandExt},
         thread,
         time::{Duration, Instant},
     };
@@ -234,14 +248,46 @@ fn tui_pty_start_language_switch_and_exit_restores_terminal() {
     );
     let before = unsafe { before.assume_init() };
     let temp = tempfile::tempdir().unwrap();
-    let mut child = cli(temp.path())
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::write(
+        bin.join("curl"),
+        r#"#!/usr/bin/python3
+import os, signal, sys, time
+signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+try:
+    fd = os.open('/dev/tty', os.O_RDONLY | os.O_NONBLOCK)
+except OSError:
+    print('CQS_NO_CTTY', flush=True)
+else:
+    os.close(fd)
+    print('CQS_HAS_CTTY', flush=True)
+print('CQS_CANCEL_READY', flush=True)
+time.sleep(8)
+sys.exit(23)
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(bin.join("curl"), fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = cli(temp.path());
+    command
         .env("TERM", "xterm-256color")
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("CQS_STATE_DIR", temp.path().join("state"))
         .args(["--lang", "en-US"])
         .stdin(slave.try_clone().unwrap())
         .stdout(slave.try_clone().unwrap())
-        .stderr(slave.try_clone().unwrap())
-        .spawn()
-        .unwrap();
+        .stderr(slave.try_clone().unwrap());
+    // Model an actual SSH terminal: the TUI owns a controlling PTY.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
     unsafe {
         libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
     }
@@ -250,6 +296,7 @@ fn tui_pty_start_language_switch_and_exit_restores_terminal() {
     let start = Instant::now();
     let mut switched = false;
     let mut quit = false;
+    let mut started_task = false;
     let mut cursor_queries = 0;
     let ansi = regex::Regex::new(r"\x1b\[[0-?]*[ -/]*[@-~]").unwrap();
     loop {
@@ -275,11 +322,24 @@ fn tui_pty_start_language_switch_and_exit_restores_terminal() {
         }
         if switched
             && !quit
+            && !started_task
             && ansi
                 .replace_all(&String::from_utf8_lossy(&bytes), "")
                 .contains("功能分类")
         {
-            master.write_all(b"q").unwrap();
+            if exit_key.is_some() {
+                // Focus categories, select AI tools, and start its first action.
+                master
+                    .write_all(b"\t\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r\r\x1bOQ")
+                    .unwrap();
+                started_task = true;
+            } else {
+                master.write_all(b"q").unwrap();
+                quit = true;
+            }
+        }
+        if started_task && !quit && bytes.windows(16).any(|part| part == b"CQS_CANCEL_READY") {
+            master.write_all(exit_key.unwrap()).unwrap();
             quit = true;
         }
         if let Some(status) = child.try_wait().unwrap() {
@@ -294,6 +354,12 @@ fn tui_pty_start_language_switch_and_exit_restores_terminal() {
         thread::sleep(Duration::from_millis(10));
     }
     assert!(switched && quit);
+    if exit_key.is_some() {
+        assert!(
+            bytes.windows(11).any(|part| part == b"CQS_NO_CTTY"),
+            "Captured command inherited the controlling terminal"
+        );
+    }
     let mut after = std::mem::MaybeUninit::<libc::termios>::uninit();
     assert_eq!(
         unsafe { libc::tcgetattr(slave.as_raw_fd(), after.as_mut_ptr()) },
