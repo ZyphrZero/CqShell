@@ -44,7 +44,7 @@ sysctl() {
             printf '%s\n' "$value" > "$TEST_ROOT/$key"
             ;;
         -p)
-            # Only the generated two-assignment BBR file goes through this double.
+            # Only generated key = value network configs go through this double.
             while IFS= read -r line || [[ -n "$line" ]]; do
                 [[ "$line" == net.* ]] || continue
                 read -r key _ value <<< "$line"
@@ -63,7 +63,8 @@ class BbrTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="cqs-bbr-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.conf = self.root / "99-bbr.conf"
+        self.conf = self.root / "99-cqs-bbr.conf"
+        self.tcp_conf = self.root / "99-cqs-tcp.conf"
         self.write(CC, "cubic")
         self.write(QDISC, "fq_codel")
         self.write(AVAILABLE, "reno cubic bbr")
@@ -84,7 +85,8 @@ class BbrTests(unittest.TestCase):
         return (self.root / key).read_text(encoding="utf-8").strip()
 
     def run_shell(self, body, **settings):
-        env = dict(os.environ, TEST_ROOT=str(self.root), CONF=str(self.conf))
+        env = dict(os.environ, TEST_ROOT=str(self.root), CONF=str(self.conf),
+                   CQS_BBR_CONFIG=str(self.conf), CQS_TCP_CONFIG=str(self.tcp_conf))
         env.update(settings)
         definitions = load_script()
         return subprocess.run(
@@ -100,7 +102,7 @@ class BbrTests(unittest.TestCase):
     def assert_restored(self):
         self.assertEqual(self.read(CC), "cubic")
         self.assertEqual(self.read(QDISC), "fq_codel")
-        self.assertEqual(list(self.root.glob("99-bbr.conf.work.*")), [])
+        self.assertEqual(list(self.root.glob("99-cqs-bbr.conf.work.*")), [])
 
     def test_full_script_parses_in_linux_bash(self):
         result = subprocess.run(["bash", "-n", str(SCRIPT)], capture_output=True, text=True)
@@ -150,8 +152,8 @@ load_bbr_module
         self.assertEqual(self.read(QDISC), "fq")
         assignments = [line for line in self.conf.read_text().splitlines() if line.startswith("net.")]
         self.assertEqual(assignments, [f"{QDISC} = fq", f"{CC} = bbr"])
-        self.assertEqual(list(self.root.glob("99-bbr.conf.work.*")), [])
-        self.assertTrue((self.root / "99-bbr.conf.yuju-backup/runtime.conf").is_file())
+        self.assertEqual(list(self.root.glob("99-cqs-bbr.conf.work.*")), [])
+        self.assertTrue((self.root / "99-cqs-bbr.conf.cqs-backup/runtime.conf").is_file())
 
     def test_already_enabled_bbr_still_creates_persistent_config(self):
         self.write(CC, "bbr")
@@ -206,7 +208,7 @@ apply_bbr_config "$CONF"
         result = self.apply(WRITE_FAIL_KEY=CC, FAIL_PAIR=f"{QDISC}=fq_codel")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("恢复原参数失败", result.stderr)
-        snapshot = self.root / "99-bbr.conf.yuju-backup/runtime.conf"
+        snapshot = self.root / "99-cqs-bbr.conf.cqs-backup/runtime.conf"
         self.assertIn("fq_codel", snapshot.read_text())
         self.assertEqual(self.read(QDISC), "fq")
         self.assertFalse(self.conf.exists())
@@ -215,6 +217,36 @@ apply_bbr_config "$CONF"
         result = self.run_shell('clear() { :; }; require_root() { return 1; }; enable_bbr')
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "calls").exists())
+
+    def test_bbr_entrypoints_apply_and_restore_the_configured_path(self):
+        self.conf = self.root / "network settings" / "bbr.conf"
+        boundary = "clear() { :; }; require_root() { :; };\n"
+        result = self.run_shell(boundary + "enable_bbr fq")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.conf.is_file())
+        self.assertIn(str(self.conf), result.stdout)
+        self.assertEqual(self.read(CC), "bbr")
+        self.assertEqual(self.read(QDISC), "fq")
+        result = self.run_shell(boundary + "restore_bbr <<< y")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.conf.exists())
+        self.assertFalse(Path(str(self.conf) + ".cqs-backup").exists())
+        self.assert_restored()
+
+    def test_tcp_entrypoints_apply_and_restore_the_configured_path(self):
+        self.tcp_conf = self.root / "network settings" / "tcp.conf"
+        boundary = "clear() { :; }; require_root() { :; }; network_memory_kb() { echo 1048576; };\n"
+        result = self.run_shell(boundary + "tcp_tune --auto")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.tcp_conf.is_file())
+        self.assertIn(str(self.tcp_conf), result.stdout)
+        self.assertFalse(self.conf.exists())
+        self.assertEqual(self.read("net.ipv4.tcp_rmem"), "4096 131072 12582912")
+        result = self.run_shell(boundary + "tcp_tune <<< $'3\\ny\\n'")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.tcp_conf.exists())
+        self.assertFalse(Path(str(self.tcp_conf) + ".cqs-backup").exists())
+        self.assertEqual(self.read("net.ipv4.tcp_rmem"), "4096 131072 6291456")
 
     def test_sysctl_exit_code_is_preserved(self):
         self.conf.write_text(f"{CC} = bbr\n")
@@ -243,7 +275,7 @@ apply_bbr_config "$CONF"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_restored()
         self.assertEqual(self.conf.read_text(), "# original configuration\n")
-        self.assertFalse((self.root / "99-bbr.conf.yuju-backup").exists())
+        self.assertFalse((self.root / "99-cqs-bbr.conf.cqs-backup").exists())
 
     def test_undo_removes_new_config_and_refuses_without_snapshot(self):
         self.assertNotEqual(self.run_shell('network_restore_config "$CONF"').returncode, 0)
@@ -258,7 +290,7 @@ apply_bbr_config "$CONF"
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.read(CC), "bbr")
         self.assertEqual(self.read(QDISC), "fq")
-        self.assertTrue((self.root / "99-bbr.conf.yuju-backup/runtime.conf").exists())
+        self.assertTrue((self.root / "99-cqs-bbr.conf.cqs-backup/runtime.conf").exists())
 
     def test_running_version_is_not_guessed_from_kernel_name(self):
         result = self.run_shell('get_bbr_version "$TEST_ROOT/missing"')
@@ -305,7 +337,7 @@ apply_bbr_config "$CONF"
 
     def test_concurrent_update_is_rejected_before_runtime_writes(self):
         import fcntl
-        with (self.root / "99-bbr.conf.yuju-lock").open("w") as lock:
+        with (self.root / "99-cqs-bbr.conf.cqs-lock").open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             result = self.apply()
         self.assertNotEqual(result.returncode, 0)
@@ -323,7 +355,7 @@ apply_bbr_config "$CONF"
 
     def test_empty_recovery_snapshot_is_rejected(self):
         self.assertEqual(self.apply().returncode, 0)
-        (self.root / "99-bbr.conf.yuju-backup/runtime.conf").write_text("")
+        (self.root / "99-cqs-bbr.conf.cqs-backup/runtime.conf").write_text("")
         self.assertNotEqual(self.run_shell('network_restore_config "$CONF"').returncode, 0)
         self.assertEqual(self.read(CC), "bbr")
 
@@ -339,7 +371,7 @@ network_restore_config "$CONF"
         self.assertEqual(self.read(CC), "bbr")
         self.assertEqual(self.read(QDISC), "fq")
         self.assertEqual(self.conf.read_bytes(), active)
-        self.assertTrue((self.root / "99-bbr.conf.yuju-backup/runtime.conf").is_file())
+        self.assertTrue((self.root / "99-cqs-bbr.conf.cqs-backup/runtime.conf").is_file())
 
     def test_invalid_network_key_and_multiline_value_are_rejected(self):
         for argument in ["=bbr", "kernel.hostname=bad", "net.core.rmem_max=1\nnet.core.wmem_max=1"]:
@@ -383,9 +415,9 @@ sysctl_apply_file "$CONF"
         self.assertIn("1024 65535", result.stdout)
 
     def test_native_unknown_key_returns_failure(self):
-        result = self.run_native(b"net.ipv4.yuju_nonexistent_test_key = 1\n")
+        result = self.run_native(b"net.ipv4.cqs_nonexistent_test_key = 1\n")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("yuju_nonexistent_test_key", result.stderr)
+        self.assertIn("cqs_nonexistent_test_key", result.stderr)
 
 
 if __name__ == "__main__":

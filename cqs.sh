@@ -1,11 +1,13 @@
 #!/bin/bash
-# 项目信息与持久路径集中定义。旧状态路径保留，兼容已保存的恢复材料与互斥锁。
+# 项目信息与持久路径集中定义，所有自有配置、恢复材料和锁使用 cqs 命名。
 CQS_NAME="CqShell"
 CQS_VERSION="0.0.1"
 CQS_INSTALL_PATH="${CQS_INSTALL_PATH:-/usr/local/bin/cqs}"
 CQS_STATE_DIR="${CQS_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/cqs}"
-CQS_KERNEL_LOCK="${CQS_KERNEL_LOCK:-/run/lock/yuju-bbrv3.lock}"
-CQS_KERNEL_BACKUP="${CQS_KERNEL_BACKUP:-/var/backups/yuju-bbrv3}"
+CQS_BBR_CONFIG="${CQS_BBR_CONFIG:-/etc/sysctl.d/99-cqs-bbr.conf}"
+CQS_TCP_CONFIG="${CQS_TCP_CONFIG:-/etc/sysctl.d/99-cqs-tcp.conf}"
+CQS_KERNEL_LOCK="${CQS_KERNEL_LOCK:-/run/lock/cqs-bbrv3.lock}"
+CQS_KERNEL_BACKUP="${CQS_KERNEL_BACKUP:-/var/backups/cqs-bbrv3}"
 
 # ─── 颜色定义 ────────────────────────────────────────────────
 white='\033[0m'
@@ -247,15 +249,15 @@ network_restore_values() {
 # BBR 与 TCP 分别保存首次操作前的状态，重复调优不覆盖恢复基线。
 network_apply_config() (
     local conf_file="$1"; shift
-    local backup="${conf_file}.yuju-backup" work key value pair lock_fd
+    local backup="${conf_file}.cqs-backup" work key value pair lock_fd
     local changed=0 committed=0 new_backup=0 recovered=1
     local -A seen=()
     [[ $# -gt 0 ]] || return 1
-    if [[ -L "$conf_file" || ( -e "$conf_file" && ! -f "$conf_file" ) || -L "$backup" || -L "${conf_file}.yuju-lock" ]]; then
+    if [[ -L "$conf_file" || ( -e "$conf_file" && ! -f "$conf_file" ) || -L "$backup" || -L "${conf_file}.cqs-lock" ]]; then
         echo "配置目标不是普通文件，拒绝覆盖: $conf_file" >&2
         return 1
     fi
-    acquire_lock lock_fd "${conf_file}.yuju-lock" || return 1
+    acquire_lock lock_fd "${conf_file}.cqs-lock" || return 1
     work=$(mktemp -d "${conf_file}.work.XXXXXX") || return 1
     network_finish_update() {
         if (( changed && ! committed )); then
@@ -323,9 +325,9 @@ network_apply_config() (
 )
 
 network_restore_config() (
-    local conf_file="$1" backup="${1}.yuju-backup" work key separator value lock_fd recovered=1
+    local conf_file="$1" backup="${1}.cqs-backup" work key separator value lock_fd recovered=1
     local changed=0 committed=0
-    acquire_lock lock_fd "${conf_file}.yuju-lock" || return 1
+    acquire_lock lock_fd "${conf_file}.cqs-lock" || return 1
     if [[ -L "$conf_file" || -L "$backup" || ! -s "$backup/runtime.conf" ]] ||
         [[ ! -f "$backup/original.conf" && ! -f "$backup/no-original" ]]; then
         echo "没有完整的恢复快照，不能推断系统原值: $backup" >&2
@@ -550,7 +552,7 @@ show_sysinfo() {
     else
         bbr_mod_st="${red}❌ 不可用${white}"
     fi
-    if [[ -f /etc/sysctl.d/99-tcp-tune.conf ]]; then
+    if [[ -f "$CQS_TCP_CONFIG" ]]; then
         tcp_tune_st="${green}✅ 已配置${white}"
     else
         tcp_tune_st="${yellow}⬜ 未配置${white}"
@@ -701,7 +703,7 @@ tcp_tune() {
         3)
             read -rp "恢复首次调优前的运行值和配置？[y/N]: " confirm_tune || return 1
             [[ "$confirm_tune" =~ ^[Yy]$ ]] || return 0
-            network_restore_config /etc/sysctl.d/99-tcp-tune.conf
+            network_restore_config "$CQS_TCP_CONFIG"
             return $?
             ;;
         1) bandwidth=1000; rtt=50 ;;
@@ -722,9 +724,9 @@ tcp_tune() {
         read -rp "应用并保存 TCP 配置？[y/N]: " confirm_tune || return 1
         [[ "$confirm_tune" =~ ^[Yy]$ ]] || return 0
     fi
-    mkdir -p /etc/sysctl.d || return 1
-    apply_tcp_profile /etc/sysctl.d/99-tcp-tune.conf "$buffer" || return 1
-    echo "TCP 配置已应用并保存；首次操作前的快照已保留，可通过本菜单撤销"
+    mkdir -p -- "$(dirname -- "$CQS_TCP_CONFIG")" || return 1
+    apply_tcp_profile "$CQS_TCP_CONFIG" "$buffer" || return 1
+    echo "TCP 配置已应用并保存至 $CQS_TCP_CONFIG；首次操作前的快照已保留，可通过本菜单撤销"
 }
 
 # 1.4 启用内核提供的 BBR
@@ -743,14 +745,14 @@ enable_bbr() {
         return 1
     fi
 
-    mkdir -p /etc/sysctl.d || return 1
+    mkdir -p -- "$(dirname -- "$CQS_BBR_CONFIG")" || return 1
     echo -e "${cyan}正在应用并保存 BBR/$qdisc 配置...${white}"
-    if ! apply_bbr_config /etc/sysctl.d/99-bbr.conf "$qdisc"; then
+    if ! apply_bbr_config "$CQS_BBR_CONFIG" "$qdisc"; then
         echo -e "${red}BBR 配置未保存，请处理上方错误后重试${white}" >&2
         return 1
     fi
     echo -e "${green}✅ BBR 已启用，运行版本: $(get_bbr_version)，默认队列参数为 $qdisc${white}"
-    echo "配置文件: /etc/sysctl.d/99-bbr.conf（重启时仍可能被其他 sysctl 配置覆盖）"
+    echo "配置文件: $CQS_BBR_CONFIG（重启时仍可能被其他 sysctl 配置覆盖）"
     echo "现有连接和网卡队列可能保持原设置，实际吞吐量请通过测速验证"
 }
 
@@ -1091,7 +1093,7 @@ restore_bbr() {
     require_root || return 1
     read -rp "恢复首次设置 BBR 前的运行值与配置？[y/N]: " confirm || return 1
     [[ "$confirm" =~ ^[Yy]$ ]] || return 0
-    network_restore_config /etc/sysctl.d/99-bbr.conf
+    network_restore_config "$CQS_BBR_CONFIG"
 }
 
 bbrv3_kernel_menu() {
@@ -1238,8 +1240,8 @@ system_ssh() (
         echo "SSH 服务未运行，拒绝修改端口或启动服务" >&2
         return 1
     fi
-    [[ -f "$conf_file" && ! -L "$conf_file" && ! -L "${conf_file}.yuju-lock" ]] || return 1
-    acquire_lock lock_fd "${conf_file}.yuju-lock" "另一个进程正在修改 SSH 配置" || return 1
+    [[ -f "$conf_file" && ! -L "$conf_file" && ! -L "${conf_file}.cqs-lock" ]] || return 1
+    acquire_lock lock_fd "${conf_file}.cqs-lock" "另一个进程正在修改 SSH 配置" || return 1
     work=$(mktemp -d "${conf_file}.work.XXXXXX") || return 1
     ssh_finish_update() {
         if (( changed && ! committed )); then
@@ -1981,10 +1983,10 @@ docker_set_ipv6() (
     require_root || return 1
     case "$enabled" in on|off) ;; *) return 1 ;; esac
     require_commands python3 dockerd systemctl flock || return 1
-    [[ ! -L "$conf_file" && ! -L "${conf_file}.yuju-lock" ]] || return 1
+    [[ ! -L "$conf_file" && ! -L "${conf_file}.cqs-lock" ]] || return 1
     [[ ! -e "$conf_file" || -f "$conf_file" ]] || return 1
     mkdir -p -- "$(dirname -- "$conf_file")" || return 1
-    acquire_lock lock_fd "${conf_file}.yuju-lock" "另一个进程正在修改 Docker 配置" || return 1
+    acquire_lock lock_fd "${conf_file}.cqs-lock" "另一个进程正在修改 Docker 配置" || return 1
     if systemctl is-active --quiet docker; then was_active=1; fi
     work=$(mktemp -d "${conf_file}.work.XXXXXX") || return 1
     docker_finish_ipv6() {

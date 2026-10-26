@@ -201,6 +201,25 @@ ss() { printf 'LISTEN 0 128 127.0.0.1:2222 *:* users:(("sshd",pid=%s,fd=3))\n' "
         self.assertTrue(self.conf.is_symlink())
         self.assertEqual(target.read_text(), "original\n")
 
+    def test_config_lock_blocks_service_changes(self):
+        import fcntl
+        for command, original in [('system_ssh 2222 "$CONF"', "Port 22\n"),
+                                  ('docker_set_ipv6 on "$CONF"', '{"debug":true}')]:
+            with self.subTest(command=command):
+                self.conf.write_text(original)
+                calls_file = self.root / "calls"
+                calls_file.unlink(missing_ok=True)
+                with Path(str(self.conf) + ".cqs-lock").open("w") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    result = self.run_shell(command)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("另一个进程", result.stderr)
+                self.assertEqual(self.conf.read_text(), original)
+                calls = calls_file.read_text() if calls_file.exists() else ""
+                self.assertNotIn("systemctl reload", calls)
+                self.assertNotIn("systemctl restart", calls)
+                self.assertNotIn("dockerd --validate", calls)
+
     def test_onekey_stops_before_disabling_password_login_when_ssh_fails(self):
         boundary = "\n".join(
             name + "() { :; }" for name in (
