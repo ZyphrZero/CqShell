@@ -86,7 +86,7 @@ fn phase_color(phase: Phase) -> Color {
     match phase {
         Phase::Completed => Color::Green,
         Phase::Failed => Color::Red,
-        Phase::Cancelled => Color::Yellow,
+        Phase::Cancelled | Phase::Cancelling => Color::Yellow,
         Phase::Running => Color::Cyan,
         Phase::Idle => Color::DarkGray,
     }

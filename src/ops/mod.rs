@@ -4,6 +4,7 @@ pub mod ip_quality;
 pub mod kernel;
 pub mod memory;
 pub mod network;
+pub mod packages;
 pub mod service;
 pub mod ssh;
 pub mod system;

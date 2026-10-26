@@ -161,7 +161,7 @@ pub fn uninstall(ctx: &Context, purge_data: bool) -> Result<()> {
     ctx.run("systemctl", &["stop", "docker.service", "docker.socket"])?;
     let mut args = vec!["purge", "-y"];
     args.extend(packages);
-    ctx.run("apt-get", &args)?;
+    super::packages::run(ctx, &args)?;
     if purge_data {
         // Explicit data deletion is restricted to the known default locations.
         for name in ["/var/lib/docker", "/etc/docker"] {
