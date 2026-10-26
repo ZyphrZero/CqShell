@@ -233,7 +233,7 @@ system_keygen() { touch "$TEST_ROOT/LOGIN_CHANGED"; }
 onekey_optimization
 '''
         result = subprocess.run(
-            ["bash", "-c", body], input="y\n", text=True, capture_output=True, timeout=10,
+            ["bash", "-c", body], input="10 11\ns\ny\n", text=True, capture_output=True, timeout=10,
             env=dict(os.environ, TEST_ROOT=str(self.root)),
         )
         self.assertNotEqual(result.returncode, 0)

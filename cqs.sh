@@ -2451,104 +2451,121 @@ docker_manage() {
 # ═══════════════════════════════════════════════════════════════
 
 onekey_optimization() {
-    local network_failed=0 choice
+    local choice confirm index item label action mark message=""
+    local total=0 step=0 completed=0 failed=0 valid
+    local -a selected=() choices command
+    local -A toggles=()
+    # 固定命令表与显示标签共用编号，用户输入只用于切换选择。
+    local -a items=(
+        [1]="更新系统软件包|system_update"
+        [2]="系统清理（含日志、缓存和未使用的 Docker 数据）|system_clean"
+        [3]="TCP 调优（均衡配置）|tcp_tune --auto"
+        [4]="启用 BBR + FQ（内核自带）|enable_bbr fq"
+        [5]="设置时区为上海|system_time"
+        [6]="自动设置 SWAP（会重建已有 /swapfile）|swap_create_auto"
+        [7]="安装 fail2ban|system_fail2ban"
+        [8]="安装所有常用工具（终端美化仅安装组件）|download_all"
+        [9]="安装 Docker|docker_install"
+        [10]="设置 SSH 端口为 55520|system_ssh 55520"
+        [11]="启用密钥登录并关闭密码登录|system_keygen"
+    )
     require_root || return 1
-    echo "一键优化"
-    echo -e "${pink}============================${white}"
-    echo "优化内容如下："
-    echo "- 更新系统软件包"
-    echo "- 系统清理"
-    echo -e "- TCP调优"
-    echo -e "- 启用 BBR（内核自带）"
-    echo -e "- 设置时区到${yellow}上海${white}"
-    echo -e "- 自动设置${yellow}虚拟内存${white}"
-    echo -e "- 安装fail2ban"
-    echo -e "- 安装${yellow}所有常用工具${white}"
-    echo -e "- 设置SSH端口号为${yellow}55520${white}"
-    echo -e "- 修改为密钥登录"
-    echo -e "${pink}============================${white}"
-    echo -e "${red}注意：请牢记端口号和密钥，否则重启后无法登录${white}"
-    read -p "确定一键优化吗？(Y/N): " choice
-
-    case "$choice" in
-        [Yy])
-            clear
-            echo -e "${pink}============================${white}"
-            if ! system_update; then
-                echo -e "[${red}FAIL${white}] 系统更新未完成，已停止后续优化"
-                return 1
+    while true; do
+        clear
+        echo "一键优化 · 按需选择"
+        echo -e "${pink}============================${white}"
+        total=0
+        for index in "${!items[@]}"; do
+            item=${items[$index]}
+            mark=" "
+            if (( ${selected[$index]:-0} )); then
+                mark="x"
+                total=$((total + 1))
             fi
-            echo -e "[${green}OK${white}] 1/10. 更新系统到最新"
+            printf '[%s] %2s. %s\n' "$mark" "$index" "${item%%|*}"
+        done
+        echo -e "${pink}============================${white}"
+        echo "已选 $total/${#items[@]} 项；默认不选，输入编号切换勾选，可用空格或逗号分隔（如 1 3 4）"
+        echo "a. 全选    n. 清空    s. 执行已选    0. 返回"
+        [[ -z "$message" ]] || printf '%s\n' "$message"
+        message=""
+        read -rp "请选择: " choice || return 0
+        case "$choice" in
+            0) return 0 ;;
+            a|A)
+                for index in "${!items[@]}"; do selected[$index]=1; done
+                ;;
+            n|N) selected=() ;;
+            s|S)
+                if (( total == 0 )); then
+                    message="请至少选择一项优化内容"
+                    continue
+                fi
+                echo "即将按顺序执行以下 $total 项："
+                for index in "${!items[@]}"; do
+                    (( ${selected[$index]:-0} )) || continue
+                    item=${items[$index]}
+                    printf '  - %s\n' "${item%%|*}"
+                done
+                if (( ${selected[10]:-0} || ${selected[11]:-0} )); then
+                    echo -e "${yellow}涉及 SSH 登录设置：请保持当前会话，确认防火墙端口和密钥可用后再断开。${white}"
+                fi
+                read -rp "确认执行以上 $total 项？[y/N]: " confirm || return 0
+                if [[ "$confirm" =~ ^[Yy]$ ]]; then break; fi
+                message="已取消执行，可继续调整选择"
+                ;;
+            *)
+                choice=${choice//，/ }
+                choice=${choice//,/ }
+                read -ra choices <<< "$choice"
+                valid=1
+                toggles=()
+                # 整组编号校验通过后再更新；同一行重复编号只切换一次。
+                for index in "${choices[@]}"; do
+                    case "$index" in
+                        [1-9]|10|11) toggles[$index]=1 ;;
+                        *) valid=0; break ;;
+                    esac
+                done
+                if (( ! valid || ${#choices[@]} == 0 )); then
+                    message="无效输入：请输入 1-11 的编号，或 a / n / s / 0"
+                    continue
+                fi
+                for index in "${!toggles[@]}"; do
+                    selected[$index]=$((1 - ${selected[$index]:-0}))
+                done
+                ;;
+        esac
+    done
 
-            echo -e "${pink}============================${white}"
-            if ! system_clean; then
-                echo -e "[${red}FAIL${white}] 系统清理未完成，已停止后续优化"
-                return 1
-            fi
-            echo -e "[${green}OK${white}] 2/10. 清理系统垃圾文件"
-
-            echo -e "${pink}============================${white}"
-            if tcp_tune --auto; then
-                echo -e "[${green}OK${white}] 3/10. TCP调优"
-            else
-                network_failed=1
-                echo -e "[${red}FAIL${white}] 3/10. TCP调优未全部完成"
-            fi
-
-            echo -e "${pink}============================${white}"
-            if enable_bbr fq; then
-                echo -e "[${green}OK${white}] 4/10. 启用 BBR"
-            else
-                network_failed=1
-                echo -e "[${red}FAIL${white}] 4/10. BBR 启用失败，已继续后续优化"
-            fi
-
-
-            echo -e "${pink}============================${white}"
-            system_time
-            echo -e "[${green}OK${white}] 5/10. 设置时区到${yellow}上海${white}"
-
-            echo -e "${pink}============================${white}"
-            swap_create_auto
-            echo -e "[${green}OK${white}] 6/10. 自动设置${yellow}虚拟内存${white}"
-
-            echo -e "${pink}============================${white}"
-            system_fail2ban
-            echo -e "[${green}OK${white}] 7/10. 安装fail2ban"
-
-            echo -e "${pink}============================${white}"
-            download_all
-            docker_install
-            echo -e "[${green}OK${white}] 8/10. 安装${yellow}Docker等常用工具${white}"
-
-            echo -e "${pink}============================${white}"
-            if ! system_ssh 55520; then
-                echo -e "[${red}FAIL${white}] SSH 端口修改失败，停止后续登录方式修改"
-                return 1
-            fi
-            echo -e "[${green}OK${white}] 9/10. 设置SSH端口号为${yellow}55520${white}"
-
-            echo -e "${pink}============================${white}"
-            system_keygen
-            echo -e "[${green}OK${white}] 10/10. 修改为密钥登录"
-            echo -e "${pink}============================${white}"
-
-            clear
-            if (( network_failed )); then
-                echo -e "${yellow}一键优化流程已结束，但 TCP/BBR 存在失败项，请单独重试${white}"
-            else
-                echo -e "${green}一键优化已完成${white}"
-            fi
-            echo "您现在的SSH端口为55520，您的SSH Key如下，请牢记："
-            cat ~/.ssh/id_rsa
-            ;;
-        [Nn])
-            echo "已取消"
-            ;;
-        *)
-            echo "无效的选择，请输入 Y 或 N。"
-            ;;
-    esac
+    for index in "${!items[@]}"; do
+        (( ${selected[$index]:-0} )) || continue
+        item=${items[$index]}
+        IFS='|' read -r label action <<< "$item"
+        read -ra command <<< "$action"
+        step=$((step + 1))
+        echo -e "${pink}============================${white}"
+        printf '[%s/%s] 正在执行：%s\n' "$step" "$total" "$label"
+        if "${command[@]}"; then
+            completed=$((completed + 1))
+            echo -e "[${green}OK${white}] $step/$total. $label"
+        else
+            failed=$((failed + 1))
+            echo -e "[${red}FAIL${white}] $step/$total. $label"
+            case "$index" in
+                3|4) echo "网络调优失败，已记录并继续其余已选项" ;;
+                *)
+                    echo "已停止后续优化：成功 $completed 项，失败 $failed 项，未执行 $((total - step)) 项"
+                    return 1
+                    ;;
+            esac
+        fi
+    done
+    if (( failed )); then
+        echo -e "${yellow}一键优化结束：成功 $completed 项，失败 $failed 项，请查看上方错误后重试${white}"
+        return 1
+    fi
+    echo -e "${green}已完成所选 $total 项优化${white}"
 }
 
 # ═══════════════════════════════════════════════════════════════
