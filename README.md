@@ -38,6 +38,8 @@ cqs --uninstall   # 卸载快捷命令
 - 第三方内核安装支持 Debian 12+ / Ubuntu 24.04+ 的 amd64、arm64 主机，需要 GRUB，不支持在 WSL 或容器中安装。安装后需自行重启验证。
 - Max 内核适合实验性吞吐测试；网络调优效果取决于实际线路，不保证提升带宽。
 
+技术实现与开发说明见 [技术文档](docs/TECHNICAL.md)。
+
 ## 许可证
 
 见 [LICENSE](LICENSE)。
