@@ -1,0 +1,133 @@
+name: Build and release Linux binaries
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate package version and tag
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
+          if os.environ['REF_TYPE'] == 'tag' and os.environ['REF_NAME'] != f'v{version}':
+              raise SystemExit(f'Tag must match Cargo.toml: expected v{version}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
+
+  checks:
+    needs: metadata
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: [metadata, checks]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and test dependencies
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add "$TARGET"
+          sudo apt-get update
+          sudo apt-get install -y musl-tools curl openssl python3
+      - name: Build
+        env:
+          TARGET: ${{ matrix.target }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: cargo build --release --locked --target "$TARGET"
+      - name: Smoke test and package
+        env:
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          test "$("./target/$TARGET/release/cqs" --version)" = "cqs $VERSION"
+          "./target/$TARGET/release/cqs" languages
+          mkdir -p dist/cqs
+          cp "target/$TARGET/release/cqs" dist/cqs/
+          cp LICENSE README.md README.en.md config.example.toml install.sh dist/cqs/
+          cp -r locales docs dist/cqs/
+          tar -czf "cqs-$TARGET.tar.gz" -C dist cqs
+          sha256sum "cqs-$TARGET.tar.gz" > "cqs-$TARGET.tar.gz.sha256"
+      - name: Test installer against the packaged binary
+        env:
+          CQS_TEST_BINARY: target/${{ matrix.target }}/release/cqs
+          CQS_TEST_ARCHIVE: cqs-${{ matrix.target }}.tar.gz
+        run: python3 -m unittest discover -s tests -p 'test_install.py' -v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cqs-${{ matrix.target }}
+          path: |
+            cqs-${{ matrix.target }}.tar.gz
+            cqs-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [metadata, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cqs-*-unknown-linux-musl
+          path: release
+          merge-multiple: true
+      - name: Verify release assets
+        working-directory: release
+        run: |
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            sha256sum --check "cqs-$target.tar.gz.sha256"
+          done
+          cp ../install.sh .
+          sha256sum install.sh > install.sh.sha256
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          flags=()
+          if [[ "${VERSION%%+*}" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" release/* --verify-tag --draft \
+            --title "CqShell $TAG" --generate-notes "${flags[@]}"
+          gh release edit "$TAG" --draft=false

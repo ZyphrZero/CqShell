@@ -1,0 +1,3 @@
+# Copy to ~/.config/cqs/config.toml (or pass --config).
+language = "zh-CN"
+# locale_dir = "/absolute/path/to/locales"

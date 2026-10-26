@@ -1,0 +1,49 @@
+name: Rust checks
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup update stable && rustup default stable && rustup component add rustfmt clippy
+      - name: Test dependencies
+        run: sudo apt-get update && sudo apt-get install -y curl openssl python3 dpkg-dev procps shellcheck
+      - name: Check installer syntax
+        run: bash -n install.sh && shellcheck install.sh
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Test installer with the built binary
+        env:
+          CQS_TEST_BINARY: target/release/cqs
+        run: python3 -m unittest discover -s tests -p 'test_install.py' -v
+  minimum-rust:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.88.0 --profile minimal
+      - run: cargo +1.88.0 check --locked --all-targets
+  windows-build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add clippy
+      - run: cargo clippy --locked --lib --bin cqs -- -D warnings
+      - run: cargo build --release --locked
+      - run: cargo test --locked --test cli
+      - run: cargo test --locked --lib tui
+      - run: cargo test --locked --lib dashboard
+      - run: ./target/release/cqs.exe --version

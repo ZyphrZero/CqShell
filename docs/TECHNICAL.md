@@ -1,472 +1,139 @@
-# CqShell 技术文档
+# CqShell Rust 技术文档
 
-本文面向维护者和部署人员，说明当前实现、状态变化、故障处理及验证方式。快速安装与功能概览见 [README](../README.md)。
+对应 `0.1.0` 源码，更新日期 2026-10-27。安装与操作见 [README](../README.md)。
 
-- 本文对应当前源码实现，脚本版本 `0.0.1`。
-- 编写日期：2026-10-26。
-- 实现入口：[cqs.sh](../cqs.sh)；本文件描述已实现的行为，不代表所有功能都具备同样的回滚能力。
-
-## 目录
-
-- [架构与入口](#架构与入口)
-- [运行环境](#运行环境)
-- [配置与并发控制](#配置与并发控制)
-- [网络配置事务](#网络配置事务)
-- [BBR 与 TCP 调优](#bbr-与-tcp-调优)
-- [第三方内核管理](#第三方内核管理)
-- [SSH 与 Docker 配置](#ssh-与-docker-配置)
-- [终端美化配置与还原](#终端美化配置与还原)
-- [远程脚本执行](#远程脚本执行)
-- [故障定位与能力边界](#故障定位与能力边界)
-- [测试与验证](#测试与验证)
-- [开发与维护约定](#开发与维护约定)
-
-## 架构与入口
-
-### 单文件分发
-
-运行所需的项目代码集中在 `cqs.sh` 中，无需构建步骤或额外的本地 Shell 模块。Bash 负责菜单、系统命令调用和状态控制；内嵌 Python 3 处理 Release JSON、cgroup 路径和 Docker JSON。Python 代码仅使用标准库。
-
-```mermaid
-flowchart TD
-    A["执行 cqs.sh"] --> B["cqs_main"]
-    B --> C["命令行选项"]
-    B --> D["协议确认"]
-    D --> E["root 用户安装快捷命令"]
-    D --> F["普通用户进入菜单"]
-    E --> G["cqs_menu"]
-    F --> G
-    G --> H["menu_loop 分发子菜单"]
-    H --> I["网络与内核管理"]
-    H --> J["系统与服务配置"]
-    H --> K["测试与工具安装"]
-    I --> L["权限、依赖、锁、临时文件和系统命令"]
-    J --> L
-    K --> L
-```
-
-主要代码区域：
-
-| 区域 | 入口或关键函数 | 职责 |
-| --- | --- | --- |
-| 启动与安装 | `cqs_main`、`user_agreement`、`install_shortcut` | 参数分发、协议状态、快捷命令生命周期 |
-| 公共操作 | `require_root`、`require_commands`、`acquire_lock`、`menu_loop` | 权限、依赖、互斥、菜单分发 |
-| 网络配置 | `network_apply_config`、`network_restore_config` | 应用、读回验证、持久化和撤销 |
-| BBR / TCP | `enable_bbr`、`tcp_tune`、`calculate_tcp_buffer` | 算法检测、队列选择、缓冲区计算 |
-| 内核管理 | `bbrv3_install_kernel`、`bbrv3_remove_kernel` | 下载、校验、安装、引导检查、指定版本卸载 |
-| 服务配置 | `system_ssh`、`docker_set_ipv6` | 候选配置校验、服务更新与失败恢复 |
-| 终端美化 | `terminal_menu`、`terminal_config` | 组件安装、提示符配置、恢复基线和失败回退 |
-| 远程脚本 | `run_https_script` | 下载完成并检查语法后执行 |
-| 综合操作 | `onekey_optimization` | 按顺序调用多个独立操作，不构成整体事务 |
-
-### 启动契约
-
-脚本末尾通过 `BASH_SOURCE[0]` 与 `$0` 判断是否直接执行。`source cqs.sh` 只加载变量和函数，不安装快捷命令、不写系统配置，也不进入菜单。测试使用这一入口加载实际生产代码。
-
-| 调用 | 行为 |
-| --- | --- |
-| `bash cqs.sh` / `cqs` | 确认协议；root 用户安装或更新快捷命令；进入主菜单 |
-| `cqs --help` / `cqs -h` | 显示帮助，不安装、不提示协议 |
-| `cqs --version` | 显示项目名与版本，不安装、不提示协议 |
-| `cqs --install` | 需要 root，仅执行快捷命令安装 |
-| `cqs --uninstall` | 需要 root，删除快捷命令，保留下载文件与状态材料 |
-| 未识别的首个参数 | 返回退出码 `2` |
-
-协议通过后写入 `agreement.accepted`，不会修改脚本源码或自动安装软件包。状态目录按运行用户解析，因此普通用户与通过 `sudo` 运行时可能使用不同的协议状态。
-
-`install_shortcut` 用脚本自身的真实路径定位源文件，不依赖当前工作目录。相同内容只修复执行权限；需要更新时，在目标目录生成临时文件，再以 `mv -fT` 替换。目标为符号链接或非普通文件时拒绝覆盖。
-
-### 菜单分发
-
-子菜单项格式为 `编号|标签|固定函数及参数`。`menu_loop` 只匹配用户输入的编号，将声明中的命令拆成数组执行，不对用户输入使用 `eval`。
-
-菜单声明支持简单的固定参数，不是完整的 Shell 命令语言。需要管道、重定向或带空格的复杂参数时，应封装为函数。返回上级使用 `return`；子菜单遇到 `0` 或 EOF 正常返回，避免递归重新进入主菜单造成调用栈增长。
-
-内部函数不是稳定的公开 CLI。尤其是配置辅助函数，依赖调用入口完成权限检查，不应将任意路径和参数暴露给不可信输入。
-
-## 运行环境
-
-支持的整体运行环境为 Debian / Ubuntu。个别传统函数保留了其他包管理器分支，这不表示整个项目支持对应发行版。
-
-| 功能 | 主要依赖或条件 |
-| --- | --- |
-| 基础运行 | Bash，包含 `local -n`、数组、进程替换等能力；常见 GNU/Linux 文件工具 |
-| 网络调优 | `sysctl`、`flock`、`awk`、`python3`；加载模块时需要 `modprobe` |
-| 实际队列查看 | `tc`，通常由 iproute2 提供 |
-| 第三方内核安装 | Debian 12+ / Ubuntu 24.04+，amd64 / arm64，root，GRUB，完整的当前内核镜像与 initramfs |
-| 内核安装工具 | `curl`、`python3`、`sha256sum`、`dpkg`、`dpkg-deb`、`dpkg-query`、`apt-get`、`update-grub`、`lsinitramfs`、`systemd-detect-virt`、`flock`；UEFI 环境另需 `mokutil` |
-| SSH 端口修改 | root、运行中的 `ssh.service`、`sshd`、`systemctl`、`flock`、`ss` |
-| Docker IPv6 修改 | root、`python3`、支持 `--validate` 的 `dockerd`、`systemctl`、`flock` |
-| 远程脚本 | `curl`、Bash；非 root 需要提权执行时还需要 `sudo` |
-| 终端美化 | Python 3.8+、`flock`、`readlink`、Starship；配置 zsh 时还需要 zsh；安装组件需要 root 与 apt |
-
-网络、内核和服务配置入口通常在缺少依赖时返回错误；传统测速、软件安装等流程可能自行调用包管理器安装依赖。因此不能将“缺依赖不自动安装”视为整个脚本的统一行为。
-
-## 配置与并发控制
-
-### 持久状态
-
-| 变量或文件 | 默认位置 | 用途 |
-| --- | --- | --- |
-| `CQS_INSTALL_PATH` | `/usr/local/bin/cqs` | 安装后的快捷命令 |
-| `CQS_STATE_DIR` | `${XDG_STATE_HOME:-$HOME/.local/state}/cqs` | 存放 `agreement.accepted` 和 `terminal/` 状态 |
-| `CQS_TERMINAL_CONFIG` | `${XDG_CONFIG_HOME:-$HOME/.config}/cqs/terminal.toml` | CqShell 独立的 Starship 提示符配置 |
-| `CQS_KERNEL_LOCK` | `/run/lock/cqs-bbrv3.lock` | 本工具内核相关操作的共享锁 |
-| `CQS_KERNEL_BACKUP` | `/var/backups/cqs-bbrv3` | GRUB 操作前快照 |
-| `CQS_BBR_CONFIG` | `/etc/sysctl.d/99-cqs-bbr.conf` | 拥塞算法与默认队列 |
-| `CQS_TCP_CONFIG` | `/etc/sysctl.d/99-cqs-tcp.conf` | TCP 缓冲区等参数 |
-| 网络恢复基线 | `<配置文件>.cqs-backup/` | 首次受管理操作前的运行值与原文件 |
-| 配置锁 | `<配置文件>.cqs-lock` | 网络、SSH、Docker 配置的互斥锁 |
-
-`CQS_*` 路径变量在脚本开头集中定义，可在启动前通过环境变量覆盖；测试用它们隔离安装、状态、网络配置和内核锁。应用、状态展示和撤销读取同一配置变量，父目录按实际目标创建。生产环境应使用可信且权限合适的绝对路径。
-
-自有配置和恢复材料统一采用 `cqs` 命名，不自动扫描或导入其他命名的状态。升级已有部署前，先用此前版本处理未撤销的调优并结束相关进程，确认恢复材料已妥善保存后再运行新版本，避免不同版本使用不同锁或残留配置互相覆盖。不要通过删除未完成恢复的备份来完成升级。
-
-### 锁的范围
-
-`acquire_lock` 将文件描述符写入调用方变量，使用非阻塞 `flock -n`。相关操作在子 Shell 中持有描述符，直到操作及 `EXIT` 回退结束后释放。锁被占用时直接失败，不等待也不绕过。
-
-- 网络应用与撤销使用同一个配置文件锁。
-- SSH 与 Docker IPv6 各自使用目标配置文件锁。
-- 内核安装、卸载、`system_update` 和 `system_clean` 共用 `CQS_KERNEL_LOCK`。
-- 终端配置、状态查看和还原共用 `$CQS_STATE_DIR/terminal/config.lock`。
-
-锁只协调使用该锁的代码路径，不协调外部 `apt`、人工编辑或其他工具。不要删除锁文件来“解锁”：旧进程仍可能持有原文件的锁，新进程却锁住另一文件，互斥将失效。
-
-## 网络配置事务
-
-### 应用流程
-
-内部接口为 `network_apply_config <配置文件> <key=value>...`。只允许 `network_key_allowed` 中定义的网络参数，拒绝重复键、空值、换行值及不允许的键。
-
-```mermaid
-flowchart TD
-    A["校验目标并取得锁"] --> B["生成候选配置和本次运行值快照"]
-    B --> C["保存或校验首次恢复基线"]
-    C --> D["sysctl -p 应用候选配置"]
-    D --> E["逐项读回验证"]
-    E --> F["原子替换持久配置"]
-    F --> G["标记 committed 并清理暂存"]
-    D -->|失败| R["恢复本次操作前的运行值"]
-    E -->|失败| R
-    F -->|失败| R
-    R -->|恢复成功| X["返回失败并清理本次暂存"]
-    R -->|恢复失败| K["返回失败并保留恢复材料"]
-```
-
-配置由 `sysctl -p` 原生解析，避免把 `tcp_rmem` 等多值参数的空格删除。读回验证会归一化空白，再比较期望值与实际值。出现部分写入、读回不一致或文件保存失败时，都不会宣布成功。
-
-候选配置和临时文件位于目标配置附近的 `.work.XXXXXX` 目录；持久文件仅在运行参数通过验证后替换。`changed` 与 `committed` 控制退出时是否回退；`INT`、`TERM` 分别转为退出码 `130`、`143`，再由 `EXIT` 处理恢复。
-
-这里的“原子”只指文件替换。多个 sysctl 的修改不是内核级原子操作，可能短暂部分生效；`SIGKILL`、断电和内核崩溃也无法依靠 Shell 的退出陷阱恢复。
-
-### 两种快照
-
-| 材料 | 内容 | 生命周期 |
-| --- | --- | --- |
-| `.work.XXXXXX/runtime.conf` | 本次调用前的运行值 | 用于立即失败回退；恢复失败时保留 |
-| `.cqs-backup/runtime.conf` | 首次受管理操作前的运行值 | 后续成功调优不覆盖，供用户撤销 |
-| `.cqs-backup/original.conf` | 首次操作前已存在的配置文件 | 撤销时恢复 |
-| `.cqs-backup/no-original` | 首次操作前没有配置文件的标记 | 撤销时删除本工具创建的配置文件 |
-
-已有基线必须完整，且参数键集合必须与新配置一致。需要管理不同参数集合时，先撤销旧配置，不能悄悄重写恢复基线。首次应用失败且立即回退成功时，会移除本次新建的基线。
-
-### 撤销流程
-
-`network_restore_config` 先保存撤销前的当前运行值，再恢复首次基线，随后恢复原配置文件或删除新建文件。全部完成后删除基线；撤销中途失败时，尝试回到撤销前状态，并保留原基线供重试。
-
-撤销恢复的是记录过的状态，不是猜测发行版默认值。没有完整基线时拒绝执行。恢复失败时，以错误输出中的材料路径为准；这些文件是 sysctl 配置，不是可供 `source` 执行的 Shell 脚本。
-
-## BBR 与 TCP 调优
-
-### 状态、版本与队列
-
-三个判断相互独立：
-
-| 判断 | 数据来源 | 含义 |
-| --- | --- | --- |
-| BBR 可用 | `net.ipv4.tcp_available_congestion_control` | 列表中存在完整的 `bbr` 项，不把 `bbr2`、`bbrplus` 当成 `bbr` |
-| BBR 已启用 | `net.ipv4.tcp_congestion_control` | 当前默认 TCP 拥塞控制为 `bbr` |
-| BBR 实现版本 | `/sys/module/tcp_bbr/version` | 明确为 `1`、`2`、`3` 才显示对应版本，否则显示“未知” |
-
-不可用时，`load_bbr_module` 尝试 `modprobe tcp_bbr`，并重新检查可用算法。模块命令成功但列表仍无 BBR，也视为失败。`modinfo` 的磁盘模块版本仅作补充信息，不作为正在运行 v3 的证明。
-
-支持 `fq`、`fq_codel`、`fq_pie`、`cake` 四种默认队列。`apply_bbr_config` 仅管理拥塞算法和 `net.core.default_qdisc`；不会执行 `tc qdisc replace`，因此不重建现有网卡的队列树。状态页用 `tc qdisc show` 展示实际队列。选择 CAKE 也不等于已配置线路带宽整形。
-
-Shell 参数不会把现有 BBR 实现升级成 v3。标准版与 Max 的差异来自所安装内核中的实现，运行版本 `v3` 本身也不区分这两种构建。
-
-### 缓冲区算法
-
-`calculate_tcp_buffer` 接收带宽 `W`（Mbit/s）、RTT `R`（ms）、有效内存 `K`（KiB），返回字节数：
+## 架构
 
 ```text
-MiB = 1048576
-BDP = W × 1000000 ÷ 8 × R ÷ 1000
-候选值 = max(1 MiB, ceil(2 × BDP ÷ MiB) × MiB)
-内存上限 = min(64 MiB, floor(K × 1024 ÷ 32 ÷ MiB) × MiB)
-缓冲区上限 = min(候选值, 内存上限)
+main → cli → actions → ops/{system,network,kernel,ssh,docker,terminal,tools,ai}
+          ↘ tui ↗          ↘ runtime / storage
+                i18n ← locales/*.toml
 ```
 
-这是项目采用的启发式策略，不是内核默认值，也不保证最优吞吐。输入范围为带宽 `(0, 100000]`、RTT `(0, 10000]`，最多三位小数；有效内存至少 64 MiB。均衡模式固定以 `1000 Mbit/s、50 ms` 作为计算输入，同样受内存限制。
+- `actions` 定义固定 ID、分类、参数、默认值、权限和交互属性，CLI / TUI 共用解析和执行逻辑。
+- `tui` 处理显式焦点、普通单项操作和独立的优化多选模式；`tui/view.rs` 负责响应式绘制及鼠标命中区域，`tui/input.rs` 维护 UTF-8 光标和宽字符裁剪。键盘输入返回动作意图，再由主循环执行，界面测试不会触发系统修改。普通操作在工作线程运行；交互工具先退出 raw mode / alternate screen，再继承终端，返回后恢复界面。
+- `dashboard` 通过 sysinfo 和 Linux 只读 proc/sysfs 读取常驻指标。独立线程每 3 秒更新本机数据；CPU 首次采样显示“采集中”，达到最小采样间隔才显示占用率。公网查询只有显式 N/查询操作触发，使用另一线程和连接/总超时，结果保存在会话内。数据分别标记采集中、未查询、有效、未知及不适用，不用零值代替读取失败，也不因单个探测失败清空整个面板。
+- `runtime` 用参数数组调用系统工具，不拼接 `sh -c`，并发读取 stdout / stderr，检查真实退出状态。解析环境固定 `LC_ALL=C`，外部原始诊断不翻译。
+- `storage` 管理锁、路径检查、同目录临时文件、权限与所有者保留、fsync、原子替换和文件事务日志。
+- `i18n` 加载 TOML，严格校验键集合与占位符。操作 ID、枚举值和恢复记录不受语言影响。
+- `ops` 中的 JSON、cgroup、发布元数据、配置合并、SHA-256 和提示符生成均由 Rust 实现。`ops/ip_quality.rs` 专门接入 xykt/IPQuality，参数使用固定枚举，语言随界面，默认隐私模式；入口脚本固定版本并校验摘要/语法后交还终端执行。其外部数据源、依赖询问及更新流程见 [IPQuality 接入](IPQUALITY.md)。Python 仅用于测试中的本地 TLS 服务。
+- `ops/ai.rs` 直接安装 Pi、Claude Code 和 Codex 的 Linux x86_64 / ARM64 二进制，不执行 Shell / npm / Node 安装器。固定官方元数据入口 → 稳定版 / 架构筛选 → 展示实际版本与摘要并确认 → HTTPS 下载与 SHA-256 / 大小校验 → 安全解压 → ELF / 资源布局 / 实际版本检查 → 原子切换符号链接。Pi/Codex 要求 GitHub 资产提供 SHA-256，Claude 使用官方 manifest；不允许无校验或 npm 降级。安装在普通工作线程运行，支持非交互 CLI；HOME 与当前用户路径一致，拒绝普通用户通过 sudo 安装，直接 root 登录除外。
 
-| 带宽 | RTT | 有效内存 | 计算结果 |
-| --- | --- | --- | --- |
-| 100 Mbit/s | 10 ms | 1 GiB | 1 MiB |
-| 1000 Mbit/s | 80 ms | 1 GiB | 20 MiB |
-| 1000 Mbit/s | 200 ms | 1 GiB | 32 MiB，受内存限制 |
-| 1000 Mbit/s | 80 ms | 256 MiB | 8 MiB，受内存限制 |
+默认分发一个二进制，无数据库或后台 daemon。语言文件可选外置；apt/dpkg、systemd、sysctl、OpenSSH 和 Docker 仍负责各自的原生操作。
 
-`apply_tcp_profile` 将同一个结果用于发送和接收上限，并写入以下固定参数集合：
+## 环境与依赖
 
-| 参数 | 值 |
+系统操作仅支持 Debian / Ubuntu Linux。构建要求 Rust 1.88+。内核操作额外要求 Debian 12+ / Ubuntu 24.04+、amd64 / arm64、GRUB、独立内核环境以及完整的当前内核镜像/initramfs。
+
+| 操作 | 主要系统工具 |
 | --- | --- |
-| `net.core.rmem_max`、`net.core.wmem_max` | 计算出的缓冲区上限 |
-| `net.ipv4.tcp_rmem` | `4096 131072 <上限>` |
-| `net.ipv4.tcp_wmem` | `4096 16384 <上限>` |
-| `net.ipv4.tcp_moderate_rcvbuf` | `1` |
-| `net.ipv4.tcp_mtu_probing` | `1` |
-| `net.ipv4.tcp_limit_output_bytes` | `1048576` |
-| `net.ipv4.tcp_slow_start_after_idle` | `0` |
+| 状态 | hostname、uname、lscpu、free、df、uptime、timedatectl、ip、tc、sysctl |
+| 软件管理 | apt-get、dpkg、dpkg-query |
+| 网络配置 | sysctl，必要时 modprobe |
+| 内核 | curl、dpkg-deb、lsinitramfs、update-grub、systemd-detect-virt；UEFI 需要 mokutil |
+| SSH | sshd、ssh-keygen、ss、systemctl |
+| Docker 配置 | dockerd（--validate）、systemctl |
+| SWAP | fallocate、mkswap、swapon、swapoff |
+| 交互式第三方测试 / 安装器 | curl、Bash、交互终端 |
+| AI 二进制安装 | curl、CA 证书；校验与解压由 Rust 完成 |
+| 提示符 | Starship；配置 zsh 时需要 zsh |
 
-这里设置的是缓冲区上限，不是预分配容量；并发连接仍会共同消耗内存。配置不改写 `tcp_mem`、连接追踪、ECN、端口范围或文件描述符限制。参数的内核语义可查阅 [Linux IP sysctl 文档](https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html)。
+缺少依赖会报错；仅明确选择的软件安装操作调用 apt 或安装器，不在启动时安装依赖。
 
-### 有效内存识别
+## 权限、路径和锁
 
-`network_memory_kb` 用 Python 读取 `/proc/meminfo`、`/proc/self/cgroup`、`/proc/self/mountinfo`：
+写操作执行前检查权限。提示符只作用于当前 HOME / ZDOTDIR，不自动使用 SUDO_USER。
 
-1. 以 `MemTotal` 为初始上限，识别当前进程的 cgroup v2 或 v1 memory 组。
-2. 根据挂载根与进程组路径定位实际目录，处理 mountinfo 的八进制转义，拒绝含 `..` 的组路径。
-3. 从当前组逐级检查到可见挂载根，读取 v2 的 `memory.max` 或 v1 的 `memory.limit_in_bytes`。
-4. 所有数值限制与物理内存取最小值；子组的 `max` 不会取消祖先限制。
-5. 无 memory controller，或可见层级没有数值限制时，使用物理内存；已声明的组无法定位、限制格式错误或读取异常时返回失败。
+沿用 `CQS_INSTALL_PATH`、`CQS_STATE_DIR`、`CQS_TERMINAL_CONFIG`、`CQS_BBR_CONFIG`、`CQS_TCP_CONFIG`、`CQS_KERNEL_LOCK`、`CQS_KERNEL_BACKUP`。自定义路径必须可信；修改目标要求绝对路径，拒绝符号链接、父级跳转和控制字符。
 
-该值受当前进程可见的挂载命名空间限制，不代表已排查宿主机所有资源策略。函数的可选 proc 路径用于离线测试，不是线上配置来源。
+- 网络 / SSH / Docker：`<配置文件>.cqs-lock`。
+- 内核、软件安装、系统更新与清理：默认 `/run/lock/cqs-bbrv3.lock`。
+- 提示符：`$CQS_STATE_DIR/terminal/config.lock`。
+- AI 安装：`$CQS_STATE_DIR/ai/install.lock`，不使用需要 root 的系统软件锁。
+- SWAP：`/run/lock/cqs-swap.lock`。
 
-## 第三方内核管理
+锁通过 fs2 / 系统 flock 持有，与旧脚本对应锁兼容，跨越失败恢复生命周期。锁仅协调遵守该锁的进程；不要删除锁文件来绕过锁。外部 apt 仍有自己的锁。
 
-### 安装前检查
+AI 版本文件放在当前 HOME 的 `.local/share/cqs/ai/<工具>/<版本-架构-唯一后缀>/`，三个入口默认是 `.local/bin/<工具>`，Codex 可通过 `CODEX_INSTALL_DIR` 改目录。归档仅提取普通文件和目录，限制条目数量、单文件和解压总大小，剥离特殊权限，不接受链接、设备或父级路径。Pi 保留完整资源；Codex 要求包清单与目标版本/架构一致，并检查 code-mode host、bwrap、rg 等辅助二进制。
 
-安装入口为 `bbrv3_install_kernel`，默认 `standard`，可选 `max`。菜单另提供标准版指定 `x.y.z` 安装；包来源见 [项目参考与上游](../README.md#项目参考与上游)。
+入口切换先在同目录建立临时符号链接；旧普通文件以硬链接备份，旧符号链接保留原始链接文本。rename 原子替换入口后再次验证；失败恢复原入口，恢复失败保留 `.cqs-ai-backup-*` 材料并报错。旧版本文件及成功迁移时的入口备份均保留，避免影响仍在运行的旧进程；不自动修改 PATH、清理软件或管理登录凭据。
 
-前置检查要求：root、必要命令、可识别的独立内核环境、非空 GRUB 配置、当前运行内核的镜像及 initramfs。容器、WSL 或无法确定环境时拒绝修改内核。
+## 事务与恢复
 
-安装还要求 Debian 12+ / Ubuntu 24.04+ 的数字版本号，以及 amd64 / arm64 架构；缺少可用的 `VERSION_ID` 时不会按代号猜测。UEFI 环境必须能够确认 Secure Boot 已关闭。`dpkg --audit` 有输出时停止安装；检测到 `mimic/0.7.1` 时按已知兼容性问题拦截，其余 DKMS 状态会显示，安装过程不得跳过失败的钩子。
+### 网络
 
-卸载保留环境与当前启动文件检查，但不采用安装专用的 Secure Boot、包审计和 DKMS 门槛，以便处理未完整安装的非运行内核。
+应用流程：校验白名单 → 取得锁 → 读取运行值 → 保存本次恢复记录 → 保存或验证首次基线 → sysctl 应用候选 → 逐项读回 → 原子替换持久配置。
 
-### Release 与安装包选择
+首次基线保持旧布局：`.cqs-backup/runtime.conf`、`original.conf` 或 `no-original`。新版新增 `.cqs-pending.json`，记录本次运行值、文件快照和是否新建基线。失败恢复本次运行值及文件，恢复成功才删除 pending 和本次新建基线；恢复失败保留材料。撤销恢复首次基线，撤销失败尝试回到撤销前状态。参数键集合不同拒绝覆盖基线。
 
-`bbrv3_release_manifest` 将 GitHub API 数据解析为纯数据清单，不作为 Shell 代码执行：
+TCP 上限采用两倍带宽时延积，向上取整到 MiB，受有效内存 1/32 和 64 MiB 限制。内存识别遍历 cgroup v1/v2 的可见祖先限制。多个 sysctl 不是内核级原子事务。
 
-- amd64 对应 `x86_64` tag 前缀，arm64 对应 `arm64`；Max 使用 `-max` 后缀。
-- 默认从最近 100 条 Release 中过滤匹配架构和类型的稳定版本，按数字版本元组取最高值，不按字符串或发布时间排序，也不遍历全部历史分页。
-- 指定版本直接查询对应 tag；缺失、预发布、草稿或不匹配时失败，不回退到另一个版本。
-- 必须恰好有一个匹配的 image 和一个 headers，排除错误架构、debug 与第三方 `linux-libc-dev` 包。
-- 下载 URL 必须与固定发布仓库、tag、文件名完全匹配，并带有格式有效的 SHA-256 摘要。
+### SSH / Docker
 
-下载后，校验真实文件摘要，再用 `dpkg-deb` 检查包名、架构和内核版本。镜像包还必须能导出目标内核配置，并声明 BBR 与 FQ 支持。
+候选经 `sshd -t/-T` 或 `dockerd --validate` 校验后，保存 `.cqs-pending.json` 再提交。服务更新或校验失败恢复文件及此前服务活动状态；恢复失败保留记录。
 
-摘要保证下载内容与发布元数据相符，不是独立签名认证；仍需信任发布者及其构建链。当前内核管理不在本地编译补丁，也不执行上游安装脚本。
+SSH 端口拒绝活动 ssh.socket 和原本未运行的服务，保留 Match / Include，检查展开端口、ListenAddress 和 SSH 主进程的实际监听。密钥登录导入当前 HOME 的公钥，不生成或输出私钥；确认新连接测试后设置全局公钥、密码及键盘交互认证选项。Match 块保留，管理员需核对其条件覆盖。
 
-### 安装、引导和回退
+Docker 镜像源与 IPv6 共用保留无关字段的 JSON 事务。重启成功不等于容器 IPv6 可达；生成 ULA 不提供公网路由。禁用时删除相关 IPv6 地址字段，启用时仅在没有既有子网时生成 ULA。
 
-安装与卸载从取得共享内核锁后，持续持锁到结束及失败回退完成。目标 release 与 `uname -r` 相同时拒绝覆盖，包括仅软件包 revision 发生变化的情况。
+### 提示符
 
-安装分两次交互确认：先确认下载，完成检查后输入 `INSTALL` 才开始修改软件包和引导。
+继续读取旧版 `original.json`、`options.json`，快照使用 Base64 原始字节和权限。新增、重复配置、目标 Shell 切换和还原均使用 `pending.json` 保存本次 before-image。首次基线不覆盖。
 
-1. 在 `CQS_KERNEL_BACKUP/boot.XXXXXX` 中保存 `grub.cfg`、`grubenv`、原文件不存在的标记及运行内核名称。
-2. 使用 `apt-get install -y --no-remove` 安装本次校验的 image/headers；依赖解析仍由 apt 处理，不跳过 DKMS 或内核安装钩子。
-3. 确认两包处于完整安装状态，镜像与 initramfs 非空，`lsinitramfs` 可读取，再运行 `update-grub`。
-4. Hyper-V/Azure 环境额外检查必要驱动配置；配置为模块的启动必需驱动还需出现在 initramfs 中。该检查不覆盖所有云平台与所有启动设备。
-5. 成功仅表示软件包与引导检查通过。脚本不自动重启，也不宣称新内核已运行；用户重启后需再次检查运行内核、网络和 BBR 版本。
+失败或可捕获取消时逆序恢复；失败恢复保留 pending。已有 pending、重复路径、损坏基线或 HOME/ZDOTDIR/配置路径不一致时拒绝继续。Shell 初始化只使用固定模板和正确引用的路径；语言文件、恢复 JSON 不作为代码执行。
 
-安装开始后发生错误或可捕获的中断，会尝试恢复 GRUB 快照，并保留永久备份。**GRUB 恢复不是软件包事务回滚**：可能仍存在已安装或半配置的新包，需要根据 apt/DKMS 错误处理，不能直接重启。断电或 `SIGKILL` 同样无法保证执行退出处理。
+### SWAP
 
-### 卸载与旧内核保护
+只管理 `/swapfile` 及其精确 fstab 条目。自动重建先停用并临时保留旧文件，再创建、启用新文件和提交 fstab。失败恢复旧文件、活动状态和 fstab。记录位于 `/etc/fstab.cqs-swap-pending.json`。不使用 `swapoff -a`。
 
-`bbrv3_remove_kernel` 仅接受已安装且未运行的 `x.y.z-joeyblog-bbrv3[-max]`。当前运行内核的软件包必须完整，启动文件必须存在。先模拟 apt purge；如计划将移除目标 image/headers 之外的软件包，拒绝继续。输入 `REMOVE` 后才备份 GRUB、卸载目标包并更新引导。
+### 内核
 
-卸载失败时保留引导备份并报告错误，不自动恢复可能包含已删除内核条目的旧 GRUB 配置，也不假装恢复已卸载的软件包。
+`kernel.install` 提供标准版 / Max 安装。版本留空时，从最近 100 个 Release 中选取匹配架构和类型的最高数字版本；指定版本使用对应 tag，不回退到其他版本。参数校验后取得共享内核锁，检查系统和引导环境，下载并核对 SHA-256、包名、架构、内核配置及驱动。
 
-存在 `CQS_KERNEL_BACKUP` 目录，或当前运行第三方 BBRv3 内核时，`system_clean` 会跳过旧内核删除；Debian/Ubuntu 的 apt 清理同时跳过 autoremove 和孤立包卸载。这个保护不阻止管理员或其他工具删除旧内核。
+确认后保存 GRUB 备份并调用 apt-get 安装，随后检查包状态、内核镜像、initramfs 和引导生成结果。失败返回原始错误并恢复 GRUB，保留相关备份。程序不自动重启；重启进入新内核后，`bbr.enable` 配置该内核提供的 BBR 实现和默认队列，`tcp.tune` 独立管理 TCP 参数。
 
-## SSH 与 Docker 配置
+卸载先模拟计划，只允许目标非运行第三方内核的 image/headers；失败保留备份，不恢复可能引用已删除内核的旧引导配置。不自动重启。运行故障内核的主机需要先通过控制台切回可启动内核，不能直接卸载正在运行的内核。
 
-### SSH 端口
+## 取消、日志和边界
 
-`system_ssh` 默认修改 `/etc/ssh/sshd_config`，接受 1–65535 的整数端口并按十进制规范化。它要求 `ssh.service` 已运行，拒绝 `ssh.socket` 接管监听的环境，也不会为了修改端口主动启动原本关闭的 SSH 服务。
+普通子进程使用独立进程组，取消发送 SIGINT 并等待退出，再执行恢复，不升级到 SIGKILL。忽略 SIGINT 的进程可能需管理员处理。CLI 捕获 SIGINT / SIGTERM，恢复路径忽略取消标记。
 
-取得配置锁后，保留原文件和权限，构建仅更改全局 `Port` 的候选文件，保留 `Match` 与 `Include`。候选必须通过：
+TUI 为最近执行任务保留最多 2000 行日志，空闲未执行时不预留日志面板；G 收放日志，F2 查看完整日志。取消、失败和成功分别显示，导航及语言切换不会改写上次任务结果。常驻指标更新独立于任务及其取消标记。普通页面不能勾选或通过 F5 执行优化清单；优化页只使用固定 OPTIMIZATION 顺序，编辑参数仅保存清单。Windows 的系统概览使用同一只读常驻数据，Linux 操作在交互前置灰拦截。
 
-1. `sshd -t` 语法检查。
-2. `sshd -T` 展开检查，实际端口集合只能包含目标端口。
-3. `ListenAddress` 不得固定为其他端口。
+日志过滤外部控制字符。业务错误使用固定错误键和译文，底层诊断保持原文。断电、SIGKILL 和内核崩溃无法执行恢复代码；遇到 pending 时必须先核对实际状态、保留材料并完成恢复或确认提交，不能直接删除记录强行重试。
 
-替换后 reload 服务，确认服务仍 active，并最多轮询约 5 秒：由 `systemctl` 获取的 SSH 主进程 PID 必须实际监听目标端口，不能把其他进程的监听当成成功。失败时恢复原文件并尝试 `reload-or-restart`；恢复失败则保留工作目录。
+批量操作不是整体事务。先验证参数及操作 ID，逐项运行时仍保留确认。BBR/TCP 失败记录并继续，其他失败和取消停止剩余项，整轮有失败返回失败。`--yes` 自动接受操作提示；平台、权限和参数检查仍然执行。
 
-该检查不代表外部网络可达，不自动放行防火墙，也不代表客户端已能通过新端口登录。密钥登录功能 `system_keygen` 是另一条传统路径，不继承此事务保证。
-
-### Docker IPv6
-
-`docker_set_ipv6` 使用 Python 合并 `/etc/docker/daemon.json`，保留数据目录、日志和镜像源等无关字段：
-
-- 启用时设 `ipv6=true`；已有 `fixed-cidr-v6` 或 `bip6` 时保留，否则生成 ULA 子网。
-- 关闭时设 `ipv6=false`，删除 `fixed-cidr-v6`、`bip6`、`default-gateway-v6`。
-- 候选必须通过 `dockerd --validate`，再替换文件、重启 Docker 并检查 active 状态。
-
-失败时恢复原文件；原来没有配置文件则删除本次新建文件。服务原本运行则尝试重启恢复，原本关闭则停止服务。恢复失败会保留备份路径。成功操作会重启 Docker，即使它原本未运行。
-
-生成 ULA 子网不等于配置了公网 IPv6 路由，服务 active 也不等于容器端到端网络已经验证。镜像源修改 `docker_mirrors` 目前不复用此 JSON 事务流程。
-
-## 终端美化配置与还原
-
-入口为“常用工具 → 11. 终端美化（配置 / 还原）”，包含安装组件、配置并启用、查看配置、还原四个操作。
-
-### 安装和配置
-
-`terminal_install` 安装 zsh、curl 和 Python 3，仅在 Starship 不存在时调用内嵌安装器，并检查可执行文件及版本命令。安装器运行在独立 Bash 中，避免菜单的错误处理使 `set -e` 失效；安装失败返回错误，不写启动文件。“一键安装所有”同样只安装组件。
-
-`terminal_configure` 接收以下枚举项。回车保留持久化设置，首次采用默认值，输入 `q` 或 EOF 取消；无效值不会写配置。
-
-| 配置项 | 取值 | 首次默认值 |
-| --- | --- | --- |
-| Shell | `bash`、`zsh`、`both` | `bash` |
-| 样式 | `compact` 单行、`full` 双行并显示较慢命令耗时 | `full` |
-| 主色 | `cyan`、`green`、`magenta` | `cyan` |
-| 时间 | `on`、`off` | `off` |
-| Git 分支与状态 | `on`、`off` | `on` |
-
-提示符包含用户、主机和工作目录；root 用户与失败命令使用红色，图标采用普通字符，无需 Nerd Font。配置通过 `STARSHIP_CONFIG` 指向独立文件，不覆盖已有的 `~/.config/starship.toml`（除非显式将 `CQS_TERMINAL_CONFIG` 指向该文件）。
-
-只配置当前 `HOME` 下的 `.bashrc`、`${ZDOTDIR:-$HOME}/.zshrc`，不读取 `SUDO_USER` 代操作其他用户，也不执行 `chsh`。选择 zsh 仅配置其提示符，需要启动 zsh 才能看到效果。已有非导出的 `ZDOTDIR` 不会传入脚本，使用自定义目录时须显式导出。
-
-初始化采用 `# >>> cqs terminal >>>` / `# <<< cqs terminal <<<` 区块。重复配置替换区块，切换目标 Shell 时移除原目标的区块，保留其余内容；旧版逐字追加的 `eval "$(starship init bash)"` / `eval "$(starship init zsh)"` 行会去重并纳入管理。其他手工编写的初始化语句不自动识别。区块标记不完整时拒绝写入。
-
-### 备份、还原和失败边界
-
-`$CQS_STATE_DIR/terminal/` 中的文件：
-
-| 文件 | 用途 |
-| --- | --- |
-| `options.json` | 配置项；按固定枚举解析，不执行其中内容 |
-| `original.json` | 首次启用前两个启动文件及提示符文件的路径、原始字节、权限和不存在标记 |
-| `pending.json` | 本次修改前的状态，正常完成或成功回退后删除 |
-| `config.lock` | 应用与还原共享的非阻塞锁 |
-
-首次基线不会被后续配置覆盖。输入 `RESTORE` 后按首次基线逐字节还原，原来不存在的文件会删除；成功后清除基线与选项，下次启用重新建立基线。还原会覆盖启用后对受管理文件的手动编辑，因此菜单要求确认。损坏的选项文件不妨碍使用有效基线还原。
-
-配置和恢复材料使用私有权限，新建文件为 `0600`；已有启动文件保留权限。拒绝符号链接、非普通文件、重复目标路径及与基线不一致的 `HOME` / `ZDOTDIR` / 配置路径。候选在同目录写临时文件后原子替换，多文件写入失败或可捕获中断会尝试回到本次操作之前的状态。还原失败同样回退，并保留首次基线供重试。
-
-多个文件不构成操作系统级原子事务；断电、`SIGKILL` 或回退失败会保留 `pending.json`，后续操作拒绝覆盖它。需管理员核对其中的绝对路径和 Base64 文件内容、恢复或保存所需材料后再处理该文件，不应直接删除以绕过检查。不要将恢复 JSON 当成 Shell 脚本执行。
-
-启用或还原后关闭当前终端并重新登录；已初始化的当前进程不会被强制更换。还原不卸载 zsh / Starship，不更改登录 Shell，不撤销旧版本在基线建立前执行过的 `chsh`。
-
-## 一键优化
-
-`onekey_optimization` 使用固定的标签/命令表显示 11 个可选项目，常用工具和 Docker 安装分别列出。每次进入默认不选；输入一个或多个编号切换勾选，支持空格、中英文逗号分隔，同一行重复编号只切换一次。整行编号全部有效才更新选择，不解释用户输入为命令。`a` 全选、`n` 清空、`s` 预览执行清单并确认，`0` 或 EOF 返回。
-
-空选择不能执行；确认默认取消，并保留选择供调整。只有明确确认后才按菜单顺序调用已选函数，TCP 使用 `--auto`，BBR 使用 `fq`，SSH 端口选项固定为 `55520`。进度分母为已选数量，结果根据函数返回值统计；TCP/BBR 返回失败时记录并继续，其他选中项返回失败时停止后续项，整轮存在失败则返回非零状态。SSH 端口修改失败仍会阻止后续关闭密码登录。
-
-清理范围、SWAP 重建和关闭密码登录的影响在选项中直接标明；涉及 SSH 时在确认前提示保留当前会话。结尾不再固定宣称 SSH 端口已修改，也不额外读取私钥。此流程复用各独立操作，不构成整组事务，原有子函数的限制见下文。
-
-## 远程脚本执行
-
-`run_https_script` 依次检查 URL、完整下载、非空内容和 Bash 语法，之后才执行文件。curl 限制请求及重定向协议为 HTTPS，设置 15 秒连接超时与 300 秒总超时；远程脚本的退出状态向上传递。
-
-当前带宽测速安装器、IP 检测、路由测试、性能测试及 Docker 安装入口使用该辅助函数。它不固定远程内容摘要，不验证独立签名，也不隔离被执行脚本的权限。语法正确不等于行为可信；在 root 主程序中执行的脚本仍具有 root 权限。
-
-此约束不代表所有 HTTP 请求或内嵌安装器都采用相同策略；例如系统信息查询及 Starship 内嵌安装逻辑有各自的实现。
-
-## 故障定位与能力边界
-
-### 常见定位方向
-
-| 现象 | 检查方向 |
-| --- | --- |
-| BBR 版本未知 | 检查运行内核是否暴露 sysfs 版本，不用磁盘模块版本替代运行证据 |
-| 默认队列已更改，但实际队列未变 | 查看 `tc qdisc show`；默认参数不会自动重建现有队列树 |
-| 网络参数应用或读回失败 | 检查失败键、内核支持、容器权限和其他配置写入；使用错误中保留的快照定位 |
-| 配置正在被其他进程修改 | 等待持锁操作结束，不删除锁文件绕过互斥 |
-| 内核安装中断或 DKMS 失败 | 查看 apt/DKMS 原始输出、`dpkg --audit` 和引导备份；修复前不要重启 |
-| SSH 新端口未验证成功 | 检查 socket 激活、Include、ListenAddress 和实际监听进程；不要继续关闭密码登录 |
-| Docker IPv6 修改失败 | 检查 JSON、`dockerd --validate` 和服务状态；注意是否报告恢复失败 |
-
-可用于收集状态的只读命令：
+## 测试与验收
 
 ```bash
-uname -r
-sysctl net.ipv4.tcp_congestion_control net.core.default_qdisc
-tc qdisc show
-dpkg --audit
+cargo fmt --all --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 ```
 
-### 尚未统一的行为
+覆盖语言键/占位符、语言优先级、CLI 无启动副作用、参数拒绝、中文双宽与多种终端大小、真实 PTY 启动/语言切换/退出、事件通道、真实锁、网络/服务部分失败与恢复、cgroup、Release/卸载计划、真实 dpkg-deb 测试包、内核失败后的引导恢复、提示符字节/权限/旧基线兼容，以及真实 curl + 本地 TLS 下载边界。
 
-当前实现不能被概括为“所有系统操作都已事务化”：
+常用工具与 AI 接入测试覆盖双语 CLI 元数据、TUI 单项入口、软件锁和 apt 参数，以及二进制元数据、架构、摘要、包布局、越界/链接归档拒绝、非交互安装、升级保留与失败恢复。AI 测试的网络边界由本地路由夹具提供，ELF 夹具使用系统 `cc` 编译；解压、ELF 检查、版本命令与入口切换使用真实实现。测试 PATH 中没有 Node、npm 或 Shell，不代表上游在线下载或登录已经验收。
 
-- `system_clean` 会清理日志、缓存和 Docker 数据，不能通过网络或 GRUB 快照恢复这些删除。
-- SWAP、fail2ban、密钥登录、Docker 镜像源和 Docker 卸载等传统路径尚未统一纳入上述配置事务。
-- `system_keygen` 会输出私钥内容（包括一键优化中显式勾选密钥登录时）；运行记录不能作为普通日志公开分享，后续维护应优先收敛这一行为。
-- `onekey_optimization` 根据所选函数的返回值判断结果；清理、SWAP、时区、fail2ban、密钥登录等部分传统函数仍未完整传递内部命令的失败状态，因此结尾提示不能证明全部子操作成功。
-- 一键优化使用均衡 TCP 参数和现有内核的 BBR，不自动安装第三方内核，也不提供整组操作的统一撤销。
+可选的官方包验证使用事先下载的官方 Release JSON 和归档，在临时 HOME 中运行安装、校验及真实 `--version`，不登录。设置 `CQS_AI_SMOKE_DIR` 指向包含 `<工具>-release.json` 和 `<工具>.tar.gz` 的目录，设置 `CQS_AI_SMOKE_TOOL=pi` 或 `codex`，运行 `cargo test --locked --lib official_binary_package_runs_without_node -- --ignored`。此测试默认显式跳过，不能把跳过算作通过。
 
-这些是源码基线的实际边界，不是已完成的修复承诺。部署验收仍需验证服务、网络和启动结果。
+2026-10-27 二进制安装验证：x86_64 Debian WSL 的 84 项默认单元测试、7 项 CLI/PTY 测试与 1 项原生 sysctl 测试通过。另以官方 Pi 1.4.0、Codex 0.164.0 发布包验证摘要、资源解压、安装和真实版本输出，测试 PATH 中没有 Node/npm/Shell。Claude 官方下载站在当前网络下无法连接，仅完成 manifest 解析、ELF 夹具安装与失败恢复测试，未完成其真实二进制下载或登录验证；ARM64 未做实机运行验证。
 
-## 测试与验证
-
-### 运行方式
-
-在 Linux / WSL 的项目根目录运行，不需要用 root 执行测试：
+真实 SSH / Docker 解析测试默认显式忽略，需安装或解包原生工具后运行：
 
 ```bash
-bash -n cqs.sh
-python3 -B -m unittest discover -s tests -v
+CQS_TEST_SSHD=/usr/sbin/sshd \
+CQS_TEST_DOCKERD=/usr/bin/dockerd \
+cargo test --locked --test native -- --ignored
 ```
 
-推荐使用 Debian 12+ / Ubuntu 24.04+ 的开发环境，以满足涉及发行版判断的测试分支。测试依赖 Python 3、Bash、常用文件工具、`flock` 和 `dpkg-deb`；HTTPS 测试另需 `curl`、`openssl`。Windows 原生 Python 下会跳过 Linux 专用测试，不应把跳过结果当成通过。
+测试只解析配置，不启动/重载真实服务。命令边界替身只证明编排与文件恢复；测试包只构建和解析，不安装。
 
-只运行内核管理测试：
+生产验收仍需可恢复的 Debian / Ubuntu VM：真实软件更新、SSH 重载及外部登录、SWAP、Docker 服务/连通性、内核安装与重启、amd64 / arm64 启动和实际线路测试。WSL 自动化测试不能替代这些验证。
 
-```bash
-python3 -B -m unittest discover -s tests -p 'test_bbr_kernel.py' -v
-```
+2026-10-26 初次迁移验证：x86_64 WSL Debian、Rust 1.99.0；47 项单元测试、5 项 CLI/PTY 测试、1 项原生 sysctl 解析测试及另行运行的 2 项 sshd/dockerd 解析测试通过，共 55 项。fmt、Clippy（-D warnings）、release 构建通过。sshd/dockerd 从 Debian 软件包解包到临时目录，只调用配置解析器，没有安装或启动服务。Rust 1.88 工具链下载未完成，最低版本检查和 amd64/arm64 musl 工作流尚未实际运行。本机只读 BBR 检查能读取内核参数，但因缺少 tc 返回依赖错误，未修改系统。
 
-### 覆盖范围
+新增操作需同步固定 ID、权限/参数、两份完整 TOML、成功/失败语义及测试。翻译只存文案，不存命令；业务分支不得依赖某种语言的文字。状态格式变更必须说明兼容与恢复策略。
 
-[shell_support.py](../tests/shell_support.py) 通过 `source` 加载实际脚本；需要函数文本时使用 Bash 的 `declare -f`，不依赖正则截取函数。
-
-| 测试文件 | 主要覆盖 |
-| --- | --- |
-| [test_app_structure.py](../tests/test_app_structure.py) | source 无启动副作用、CLI、协议状态、快捷命令、菜单分发与返回 |
-| [test_onekey_optimization.py](../tests/test_onekey_optimization.py) | 默认不选、独立选择、多选切换、全选/清空、确认与取消、非法输入、进度和失败处理；仅验证编排，不执行系统优化 |
-| [test_bbr.py](../tests/test_bbr.py) | BBR 检测、参数应用/恢复、真实锁竞争、BDP 计算、原生 sysctl 解析 |
-| [test_bbr_kernel.py](../tests/test_bbr_kernel.py) | Release 筛选、包校验、拒绝覆盖运行内核、共享锁、安装失败与卸载边界 |
-| [test_config_safety.py](../tests/test_config_safety.py) | SSH/Docker 校验、服务失败、配置恢复和符号链接目标保护 |
-| [test_https_downloads.py](../tests/test_https_downloads.py) | 本地 TLS 服务与真实 curl，验证降级跳转、残缺下载、语法错误和退出状态 |
-| [test_memory_limits.py](../tests/test_memory_limits.py) | 合成 proc/cgroup 层级，验证子组、祖先、挂载根与非法路径 |
-| [test_native_config.py](../tests/test_native_config.py) | 使用真实 sshd/dockerd 校验候选配置，不启动真实服务 |
-| [test_terminal.py](../tests/test_terminal.py) | 持久配置、初始化去重、首次基线、还原、写入失败回退、锁与路径保护；可选真实 Starship 渲染 |
-
-测试用临时目录和明确的系统命令替身隔离写操作。内核测试会用真实 `dpkg-deb` 构建和检查测试包，但不会安装或启动这些包；原生 sysctl 检查使用 `--dry-run`。
-
-可选的原生验证工具从 PATH 查找，也可通过 `CQS_TEST_SSHD`、`CQS_TEST_DOCKERD` 指定可执行文件。SSH 测试另需 `ssh-keygen`；缺少工具或 `sysctl --dry-run` 时会明确跳过相应测试。原生服务测试故意让 reload/restart 失败，以检查解析与恢复流程，不证明服务切换已通过。
-
-终端 TOML 解析测试使用 Python 3.11+ 的 `tomllib`，更早版本明确跳过该项。真实提示符验证从 PATH 查找 Starship，或通过 `CQS_TEST_STARSHIP` 指定测试二进制；验证全部样式、配色和开关组合。安装与文件故障测试中的替身仅验证控制流程，不证明 apt 或远程安装已成功。
-
-### 验证记录与实机验收
-
-当前源码验证环境为 x86_64 WSL Debian，日期 2026-10-26：Bash 语法检查通过；全量测试结果以实际输出为准。终端专项额外使用经官方 SHA-256 校验的 Starship 1.27.0 二进制，验证真实提示符渲染，未实际执行 apt 安装或更改登录 Shell。缺少原生 sshd/dockerd 的三项服务测试仍会跳过。
-
-以下工作不能由该记录替代：真实第三方内核安装与重启、不同硬件/云平台启动、arm64 实机运行、SSH 外部连接、容器 IPv6 连通性以及实际线路吞吐和延迟测试。WSL 可执行自动化检查，但本项目主动拒绝在 WSL 内安装、卸载第三方内核。
-
-## 开发与维护约定
-
-1. 保持 `cqs.sh` 单文件分发；只加载定义的 source 行为是测试契约，不能在顶层增加安装、联网或配置写入。
-2. 新子菜单使用 `menu_loop` 和固定函数调用；复杂操作放到函数中，避免递归调用主菜单或解释用户输入为 Shell 命令。
-3. 修改状态的入口先校验权限和依赖。涉及网络配置时复用参数白名单、文件锁、运行值快照及读回验证，不通过 `|| true` 把失败包装成成功。
-4. 文件提交与运行状态变化分别考虑。清楚定义哪些内容可恢复、失败后保留哪些材料，以及哪些外部操作不受本工具锁控制。
-5. 自有路径使用 `cqs` 命名并集中定义；调整参数集合或状态布局时，同步说明升级流程，避免并发锁和恢复基线失配。
-6. 测试应覆盖拒绝路径与部分失败，命令替身只证明控制流程；涉及平台解析时尽量补充原生工具验证，明确标注跳过与未执行的实机检查。
-7. 脚本保持 LF 换行，仓库的 [.gitattributes](../.gitattributes) 已为 `*.sh` 设置规则。修改实现时同步更新本文件，README 继续聚焦快速开始与核心功能。
-
-项目来源与署名统一列在 [README 的项目参考与上游](../README.md#项目参考与上游)；许可文本见 [LICENSE](../LICENSE)。
+TUI 交互改造验证：Linux 67 项单元测试、6 项 CLI/PTY 测试、1 项原生 sysctl 解析测试通过，共 74 项；2 项原生 SSH/Docker 扩展测试仍显式跳过。Windows 的 TUI/编辑/鼠标/布局专项和 5 项 CLI 测试通过。两平台 Clippy 严格检查及 release 构建通过。另以实际 Windows 和 WSL 本机采样检查了 120×36、80×24 渲染；公网查询测试使用本地进程边界夹具，没有自动联系公网服务，没有运行系统写操作。
