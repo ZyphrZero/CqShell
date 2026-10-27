@@ -40,6 +40,11 @@ impl From<serde_json::Error> for Error {
         Self::new("error.data", value)
     }
 }
+impl From<serde_yaml::Error> for Error {
+    fn from(value: serde_yaml::Error) -> Self {
+        Self::new("error.data", value)
+    }
+}
 impl From<toml::de::Error> for Error {
     fn from(value: toml::de::Error) -> Self {
         Self::new("error.data", value)

@@ -125,7 +125,22 @@ sudo cqs run kernel.install --set profile=standard
 cqs run kernel.list
 cqs run terminal.apply --set shell=bash --set color=cyan
 sudo cqs batch tcp.tune bbr.enable --set tcp.tune.rtt=80
+cqs run clash.status
+cqs run clash.start
+cqs run clash.sub.add --set name=home --set url=https://example.invalid/sub --set use=on
+cqs run clash.sub.list
+cqs run clash.sub.update --set name=home
+cqs run clash.sub.use --set name=home
+cqs run clash.sub.remove --set name=home
+eval "$(cqs proxy-env on --shell bash)"
+eval "$(cqs proxy-env off --shell bash)"
 ```
+
+### Mihomo 核心
+
+Rust 版在 **Mihomo 代理** 分类集成 Mihomo 官方二进制安装/更新、配置校验、启动/停止/状态，以及订阅添加、选择、更新和删除。默认数据目录为 `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`，可通过 `CQS_CLASH_HOME`、`CQS_CLASH_DATA_DIR`、`CQS_CLASH_BINARY` 等 `CQS_CLASH_*` 环境变量覆盖。运行 YAML、PID/进程启动时间记录和事务恢复文件保存在该目录。
+
+`cqs proxy-env` 输出供当前父 Shell 执行的环境变量命令。Bash/Zsh 可用 `eval "$(cqs proxy-env on)"`，Fish 可用 `source (cqs proxy-env on --shell fish | psub)`。`on` 会在 Mihomo 未运行时先启动；`off` 仅清理当前 Shell 代理变量，不停止 Mihomo。订阅 URL 必须是无凭据 HTTPS；下载内容需通过 YAML 结构检查以及已安装 Mihomo 的 `-t` 校验。订阅多文件提交使用恢复记录，失败时恢复 before-image。
 
 启用已有内核的 BBR / BBRv3：进入 **网络优化 → 启用当前内核的 BBR**，选择 `fq` 等队列并执行；需要调整 TCP 缓冲区时使用同页的 TCP 调优。安装 BBRv3：进入 **内核管理 → 安装 BBRv3 内核**，可选 `standard` / `max`，版本留空使用最新匹配版本，也可填写 `x.y.z`；重启进入新内核后再查看 BBR 状态及配置队列。
 
@@ -214,6 +229,7 @@ cqs --locale-dir ./locales languages
 | 服务器测试 | Speedtest、IP 质量、NextTrace、YABS、连通性、磁盘 I/O |
 | 常用工具 | 十种工具独立安装、全部安装、Bash / zsh 提示符配置与首次基线还原 |
 | Agent 工具 | Pi（pi.dev）、Claude Code、Codex CLI 安装 / 更新与版本检查 |
+| Mihomo 代理 | 官方 Mihomo 二进制、运行配置、启动/停止/状态、订阅管理和 Shell 代理环境输出 |
 | Docker | 安装、状态、镜像源、IPv6、清理和卸载 |
 
 内核安装支持 Debian 12+ / Ubuntu 24.04+ 的 amd64 / arm64 主机，需要独立内核环境和 GRUB。安装后可确认立即重启或稍后手动重启进入新内核；状态页读取实际运行的 BBR 版本。WSL / 容器不支持更换宿主内核，卸载入口仅处理未运行的指定内核。

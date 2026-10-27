@@ -86,7 +86,22 @@ sudo cqs run tcp.tune --set bandwidth=1000 --set rtt=80
 sudo cqs run kernel.install --set profile=standard
 cqs run terminal.apply --set shell=bash --set style=full
 sudo cqs batch tcp.tune bbr.enable --set tcp.tune.rtt=80
+cqs run clash.status
+cqs run clash.start
+cqs run clash.sub.add --set name=home --set url=https://example.invalid/sub --set use=on
+cqs run clash.sub.list
+cqs run clash.sub.update --set name=home
+cqs run clash.sub.use --set name=home
+cqs run clash.sub.remove --set name=home
+eval "$(cqs proxy-env on --shell bash)"
+eval "$(cqs proxy-env off --shell bash)"
 ```
+
+### Mihomo core
+
+The Rust application adds official Mihomo binary installation/update, configuration validation, start/stop/status, and subscription add/select/update/remove in the **Mihomo proxy** category. The default data directory is `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`; `CQS_CLASH_HOME`, `CQS_CLASH_DATA_DIR`, `CQS_CLASH_BINARY` and the other `CQS_CLASH_*` variables override paths. Runtime YAML, PID/process-start records and transaction recovery files live there.
+
+`cqs proxy-env` prints commands for the current parent shell. Bash/Zsh can use `eval "$(cqs proxy-env on)"`; Fish can use `source (cqs proxy-env on --shell fish | psub)`. `on` starts Mihomo when needed; `off` only clears proxy variables from the current shell and does not stop Mihomo. Subscription URLs must be HTTPS without credentials. Downloads pass YAML structure checks and, when Mihomo is installed, its `-t` validation. Multi-file subscription commits keep recovery before-images and roll back on failure.
 
 Action IDs are language-independent. In `list --json`, `available` indicates that the action is implemented; execution still validates platform, permissions and parameters. `--yes` accepts operation confirmations automatically. `sudo cqs --uninstall` removes the installed command while preserving software and recovery files.
 

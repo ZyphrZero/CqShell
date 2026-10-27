@@ -41,6 +41,18 @@ pub struct Paths {
     pub install: PathBuf,
     pub ssh: PathBuf,
     pub docker: PathBuf,
+    pub clash_home: PathBuf,
+    pub clash_data: PathBuf,
+    pub clash_resources: PathBuf,
+    pub clash_binary: PathBuf,
+    pub clash_config: PathBuf,
+    pub clash_mixin: PathBuf,
+    pub clash_runtime: PathBuf,
+    pub clash_profiles: PathBuf,
+    pub clash_pid: PathBuf,
+    pub clash_pid_start: PathBuf,
+    pub clash_log: PathBuf,
+    pub clash_lock: PathBuf,
 }
 
 fn env_path(name: &str, default: PathBuf) -> PathBuf {
@@ -57,6 +69,13 @@ impl Paths {
             .map(PathBuf::from)
             .ok_or_else(|| Error::new("error.config", "HOME"))?;
         let config = env_path("XDG_CONFIG_HOME", home.join(".config")).join("cqs");
+        let clash_home = env_path(
+            "CQS_CLASH_HOME",
+            env_path("XDG_DATA_HOME", home.join(".local/share")).join("cqs/clash"),
+        );
+        let clash_data = env_path("CQS_CLASH_DATA_DIR", clash_home.join("data"));
+        let clash_resources = env_path("CQS_CLASH_RESOURCES_DIR", clash_home.join("resources"));
+        let clash_binary = env_path("CQS_CLASH_BINARY", clash_home.join("bin").join("mihomo"));
         Ok(Self {
             state: env_path(
                 "CQS_STATE_DIR",
@@ -74,6 +93,18 @@ impl Paths {
             install: env_path("CQS_INSTALL_PATH", "/usr/local/bin/cqs".into()),
             ssh: "/etc/ssh/sshd_config".into(),
             docker: "/etc/docker/daemon.json".into(),
+            clash_config: env_path("CQS_CLASH_CONFIG", clash_data.join("config.yaml")),
+            clash_mixin: env_path("CQS_CLASH_MIXIN", clash_data.join("mixin.yaml")),
+            clash_runtime: env_path("CQS_CLASH_RUNTIME", clash_data.join("runtime.yaml")),
+            clash_profiles: env_path("CQS_CLASH_PROFILES", clash_data.join("profiles.yaml")),
+            clash_pid: env_path("CQS_CLASH_PID", clash_data.join("mihomo.pid")),
+            clash_pid_start: env_path("CQS_CLASH_PID_START", clash_data.join("mihomo.start")),
+            clash_log: env_path("CQS_CLASH_LOG", clash_data.join("mihomo.log")),
+            clash_lock: env_path("CQS_CLASH_LOCK", clash_data.join("clash.lock")),
+            clash_home,
+            clash_data,
+            clash_resources,
+            clash_binary,
             home,
         })
     }

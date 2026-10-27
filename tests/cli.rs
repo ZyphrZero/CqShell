@@ -22,6 +22,8 @@ fn metadata_commands_have_no_startup_side_effects() {
         &["--version"],
         &["--lang", "zh-CN", "languages"],
         &["list", "--json"],
+        &["proxy-env", "off"],
+        &["proxy-env", "off", "--shell", "fish"],
     ] {
         let output = cli(temp.path()).args(args).output().unwrap();
         assert!(
@@ -31,6 +33,21 @@ fn metadata_commands_have_no_startup_side_effects() {
         );
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
     }
+}
+
+#[test]
+fn proxy_environment_command_is_shell_specific_and_has_no_filesystem_side_effects() {
+    let temp = tempfile::tempdir().unwrap();
+    let output = cli(temp.path())
+        .args(["proxy-env", "off", "--shell", "fish"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "set -e http_proxy https_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY\n"
+    );
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
 }
 #[test]
 fn noninteractive_start_and_unknown_actions_fail_without_writes() {

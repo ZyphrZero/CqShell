@@ -30,6 +30,18 @@ pub(crate) fn context(root: &Path) -> Context {
         install: root.join("cqs"),
         ssh: root.join("sshd_config"),
         docker: root.join("daemon.json"),
+        clash_home: root.join("clash"),
+        clash_data: root.join("clash/data"),
+        clash_resources: root.join("clash/resources"),
+        clash_binary: root.join("clash/bin/mihomo"),
+        clash_config: root.join("clash/data/config.yaml"),
+        clash_mixin: root.join("clash/data/mixin.yaml"),
+        clash_runtime: root.join("clash/data/runtime.yaml"),
+        clash_profiles: root.join("clash/data/profiles.yaml"),
+        clash_pid: root.join("clash/data/mihomo.pid"),
+        clash_pid_start: root.join("clash/data/mihomo.start"),
+        clash_log: root.join("clash/data/mihomo.log"),
+        clash_lock: root.join("clash/data/clash.lock"),
     };
     Context::new(paths, I18n::load(Some("en-US"), None).unwrap(), true)
 }
@@ -148,6 +160,7 @@ fn every_literal_translation_key_exists() {
         include_str!("tui/view.rs"),
         include_str!("dashboard.rs"),
         include_str!("ops/ai.rs"),
+        include_str!("ops/clash.rs"),
         include_str!("ops/docker.rs"),
         include_str!("ops/ip_quality.rs"),
         include_str!("ops/kernel.rs"),

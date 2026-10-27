@@ -21,6 +21,10 @@ main → cli → actions → ops/{system,network,kernel,ssh,docker,terminal,tool
 
 默认分发一个二进制，无数据库或后台 daemon。语言文件可选外置；apt/dpkg、systemd、sysctl、OpenSSH 和 Docker 仍负责各自的原生操作。
 
+`ops/clash.rs` 用 Rust 实现 `E:\clashctl` 的首期核心流程：GitHub Release 安装 Mihomo 时验证 HTTPS 资产 URL、SHA-256、大小、gzip 解压上限、ELF 架构和 `-v` 结果，再原子替换当前用户的二进制；启动流程结构化解析主配置和 Mixin，支持 rules/proxies/proxy-groups 的 prepend/append/override/inject，先用临时 YAML 运行 Mihomo `-t`，再原子发布 runtime 配置。PID 记录包括 `/proc/<pid>/stat` 启动时间；停止前还会精确匹配 `/proc/<pid>/cmdline` 的二进制、resources 和 runtime 参数。订阅元数据沿用 `use` / `profiles` 并保留未知字段；新增、更新、选择和删除使用 pending before-image 事务。`proxy-env` 只输出给父 Shell 执行的命令。
+
+默认数据目录为 `$XDG_DATA_HOME/cqs/clash`，未设置 `XDG_DATA_HOME` 时为 `$HOME/.local/share/cqs/clash`；数据路径可通过对应 `CQS_CLASH_*` 变量覆盖。下载只接受无凭据 HTTPS，订阅须含 `proxies` 或 `proxy-providers`。
+
 ## 环境与依赖
 
 系统操作仅支持 Debian / Ubuntu Linux。构建要求 Rust 1.88+。内核操作额外要求 Debian 12+ / Ubuntu 24.04+、amd64 / arm64、GRUB、独立内核环境以及完整的当前内核镜像/initramfs。

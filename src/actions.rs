@@ -30,6 +30,15 @@ pub enum Kind {
     BbrRestore,
     TcpTune,
     TcpRestore,
+    ClashInstall,
+    ClashStatus,
+    ClashStart,
+    ClashStop,
+    ClashSubscriptions,
+    ClashSubscriptionAdd,
+    ClashSubscriptionUse,
+    ClashSubscriptionUpdate,
+    ClashSubscriptionRemove,
     KernelList,
     KernelInstall,
     KernelBoot,
@@ -203,6 +212,7 @@ impl Spec {
 
 pub const GROUPS: &[&str] = &[
     "system", "network", "kernel", "ssh", "docker", "tools", "ai", "terminal", "tests", "app",
+    "clash",
 ];
 pub const OPTIMIZATION: &[&str] = &[
     "system.update",
@@ -424,6 +434,83 @@ pub fn specs() -> Vec<Spec> {
         true,
         false,
         vec![],
+    );
+    add(
+        "clash.install",
+        "clash",
+        ClashInstall,
+        false,
+        true,
+        false,
+        vec![field("version", "", &[], false)],
+    );
+    add(
+        "clash.status",
+        "clash",
+        ClashStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.start",
+        "clash",
+        ClashStart,
+        false,
+        true,
+        false,
+        vec![],
+    );
+    add("clash.stop", "clash", ClashStop, false, true, false, vec![]);
+    add(
+        "clash.sub.list",
+        "clash",
+        ClashSubscriptions,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.sub.add",
+        "clash",
+        ClashSubscriptionAdd,
+        false,
+        true,
+        false,
+        vec![
+            field("name", "", &[], true),
+            field("url", "", &[], true),
+            field("use", "off", &["on", "off"], true),
+        ],
+    );
+    add(
+        "clash.sub.use",
+        "clash",
+        ClashSubscriptionUse,
+        false,
+        true,
+        false,
+        vec![field("name", "", &[], true)],
+    );
+    add(
+        "clash.sub.update",
+        "clash",
+        ClashSubscriptionUpdate,
+        false,
+        true,
+        false,
+        vec![field("name", "", &[], true)],
+    );
+    add(
+        "clash.sub.remove",
+        "clash",
+        ClashSubscriptionRemove,
+        false,
+        true,
+        false,
+        vec![field("name", "", &[], true)],
     );
     add(
         "kernel.list",
@@ -665,6 +752,8 @@ pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> 
                 | Kind::KernelBoot
                 | Kind::AiInstall(_)
                 | Kind::MirrorApply
+                | Kind::ClashInstall
+                | Kind::ClashStart
         )
     {
         let detail = format!(
@@ -707,6 +796,17 @@ pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> 
         BbrRestore => ops::network::restore(ctx, &ctx.paths.bbr),
         TcpTune => ops::network::tune(ctx, &p["bandwidth"], &p["rtt"]),
         TcpRestore => ops::network::restore(ctx, &ctx.paths.tcp),
+        ClashInstall => ops::clash::install(ctx, &p["version"]),
+        ClashStatus => ops::clash::status(ctx),
+        ClashStart => ops::clash::start(ctx),
+        ClashStop => ops::clash::stop(ctx),
+        ClashSubscriptions => ops::clash::subscriptions(ctx),
+        ClashSubscriptionAdd => {
+            ops::clash::subscription_add(ctx, &p["name"], &p["url"], p["use"] == "on")
+        }
+        ClashSubscriptionUse => ops::clash::subscription_use(ctx, &p["name"]),
+        ClashSubscriptionUpdate => ops::clash::subscription_update(ctx, &p["name"]),
+        ClashSubscriptionRemove => ops::clash::subscription_remove(ctx, &p["name"]),
         KernelList => ops::kernel::list(ctx),
         KernelInstall => ops::kernel::install(ctx, &p["profile"], &p["version"]),
         KernelBoot => ops::kernel::boot(ctx, &p["release"]),

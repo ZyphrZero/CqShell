@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod clash;
 pub mod docker;
 pub mod ip_quality;
 pub mod kernel;
