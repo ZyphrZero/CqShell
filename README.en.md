@@ -36,36 +36,32 @@ Configuration paths, network/terminal baselines and pending recovery records are
 
 End users do not need Rust. Releases provide **x86_64 (AMD64) and ARM64** Linux binaries for Debian / Ubuntu. The installer detects the architecture, downloads over HTTPS, checks SHA-256, verifies the executable version, and defaults to `/root/cqs`. Use `--install-dir` to choose another directory.
 
-Download the latest stable release by running the following on the target server:
+Run these two lines on the target server to install the latest stable release. **To change the download gateway, edit only the address on the first line**:
 
 ```bash
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
-  https://github.com/ZyphrZero/CqShell/releases/latest/download/install.sh \
-  -o install.sh && sudo bash install.sh
+GH_PROXY="https://gh-proxy.org"
+curl -fsSL "${GH_PROXY%/}/https://raw.githubusercontent.com/ZyphrZero/CqShell/main/install.sh" | sudo bash -s -- --gh-proxy "$GH_PROXY"
+```
+
+A trailing `/` on the gateway address is optional. Remove `sudo` when already running as root. Choose a trusted HTTPS gateway: version lookup, archive and checksum downloads also use it. This option covers installation downloads and does not configure a system proxy.
+
+Start CqShell after installation:
+
+```bash
 sudo /root/cqs --lang en-US
 ```
 
-For devices unable to reach GitHub directly, explicitly choose a trusted download proxy. Both the initial installer download and its internal version, archive and checksum requests use the proxy:
-
-```bash
-GH_PROXY='https://gh-proxy.org/'
-curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
-  "${GH_PROXY}https://raw.githubusercontent.com/ZyphrZero/CqShell/main/install.sh" \
-  -o install.sh && sudo bash install.sh --gh-proxy "$GH_PROXY"
-```
-
-An exported `GH_PROXY` is also supported; pass the argument explicitly with `sudo`, which may remove environment variables. Add `--version v0.1.3` if the proxy does not support the GitHub API or caches an older latest release. This option covers installation downloads only and does not configure a system proxy. HTTPS and SHA-256 checks remain enabled; choose a proxy you trust as a source of executable code.
-
 Dependencies are Bash, curl, CA certificates, tar, gzip and coreutils. If needed, install download dependencies with `sudo apt-get update && sudo apt-get install -y curl ca-certificates tar gzip coreutils`.
 
-Pin a version (including prereleases), or choose another directory:
+Append these options to the installation command above to select a version or installation directory:
 
-```bash
-sudo bash install.sh --version v0.1.0
-sudo bash install.sh --install-dir /opt/cqs
-bash install.sh --install-dir "$HOME/.local/bin"
-export PATH="$HOME/.local/bin:$PATH"
-```
+| Purpose | Append |
+| --- | --- |
+| Pin a version, including when the gateway lacks API support or caches an older release | `--version v0.1.3` |
+| Install into a specific directory | `--install-dir /opt/cqs` |
+| Install for the current user (also remove `sudo`) | `--install-dir "$HOME/.local/bin"` |
+
+For a user installation, add the directory to PATH with `export PATH="$HOME/.local/bin:$PATH"`.
 
 For a prerelease-only project, download `install.sh` from that specific release. The default selects the latest stable release. Repeat installation to upgrade, or use `--version` to select an older release. The installer replaces only the executable, preserves application configuration, and runs no system tuning. Download, checksum or version failures leave an existing installation intact. Built-in translations are included in the binary.
 

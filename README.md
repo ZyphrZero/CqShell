@@ -36,36 +36,32 @@ Shell 版与 Rust 版提供相同的 55 个操作 ID、参数默认值与枚举�
 
 普通用户无需安装 Rust。发布版提供 Debian / Ubuntu 使用的 **x86_64（AMD64）和 ARM64** Linux 可执行文件，安装器自动选择架构、通过 HTTPS 下载并校验 SHA-256，默认安装到 `/root/cqs`，也可用 `--install-dir` 指定目录。
 
-以下命令下载最新稳定版。在目标服务器执行：
+在目标服务器执行以下两行，安装最新稳定版。**更换加速网关时，只需修改第一行的地址**：
 
 ```bash
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
-  https://github.com/ZyphrZero/CqShell/releases/latest/download/install.sh \
-  -o install.sh && sudo bash install.sh
+GH_PROXY="https://gh-proxy.org"
+curl -fsSL "${GH_PROXY%/}/https://raw.githubusercontent.com/ZyphrZero/CqShell/main/install.sh" | sudo bash -s -- --gh-proxy "$GH_PROXY"
+```
+
+网关地址末尾有无 `/` 都可以；已经是 root 用户时，去掉 `sudo`。请选择你信任的 HTTPS 网关，安装器的版本查询、安装包和校验文件下载也会经过它。代理参数只用于安装阶段，不配置系统代理。
+
+安装完成后启动：
+
+```bash
 sudo /root/cqs --lang zh-CN
 ```
 
-无法直连 GitHub 的设备可显式指定受信的下载代理。外层获取安装器和安装器内部的版本查询、安装包、校验文件下载都会通过该代理：
-
-```bash
-GH_PROXY='https://gh-proxy.org/'
-curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
-  "${GH_PROXY}https://raw.githubusercontent.com/ZyphrZero/CqShell/main/install.sh" \
-  -o install.sh && sudo bash install.sh --gh-proxy "$GH_PROXY"
-```
-
-也支持导出的 `GH_PROXY` 环境变量；使用 `sudo` 时推荐像上面一样显式传参。部分下载代理不支持 GitHub API，或缓存的最新版本未更新时，可追加 `--version v0.1.3`，直接下载指定版本。该选项仅控制安装阶段的下载，不配置系统代理。HTTPS 与 SHA-256 校验继续启用；下载代理是你选择信任的程序来源。
-
 服务器需要 Bash、curl、CA 证书、tar、gzip 和 coreutils。缺少下载依赖时先执行 `sudo apt-get update && sudo apt-get install -y curl ca-certificates tar gzip coreutils`。
 
-安装指定版本（包含预发布版本），或指定其他目录：
+需要指定版本或安装目录时，将参数追加到上面的安装命令末尾：
 
-```bash
-sudo bash install.sh --version v0.1.0
-sudo bash install.sh --install-dir /opt/cqs
-bash install.sh --install-dir "$HOME/.local/bin"
-export PATH="$HOME/.local/bin:$PATH"
-```
+| 用途 | 追加参数 |
+| --- | --- |
+| 安装指定版本；网关不支持 API 或缓存未更新时也可使用 | `--version v0.1.3` |
+| 安装到指定目录 | `--install-dir /opt/cqs` |
+| 安装到当前用户目录（同时去掉 `sudo`） | `--install-dir "$HOME/.local/bin"` |
+
+安装到用户目录后，可通过 `export PATH="$HOME/.local/bin:$PATH"` 将其加入 PATH。
 
 预发布版本的安装器可从对应 Release 手动下载；默认安装仅选择最新稳定版。重复执行安装命令即可升级，也可用 `--version` 安装指定旧版本。安装器只替换 `cqs` 程序，不修改应用配置、不执行系统优化；下载、校验或版本检查失败时保留原有程序。内置中英文翻译随程序分发，无需额外安装语言文件。
 
