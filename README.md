@@ -2,35 +2,11 @@
 
 [English](README.en.md)
 
-面向 Debian / Ubuntu 的服务器工具箱，提供 Rust / Ratatui 版本和独立的 `cqs.sh` Shell 版本。集成系统维护、网络调优、内核管理、服务器测试、终端美化与 Docker 管理。
+面向 Debian / Ubuntu 的 Rust / Ratatui 服务器工具箱，集成系统维护、网络调优、内核管理、服务器测试、终端美化与 Docker 管理。
 
-Rust 版的界面、操作说明、确认提示和应用错误使用 TOML 语言文件，内置 **简体中文与英语**。Rust 版不依赖 Shell 版或 Python；Shell 版使用 Bash 和内嵌 Python，独立执行同一套操作。系统工具和明确选择的第三方脚本仍是外部依赖。
+界面、操作说明、确认提示和应用错误使用 TOML 语言文件，内置 **简体中文与英语**。系统工具和明确选择的第三方脚本仍是外部依赖。
 
-## Shell 版本
-
-`cqs.sh` 是可单独复制运行的脚本，要求 **Bash 4.4+、Python 3.11+**（Debian 12+ / Ubuntu 24.04+ 自带相应版本），不需要编译 Rust，也不需要 Node.js。下载需要 curl 和 CA 证书。
-
-通过 curl 下载仓库 `main` 分支的 Shell 版本并启动：
-
-```bash
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/ZyphrZero/CqShell/main/cqs.sh \
-  -o cqs.sh && bash cqs.sh --lang zh-CN
-```
-
-下载后也可以执行单项操作，或显式安装全局命令：
-
-```bash
-bash cqs.sh list --json
-bash cqs.sh run ai.status
-sudo bash cqs.sh run bbr.enable --set qdisc=fq
-sudo bash cqs.sh batch tcp.tune bbr.enable --set tcp.tune.rtt=80
-sudo bash cqs.sh --install     # 显式安装到 /usr/local/bin/cqs
-```
-
-Shell 版与 Rust 版提供相同的 55 个操作 ID、参数默认值与枚举，包括 AI 独立二进制安装、IPQuality、可选一键优化和终端还原。支持 `--lang`、`--config`、`--locale-dir`、`--yes`、`languages`、`list / run / batch`；启动不安装快捷命令、不查询公网信息。Shell 使用编号菜单，`o` 打开一键优化、`r` 读取本机状态、`n` 查询公网信息、`l` 切换语言；Ratatui 的鼠标、实时仪表盘与快捷键仅属于 Rust 界面。
-
-配置路径、网络/终端恢复基线及未完成事务记录与 Rust 版兼容。两个版本共用全局 `cqs` 安装目标，`--install` 会替换该目标；不要并发修改同一系统配置。详情和验证命令见 [Shell 说明](docs/SHELL.md)。下方 `install.sh` 仍安装 Rust 二进制。
+`install.sh` 负责下载并安装 Rust 二进制。
 
 ## 下载与安装
 
@@ -153,7 +129,7 @@ sudo cqs batch tcp.tune bbr.enable --set tcp.tune.rtt=80
 
 启用已有内核的 BBR / BBRv3：进入 **网络优化 → 启用当前内核的 BBR**，选择 `fq` 等队列并执行；需要调整 TCP 缓冲区时使用同页的 TCP 调优。安装 BBRv3：进入 **内核管理 → 安装 BBRv3 内核**，可选 `standard` / `max`，版本留空使用最新匹配版本，也可填写 `x.y.z`；重启进入新内核后再查看 BBR 状态及配置队列。
 
-Rust 和 Shell 版在内核安装及引导检查成功后，会显示当前内核、目标内核及重连后的验证步骤，并询问是否立即重启。取消或留空会保留安装结果，可稍后执行 `sudo reboot`。`--yes` 不会自动同意重启；非交互运行只输出手动重启指引。重连后用 `uname -r` 核对目标内核，若仍运行旧内核，请检查 GRUB 启动选择。
+Rust 版在内核安装及引导检查成功后，会显示当前内核、目标内核及重连后的验证步骤，并询问是否立即重启。取消或留空会保留安装结果，可稍后执行 `sudo reboot`。`--yes` 不会自动同意重启；非交互运行只输出手动重启指引。重连后用 `uname -r` 核对目标内核，若仍运行旧内核，请检查 GRUB 启动选择。
 
 IP 质量检测使用 [xykt/IPQuality](https://github.com/xykt/IPQuality)，入口为 **服务器测试 → IP 质量体检 · xykt/IPQuality**。支持双栈、仅 IPv4、仅 IPv6，输出语言跟随中英文界面；它检测的是目标机器的 IP，不是状态栏的公网地址查询。
 
@@ -242,7 +218,7 @@ cqs --locale-dir ./locales languages
 
 内核安装支持 Debian 12+ / Ubuntu 24.04+ 的 amd64 / arm64 主机，需要独立内核环境和 GRUB。安装后可确认立即重启或稍后手动重启进入新内核；状态页读取实际运行的 BBR 版本。WSL / 容器不支持更换宿主内核，卸载入口仅处理未运行的指定内核。
 
-旧版本升级前请阅读 [迁移说明](docs/MIGRATION.md)。网络和提示符的旧恢复基线可继续读取；不要同时运行新旧程序，也不要删除未完成操作的恢复记录。
+网络和提示符的旧恢复基线可继续读取；不要删除未完成操作的恢复记录。
 
 ## 开发与验证
 

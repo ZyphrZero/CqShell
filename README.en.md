@@ -2,35 +2,11 @@
 
 [简体中文](README.md)
 
-A server toolbox for Debian and Ubuntu, available as a Rust/Ratatui application and a standalone `cqs.sh` Shell application, with Simplified Chinese / English action catalogs.
+A Rust/Ratatui server toolbox for Debian and Ubuntu, with Simplified Chinese / English action catalogs.
 
-The Rust application does not load the Shell application or require Python. The Shell application uses Bash and embedded Python to execute the same operations independently. Native system tools and explicitly selected third-party benchmark/install scripts remain external dependencies.
+Native system tools and explicitly selected third-party benchmark/install scripts remain external dependencies.
 
-## Shell version
-
-Copy and run `cqs.sh` with **Bash 4.4+ and Python 3.11+** (available in Debian 12+ / Ubuntu 24.04+). No Rust compiler, Rust executable, or Node.js is required. Downloading requires curl and CA certificates.
-
-Download the Shell version from the repository's `main` branch and start it:
-
-```bash
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/ZyphrZero/CqShell/main/cqs.sh \
-  -o cqs.sh && bash cqs.sh --lang en-US
-```
-
-After downloading, run individual actions or explicitly install the global command:
-
-```bash
-bash cqs.sh list --json
-bash cqs.sh run ai.status
-sudo bash cqs.sh run bbr.enable --set qdisc=fq
-sudo bash cqs.sh batch tcp.tune bbr.enable --set tcp.tune.rtt=80
-sudo bash cqs.sh --install
-```
-
-Both implementations expose the same 55 action IDs, parameters, defaults and choices. Shell supports `--lang`, `--config`, `--locale-dir`, `--yes`, `languages`, `list`, `run` and `batch`. Its numbered menu uses `o` for optional optimization, `r` for local status, `n` for public IP/ISP and `l` for language selection. Ratatui mouse controls and its live dashboard remain specific to the Rust UI. Startup does not install a shortcut or contact public IP services.
-
-Configuration paths, network/terminal baselines and pending recovery records are compatible. Both versions target `/usr/local/bin/cqs` for explicit `--install`; installing one replaces that command. Do not modify the same configuration concurrently. See [Shell implementation notes](docs/SHELL.md). The `install.sh` instructions below continue to install the Rust binary.
+The `install.sh` instructions below install the Rust binary.
 
 ## Download and install
 
@@ -116,7 +92,7 @@ Action IDs are language-independent. In `list --json`, `available` indicates tha
 
 Use **Network → Enable BBR in the running kernel** to configure its BBR implementation, including BBRv3 when supplied by that kernel. TCP tuning is available on the same page. **Kernel → Install BBRv3 kernel** supports Standard / Max and the latest matching or a specified version. Reboot into the installed kernel, then inspect BBR status and configure the queue.
 
-After installation and boot checks succeed, both Rust and Shell show the running kernel, target kernel and verification steps, then ask whether to reboot now. Cancel or leave the answer blank to keep the installation and run `sudo reboot` later. `--yes` never automatically approves a reboot; noninteractive runs only print manual instructions. After reconnecting, check the target kernel with `uname -r`; if the old kernel is still running, check the GRUB boot selection.
+After installation and boot checks succeed, Rust shows the running kernel, target kernel and verification steps, then asks whether to reboot now. Cancel or leave the answer blank to keep the installation and run `sudo reboot` later. `--yes` never automatically approves a reboot; noninteractive runs only print manual instructions. After reconnecting, check the target kernel with `uname -r`; if the old kernel is still running, check the GRUB boot selection.
 
 IP quality checks use [xykt/IPQuality](https://github.com/xykt/IPQuality): open **Tests → IP quality · xykt/IPQuality**, or run `cqs run test.ip --set ip_family=ipv4`. `ip_family` accepts `dual` (default), `ipv4`, or `ipv6`; `full_ip=on` explicitly reveals the full IP in the report. Output follows the Chinese/English UI language. Privacy mode (`-p`) disables online report upload, while checks still contact external providers. CqShell does not pass upstream `-y` or `-n`; dependency installation remains an upstream prompt. The pinned entry script is checksum- and syntax-checked before taking over the interactive Debian/Ubuntu terminal. See [integration details](docs/IPQUALITY.md).
 
@@ -129,8 +105,6 @@ cqs run system.mirror.test
 sudo cqs run system.mirror.apply --set mirror_site=auto
 sudo cqs run system.mirror.restore
 ```
-
-The standalone Shell version accepts the same commands after `bash cqs.sh`.
 
 ## Languages
 
@@ -175,7 +149,7 @@ Features include system overview, public IP/ISP lookup, package updates, cleanup
 
 Configuration operations retain snapshots, locks, validation and recovery handling. Kernel installation supports Debian 12+ / Ubuntu 24.04+ on amd64 / arm64, with an independent kernel environment and GRUB. After installation, confirm a reboot or reboot manually later. WSL and containers cannot replace the host kernel; removal targets only a specified non-running kernel.
 
-See [migration notes](docs/MIGRATION.md), [architecture/testing](docs/TECHNICAL.md), and [localization](docs/I18N.md). Existing network/prompt recovery baselines remain readable. Do not run old and new applications concurrently.
+See [architecture/testing](docs/TECHNICAL.md) and [localization](docs/I18N.md). Existing network/prompt recovery baselines remain readable. Do not delete incomplete recovery records.
 
 ## Development
 

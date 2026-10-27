@@ -9,7 +9,7 @@
 | x86_64 / AMD64 | `cqs-x86_64-unknown-linux-musl.tar.gz` |
 | ARM64 / aarch64 | `cqs-aarch64-unknown-linux-musl.tar.gz` |
 
-每个压缩包附带同名 `.sha256` 文件。从 v0.1.2 起，Release 同时提供 `install.sh`、`cqs.sh` 及各自的 `.sha256` 文件。压缩包内的 Rust 可执行文件固定为 `cqs/cqs`，其余内容包括独立 Shell 脚本、许可证、文档、示例配置和翻译文件。旧版 v0.1.0 / v0.1.1 附件保持不变。构建与发布仅面向 Linux。
+每个压缩包附带同名 `.sha256` 文件。Release 同时提供 `install.sh` 及其 `.sha256` 文件。压缩包内的 Rust 可执行文件固定为 `cqs/cqs`，其余内容包括许可证、文档、示例配置和翻译文件。旧版附件保持不变。构建与发布仅面向 Linux。
 
 推荐先下载完整安装器，再运行：
 
@@ -55,7 +55,7 @@ curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
 
 ## CI 和构建
 
-- `.github/workflows/ci.yml`：分支推送、PR、手动运行，以及被发布流程复用。仅在 Linux 执行 fmt、Clippy、Rust 测试、release 构建、Rust 1.88 最低版本检查、ShellCheck、Shell 行为与元数据对齐测试，以及安装器 HTTPS 集成测试。
+- `.github/workflows/ci.yml`：分支推送、PR、手动运行，以及被发布流程复用。仅在 Linux 执行安装器 ShellCheck、fmt、Clippy、Rust 测试、release 构建、Rust 1.88 最低版本检查和安装器 HTTPS 集成测试。
 - `.github/workflows/build.yml`：推送 `v*` 标签或手动运行。先核对版本并运行完整 CI，再分别在原生 amd64 / ARM64 Ubuntu runner 上构建 musl 程序、检查版本与语言命令、打包并测试安装器，最后上传 Actions 产物。
 - 只有标签推送才进入 Release 发布作业；手动运行（包括选择标签）只构建。发布作业必须等待两个架构都成功，并再次校验压缩包 SHA-256。
 
@@ -72,7 +72,7 @@ curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
    ```
 
 3. 在 Actions 查看 `Build and release Linux binaries`。检查和两个架构的构建全部通过后，流程创建草稿、上传全部文件，再发布 Release。`0.2.0-rc.1` 这样的版本会标记为预发布，用户必须指定 `--version v0.2.0-rc.1` 安装。
-4. 确认 Release 附件中有两个 `.tar.gz`、两个 `.tar.gz.sha256`、`install.sh`、`install.sh.sha256`、`cqs.sh` 和 `cqs.sh.sha256`，共八个文件。
+4. 确认 Release 附件中有两个 `.tar.gz`、两个 `.tar.gz.sha256`、`install.sh` 和 `install.sh.sha256`，共六个文件。
 
 失败的检查或构建不会创建 Release。若上传或发布阶段失败并留下同名未发布草稿，先在 GitHub 核对并删除该草稿，再重跑失败作业。工作流不会覆盖已有的已发布 Release；修复已发布版本应递增版本并使用新标签。
 

@@ -78,7 +78,7 @@ jobs:
           "./target/$TARGET/release/cqs" languages
           mkdir -p dist/cqs
           cp "target/$TARGET/release/cqs" dist/cqs/
-          cp LICENSE README.md README.en.md config.example.toml install.sh cqs.sh dist/cqs/
+          cp LICENSE README.md README.en.md config.example.toml install.sh dist/cqs/
           cp -r locales docs dist/cqs/
           tar -czf "cqs-$TARGET.tar.gz" -C dist cqs
           sha256sum "cqs-$TARGET.tar.gz" > "cqs-$TARGET.tar.gz.sha256"
@@ -117,8 +117,6 @@ jobs:
           done
           cp ../install.sh .
           sha256sum install.sh > install.sh.sha256
-          cp ../cqs.sh .
-          sha256sum cqs.sh > cqs.sh.sha256
       - name: Publish complete release
         env:
           GH_TOKEN: ${{ github.token }}

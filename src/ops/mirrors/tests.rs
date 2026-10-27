@@ -187,49 +187,6 @@ fn action_registry_validates_fixed_choices_and_allows_read_only_benchmark() {
     );
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn rust_and_shell_can_undo_each_others_real_journals() {
-    let temp = tempfile::tempdir().unwrap();
-    let apt = temp.path().join("apt");
-    fs::create_dir_all(apt.join("sources.list.d")).unwrap();
-    let source = apt.join("sources.list");
-    fs::write(&source, b"# original\r\n").unwrap();
-    let h = host();
-    let ctx = context(temp.path());
-    let before = capture(&apt, &h).unwrap();
-    transaction(&ctx, &apt, &h, before.clone(), || {
-        fs::write(&source, "Rust change")?;
-        Ok(())
-    })
-    .unwrap();
-    let code = r#"
-import sys
-from pathlib import Path
-sys.path.insert(0, sys.argv[1])
-from test_shell_mirrors import backend
-m = backend()
-apt = Path(sys.argv[2])
-host = m.Host('ID=debian\nVERSION_CODENAME=trixie', 'amd64')
-m.restore_files(apt, host)
-assert (apt / 'sources.list').read_bytes() == b'# original\r\n'
-m.transaction(apt, host, m.capture(apt, host), lambda: (apt / 'sources.list').write_text('Shell change'))
-"#;
-    ctx.run(
-        "python3",
-        &[
-            "-c",
-            code,
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests"),
-            path(&apt).unwrap(),
-        ],
-    )
-    .unwrap();
-    assert_eq!(fs::read(&source).unwrap(), b"Shell change");
-    restore_files(&apt, &h).unwrap();
-    assert_eq!(capture(&apt, &h).unwrap(), before);
-}
-
 #[cfg(unix)]
 #[test]
 fn failed_recovery_keeps_journal_and_never_follows_a_symlink() {
