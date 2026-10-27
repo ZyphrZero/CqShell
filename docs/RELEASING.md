@@ -24,13 +24,13 @@ cqs --lang zh-CN
 
 | 参数 | 行为 |
 | --- | --- |
-| 无参数 | 下载最新稳定版，安装全局命令 `/usr/local/bin/cqs` |
+| 无参数 | 下载最新稳定版；交互式运行会选择安装目录，直接回车使用 `/usr/local/bin/cqs` |
 | `--version v0.1.0` | 下载指定版本；标签必须以 `v` 开头 |
 | `--install-dir /absolute/path` | 安装到该目录的 `cqs`；支持空格，要求绝对路径 |
 | `--gh-proxy https://gh-proxy.org/` | GitHub HTTPS 下载前缀，覆盖版本查询、安装包与校验文件；优先于 `GH_PROXY` 环境变量 |
 | `--help` | 显示帮助，不联网 |
 
-默认安装需要 root 权限，安装到 `/usr/local/bin/cqs` 后直接执行 `cqs`，系统写操作使用 `sudo cqs`。可用 `sudo bash install.sh --install-dir /opt/cqs` 安装到 `/opt/cqs/cqs`，也可以用 `bash install.sh --install-dir "$HOME/.local/bin"` 安装到当前用户目录；自定义目录需要在 PATH 中，才能直接执行 `cqs`。卸载默认命令可运行 `sudo cqs --uninstall`；自定义安装则删除实际文件。安装和升级只替换程序，不删除配置或恢复材料。
+默认安装需要 root 权限，安装到 `/usr/local/bin/cqs` 后直接执行 `cqs`，系统写操作使用 `sudo cqs`。有可用终端时安装器会提供全局目录、当前用户目录和自定义目录；没有可用终端时仍使用 `/usr/local/bin`。可用 `sudo bash install.sh --install-dir /opt/cqs` 安装到 `/opt/cqs/cqs`，也可以用 `bash install.sh --install-dir "$HOME/.local/bin"` 安装到当前用户目录；自定义目录需要在 PATH 中，才能直接执行 `cqs`。卸载默认命令可运行 `sudo cqs --uninstall`；自定义安装则删除实际文件。安装和升级只替换程序，不删除配置或恢复材料。
 
 安装器要求 Linux x86_64 / ARM64、Bash、curl、可信 CA、tar、gzip、coreutils。它先解析一次最新版本标签，然后使用固定标签下载两个文件，避免下载期间新版本发布导致压缩包与校验值混用。文件通过 SHA-256 校验后，仅提取 `cqs/cqs` 的内容，验证 `--version`，最后在安装目录内暂存并原子替换目标。HTTP 降级、缺失文件、校验失败、无法运行或版本不符都会返回非零退出码。
 

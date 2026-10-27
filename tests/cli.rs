@@ -371,6 +371,14 @@ sys.exit(23)
         thread::sleep(Duration::from_millis(10));
     }
     assert!(switched && quit);
+    if exit_key.is_none() {
+        let preferences = temp.path().join("config/cqs/config.toml");
+        let saved = fs::read_to_string(preferences).expect("language preference was saved");
+        assert!(saved.contains("language = \"zh-CN\""), "{saved}");
+        let restarted = cli(temp.path()).arg("--help").output().unwrap();
+        assert!(restarted.status.success());
+        assert!(String::from_utf8_lossy(&restarted.stdout).contains("服务器工具箱"));
+    }
     if exit_key.is_some() {
         assert!(
             bytes.windows(11).any(|part| part == b"CQS_NO_CTTY"),

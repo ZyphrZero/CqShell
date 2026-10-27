@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shlex
 import ssl
 import subprocess
 import tarfile
@@ -89,6 +90,8 @@ class InstallerTests(unittest.TestCase):
         self.case = tempfile.TemporaryDirectory(prefix="cqs-installer-test-")
         self.addCleanup(self.case.cleanup)
         self.root = Path(self.case.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
         self.bin_dir = self.root / "bin with spaces"
         self.bin_dir.mkdir()
         self.destination = self.bin_dir / "cqs"
@@ -123,11 +126,30 @@ class InstallerTests(unittest.TestCase):
             command.extend(["--install-dir", str(self.bin_dir)])
         result = subprocess.run(
             [*command, *args],
-            env=environment, text=True, capture_output=True, timeout=30,
+            env=environment, stdin=subprocess.DEVNULL, text=True, capture_output=True,
+            timeout=30, start_new_session=True,
         )
         self.assertEqual(list(self.temp_dir.iterdir()), [], result.stderr)
         self.assertEqual(list(self.bin_dir.glob(".cqs.*")), [], result.stderr)
         return result
+
+    def run_interactive_installer(self, input_text):
+        environment = {
+            **os.environ,
+            "CQS_RELEASE_BASE_URL": self.base,
+            "CURL_CA_BUNDLE": str(self.cert),
+            "NO_PROXY": "localhost,127.0.0.1",
+            "no_proxy": "localhost,127.0.0.1",
+            "GH_PROXY": "",
+            "TMPDIR": str(self.temp_dir),
+            "HOME": str(self.home),
+            "SUDO_USER": "",
+        }
+        command = f"bash {shlex.quote(str(INSTALLER))} --version {shlex.quote(self.tag)} </dev/null"
+        return subprocess.run(
+            ["script", "-qefc", command, "/dev/null"],
+            input=input_text, env=environment, text=True, capture_output=True, timeout=30,
+        )
 
     def assert_installed(self, result):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -163,6 +185,7 @@ class InstallerTests(unittest.TestCase):
         })
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Cannot create the installation directory", result.stderr)
+        self.assertNotIn("Choose an installation directory", result.stdout)
         self.assertEqual(arguments.read_text().splitlines(), ["-p", "--", "/usr/local/bin"])
         self.assertIn(self.asset_path, self.server.requests)
         self.assertIn(self.asset_path + ".sha256", self.server.requests)
@@ -175,6 +198,13 @@ class InstallerTests(unittest.TestCase):
         version = subprocess.check_output(["cqs", "--version"], text=True,
                                           env={**os.environ, **environment}).strip()
         self.assertEqual(version, self.version_output)
+
+    def test_interactive_install_can_choose_user_directory(self):
+        result = self.run_interactive_installer("2\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        destination = self.home / ".local" / "bin" / "cqs"
+        self.assertEqual(destination.read_bytes(), self.binary_bytes)
+        self.assertIn("Choose an installation directory", result.stdout)
 
     def test_pinned_version_does_not_resolve_latest(self):
         del self.server.responses["/releases/latest"]

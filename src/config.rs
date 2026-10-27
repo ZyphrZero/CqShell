@@ -23,6 +23,11 @@ impl Preferences {
             )),
         }
     }
+
+    pub fn write(&self, path: &Path) -> Result<()> {
+        let contents = toml::to_string(self)?;
+        crate::storage::atomic_write(path, contents.as_bytes(), 0o600)
+    }
 }
 
 #[derive(Debug, Clone)]

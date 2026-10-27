@@ -6,7 +6,7 @@ use crate::{
     runtime::Context,
 };
 use clap::{Arg, ArgAction, Command};
-use std::{env, io::IsTerminal, path::PathBuf};
+use std::{env, fs, io::IsTerminal, path::PathBuf};
 
 fn bootstrap(args: &[String], name: &str) -> Option<String> {
     args.iter().enumerate().find_map(|(i, a)| {
@@ -157,12 +157,17 @@ pub fn parse_parameters(values: impl Iterator<Item = String>) -> Result<Paramete
 pub fn main_entry() -> i32 {
     let args: Vec<String> = env::args().collect();
     let result = (|| {
-        let paths = Paths::from_env()?;
+        let mut paths = Paths::from_env()?;
         let config = bootstrap(&args, "--config").map(PathBuf::from);
-        let preferences = Preferences::read(
-            config.as_deref().unwrap_or(&paths.preferences),
-            config.is_some(),
-        )?;
+        let preferences_source = config.as_deref().unwrap_or(&paths.preferences);
+        let preferences = Preferences::read(preferences_source, config.is_some())?;
+        let preferences_path = if let Some(path) = config.as_ref() {
+            fs::canonicalize(path)
+                .map_err(|e| Error::new("error.config", format!("{}: {e}", path.display())))?
+        } else {
+            paths.preferences.clone()
+        };
+        paths.preferences = preferences_path;
         let language = bootstrap(&args, "--lang")
             .or_else(|| env::var("CQS_LANG").ok())
             .or(preferences.language);
