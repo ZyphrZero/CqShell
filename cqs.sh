@@ -1814,6 +1814,470 @@ cqs_system_update() (
     apt-get "${options[@]}" update && apt-get "${options[@]}" upgrade -y
 )
 
+# LinuxMirrors integration. The embedded backend shares its journal format with Rust.
+cqs_mirrors() (
+    export CQS_LANG CQS_YES CQS_KERNEL_LOCK CQS_MESSAGES_FILE
+    export -f cqs_confirm cqs_metadata
+    python3 /dev/fd/3 "$@" 3<<'CQS_MIRRORS_PY'
+import base64
+import contextlib
+import fcntl
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+from urllib.parse import urlsplit
+
+REVISION = "76fbf1738c22108cdbcc73973612bdb07ad6789b"
+SCRIPT_URL = f"https://raw.githubusercontent.com/SuperManito/LinuxMirrors/{REVISION}/ChangeMirrorsLite.sh"
+SCRIPT_SHA256 = "963c605bf114bdb7123eaa71d42c7034ac38916b96a55d9f03afa40f397b9fb6"
+SAMPLE = 1024 * 1024
+SITES = ("official", "tuna", "ustc", "aliyun")
+STATE = ".cqs-mirrors"
+MESSAGES = {}
+CANCELLED = False
+
+
+class Failure(Exception):
+    def __init__(self, key, detail=""):
+        self.key, self.detail = key, str(detail)
+        super().__init__(MESSAGES.get(key, key + ": {detail}").replace("{detail}", self.detail))
+
+
+def message(key, detail=""):
+    print(MESSAGES.get(key, key + ": {detail}").replace("{detail}", str(detail)), flush=True)
+
+
+def check():
+    if CANCELLED:
+        raise Failure("error.cancelled")
+
+
+def run(args, capture=False, env=None):
+    check()
+    child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE if capture else None,
+                             stderr=subprocess.PIPE if capture else None, start_new_session=True, env=env)
+    interrupted = False
+    while True:
+        if CANCELLED and not interrupted and child.poll() is None:
+            try:
+                os.killpg(child.pid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
+            interrupted = True
+        try:
+            stdout, stderr = child.communicate(timeout=0.1)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    check()
+    if child.returncode:
+        raise Failure("error.command", f"{args[0]}: {child.returncode}\n" + (stderr or b"").decode(errors="replace"))
+    return (stdout or b"").decode("utf-8").rstrip()
+
+
+class Host:
+    def __init__(self, release, arch):
+        values = dict(line.split("=", 1) for line in release.splitlines() if "=" in line)
+        self.distro = values.get("ID", "").strip("\"'")
+        self.codename = values.get("VERSION_CODENAME", "").strip("\"'")
+        self.arch = arch
+        supported = {"debian": {"bookworm", "trixie"}, "ubuntu": {"jammy", "noble", "resolute"}}
+        if self.codename not in supported.get(self.distro, set()) or arch not in {"amd64", "arm64"}:
+            raise Failure("error.mirror_host", f"{self.distro} {self.codename} {arch}")
+        self.branch = "debian" if self.distro == "debian" else "ubuntu-ports" if arch == "arm64" else "ubuntu"
+        self.official = "deb.debian.org" if self.distro == "debian" else "ports.ubuntu.com" if arch == "arm64" else "archive.ubuntu.com"
+        self.security = ("security.debian.org", "debian-security") if self.distro == "debian" else (
+            ("ports.ubuntu.com", "ubuntu-ports") if arch == "arm64" else ("security.ubuntu.com", "ubuntu"))
+        self.keyring = f"/usr/share/keyrings/{self.distro}-archive-keyring.gpg"
+        self.targets = ("sources.list", f"sources.list.d/{self.distro}.sources")
+
+    def domain(self, site):
+        sites = dict(official=self.official, tuna="mirrors.tuna.tsinghua.edu.cn",
+                     ustc="mirrors.ustc.edu.cn", aliyun="mirrors.aliyun.com")
+        if site not in sites:
+            raise Failure("error.input", "mirror_site")
+        return sites[site]
+
+    def base(self, site):
+        return f"https://{self.domain(site)}/{self.branch}/"
+
+    @classmethod
+    def detect(cls):
+        for marker in ("/etc/armbian-release", "/etc/pve/.version", "/etc/rpi-issue"):
+            if Path(marker).exists():
+                raise Failure("error.mirror_host", marker)
+        return cls(Path("/etc/os-release").read_text(), run(["dpkg", "--print-architecture"], capture=True))
+
+
+def parse_measurement(output, body, headers):
+    fields = output.strip().split("\t")
+    try:
+        if len(fields) != 4 or fields[0] != "206" or len(body) != SAMPLE or not body.startswith(b"\xfd7zXZ\0"):
+            raise ValueError()
+        if not any(line.startswith("content-range: bytes 0-1048575/") for line in headers.lower().splitlines()):
+            raise ValueError()
+        size, elapsed, first = map(float, fields[1:])
+        if size != SAMPLE or not math.isfinite(elapsed) or elapsed <= 0 or not math.isfinite(first) or not 0 <= first <= elapsed:
+            raise ValueError()
+        return 1 / elapsed, first * 1000
+    except ValueError as error:
+        raise Failure("error.mirror_sample", output) from error
+
+
+def probe(url):
+    with tempfile.TemporaryDirectory(prefix="cqs-mirror-sample-") as work:
+        body, headers = Path(work) / "sample", Path(work) / "headers"
+        output = run(["curl", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "-fLsS",
+                      "--connect-timeout", "3", "--max-time", "8", "--retry", "0",
+                      "--range", "0-1048575", "--max-filesize", "1048576", "--dump-header", str(headers),
+                      "--output", str(body), "--write-out", "%{http_code}\t%{size_download}\t%{time_total}\t%{time_starttransfer}", url], capture=True)
+        return parse_measurement(output, body.read_bytes(), headers.read_text())
+
+
+def benchmark(host):
+    message("notice.mirror_probe", f"{host.distro} {host.codename} / {host.arch}")
+    results = []
+    for site in SITES:
+        check()
+        url = f"{host.base(site)}dists/{host.codename}/main/binary-{host.arch}/Packages.xz"
+        print(f"{site}: {url}", flush=True)
+        try:
+            speed, first = probe(url)
+            print(f"{site}: {speed:.2f} MiB/s; TTFB {first:.0f} ms", flush=True)
+            results.append((site, speed, first))
+        except Failure as error:
+            if error.key == "error.cancelled":
+                raise
+            message("notice.mirror_failed", f"{site}: {error}")
+    results.sort(key=lambda row: (-row[1], row[2]))
+    for rank, (site, speed, first) in enumerate(results, 1):
+        print(f"{rank}. {site}: {speed:.2f} MiB/s; TTFB {first:.0f} ms", flush=True)
+    if not results:
+        raise Failure("error.mirror_speed")
+    message("notice.mirror_best", f"{results[0][0]} ({host.base(results[0][0])})")
+    return results
+
+
+def safe_path(path):
+    path = Path(path)
+    if not path.is_absolute() or ".." in path.parts or any(ord(c) < 32 or ord(c) == 127 for c in str(path)):
+        raise Failure("error.path", path)
+    for ancestor in (path, *path.parents):
+        if ancestor.is_symlink():
+            raise Failure("error.path", ancestor)
+    if path.exists() and not path.is_file():
+        raise Failure("error.path", path)
+    return path
+
+
+def capture_file(path):
+    path = safe_path(path)
+    try:
+        return dict(data=base64.b64encode(path.read_bytes()).decode(), mode=stat.S_IMODE(path.stat().st_mode))
+    except FileNotFoundError:
+        return None
+
+
+def decode(saved):
+    if not isinstance(saved, dict) or set(saved) != {"data", "mode"} or type(saved["mode"]) is not int or not 0 <= saved["mode"] <= 0o7777:
+        raise Failure("error.snapshot", "invalid saved file")
+    return base64.b64decode(saved["data"], validate=True)
+
+
+def sync_parent(path):
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def write_saved(path, saved):
+    path = safe_path(path)
+    if saved is None:
+        if path.exists():
+            path.unlink()
+            sync_parent(path)
+        return
+    data = decode(saved)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            if path.exists():
+                info = path.stat()
+                os.fchown(output.fileno(), info.st_uid, info.st_gid)
+            os.fchmod(output.fileno(), saved["mode"])
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        sync_parent(path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def save_json(path, value):
+    write_saved(path, dict(data=base64.b64encode(json.dumps(value, indent=2).encode()).decode(), mode=0o600))
+
+
+def capture(apt, host):
+    return {name: capture_file(apt / name) for name in host.targets}
+
+
+def known_uri(host, value):
+    try:
+        url = urlsplit(value)
+        domain = url.hostname or ""
+        return (url.scheme in {"http", "https"} and not url.username and not url.password and not url.port
+                and not url.query and not url.fragment and
+                (domain in {host.domain(site) for site in SITES} | {host.security[0]}
+                 or (host.distro == "ubuntu" and domain.endswith(".archive.ubuntu.com")))
+                and url.path.strip("/") in {host.branch, host.security[1]})
+    except ValueError:
+        return False
+
+
+def check_source(host, name, text):
+    suites = {host.codename + suffix for suffix in ("", "-updates", "-security", "-backports")}
+    components = {"main", "contrib", "non-free", "non-free-firmware"} if host.distro == "debian" else {"main", "restricted", "universe", "multiverse"}
+    def require(condition):
+        if not condition:
+            raise Failure("error.mirror_config", name)
+    if name.endswith(".sources"):
+        fields = set()
+        for line in text.splitlines() + [""]:
+            if line.lstrip().startswith("#"):
+                continue
+            if not line.strip():
+                require(not fields or {"Types", "URIs", "Suites", "Components"} <= fields)
+                fields.clear()
+                continue
+            require(":" in line)
+            key, value = line.split(":", 1)
+            words = value.split()
+            require(words and key not in fields)
+            fields.add(key)
+            valid = {"Types": lambda: set(words) <= {"deb", "deb-src"},
+                     "URIs": lambda: all(known_uri(host, word) for word in words),
+                     "Suites": lambda: set(words) <= suites, "Components": lambda: set(words) <= components,
+                     "Signed-By": lambda: words == [host.keyring]}
+            require(key in valid and valid[key]())
+    else:
+        for line in text.splitlines():
+            words = line.split("#", 1)[0].split()
+            if not words:
+                continue
+            if len(words) > 1 and words[1] == f"[signed-by={host.keyring}]":
+                del words[1]
+            require(len(words) >= 4 and words[0] in {"deb", "deb-src"} and known_uri(host, words[1])
+                    and words[2] in suites and set(words[3:]) <= components)
+
+
+def preflight(apt, host):
+    files = capture(apt, host)
+    if all(saved is None for saved in files.values()):
+        raise Failure("error.mirror_config", apt)
+    for name, saved in files.items():
+        if saved is not None:
+            check_source(host, name, decode(saved).decode("utf-8"))
+    return files
+
+
+def verify_result(apt, host, site):
+    files = preflight(apt, host)
+    saved = files[f"sources.list.d/{host.distro}.sources"] or files["sources.list"]
+    if saved is None:
+        raise Failure("error.mirror_config", apt)
+    text = decode(saved).decode()
+    words = {word.rstrip("/") for line in text.splitlines() if not line.lstrip().startswith("#") for word in line.split()}
+    if (host.base(site).rstrip("/") not in words
+            or f"https://{host.security[0]}/{host.security[1]}" not in words):
+        raise Failure("error.mirror_config", "LinuxMirrors did not generate the selected repositories")
+
+
+def read_record(file, host):
+    record = json.loads(safe_path(file).read_text())
+    if (not isinstance(record, dict) or set(record) != {"version", "distro", "before", "after", "previous"}
+            or type(record["version"]) is not int or record["version"] != 1 or record["distro"] != host.distro):
+        raise Failure("error.snapshot", file)
+    for files in [record["before"]] + ([record["after"]] if record["after"] is not None else []):
+        if not isinstance(files, dict) or set(files) != set(host.targets):
+            raise Failure("error.snapshot", file)
+        for saved in files.values():
+            if saved is not None:
+                decode(saved)
+    if record["previous"] is not None:
+        decode(record["previous"])
+    return record
+
+
+def rollback(apt, record):
+    for name in record["before"]:
+        safe_path(apt / name)
+    for name, saved in sorted(record["before"].items()):
+        write_saved(apt / name, saved)
+    write_saved(apt / STATE / "last.json", record["previous"])
+    write_saved(apt / STATE / "pending.json", None)
+
+
+def transaction(apt, host, before, operation):
+    state = apt / STATE
+    safe_path(state / "pending.json")
+    state.mkdir(mode=0o700, exist_ok=True)
+    state.chmod(0o700)
+    pending = state / "pending.json"
+    if pending.exists():
+        raise Failure("error.pending", pending)
+    if capture(apt, host) != before:
+        raise Failure("error.mirror_changed", apt)
+    record = dict(version=1, distro=host.distro, before=before, after=None, previous=capture_file(state / "last.json"))
+    save_json(pending, record)
+    try:
+        check()
+        operation()
+        check()
+        save_json(state / "last.json", dict(record, after=capture(apt, host), previous=None))
+        write_saved(pending, None)
+    except Exception as error:
+        try:
+            rollback(apt, record)
+        except Exception as recovery:
+            raise Failure("error.recovery", f"{error}; {recovery}; {pending}") from recovery
+        message("notice.mirror_rolled_back", apt)
+        raise
+
+
+def arguments(host, site):
+    return ["--source", host.domain(site), "--branch", host.branch,
+            "--source-security", host.security[0], "--branch-security", host.security[1],
+            "--protocol", "https", "--use-official-source", "false", "--backup", "false",
+            "--upgrade-software", "false", "--clean-cache", "false", "--clean-screen", "false", "--install-epel", "false"]
+
+
+def strict_update(env=None):
+    run(["apt-get", "update", "-o", "APT::Update::Error-Mode=any", "-o", "Acquire::Retries=0",
+         "-o", "Acquire::http::Timeout=15", "-o", "Acquire::https::Timeout=15",
+         "-o", "Dpkg::Use-Pty=0", "-o", "Dpkg::Progress-Fancy=0", "-o", "APT::Color=0"], env=env)
+
+
+def apply(apt, host, site):
+    pending = apt / STATE / "pending.json"
+    if pending.exists():
+        raise Failure("error.pending", pending)
+    if site != "auto":
+        host.domain(site)
+    before = preflight(apt, host)
+    if site == "auto":
+        site = benchmark(host)[0][0]
+    detail = (f"{host.distro} {host.codename} ({host.arch})\n{host.base(site)}\n"
+              f"security: https://{host.security[0]}/{host.security[1]}/\nLinuxMirrors {REVISION}\n"
+              + "\n".join(str(apt / name) for name in before))
+    check()
+    confirmation = MESSAGES["confirm.mirror"].replace("{detail}", detail)
+    answer = subprocess.run(["bash", "-c", 'cqs_confirm "$1" YES', "cqs-mirrors", confirmation], check=False)
+    if answer.returncode:
+        raise Failure("error.cancelled")
+    with tempfile.TemporaryDirectory(prefix="cqs-linuxmirrors-") as work:
+        script, config = Path(work) / "LinuxMirrors.sh", Path(work) / "apt.conf"
+        run(["curl", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "-fSL",
+             "--connect-timeout", "15", "--max-time", "60", "--output", str(script), SCRIPT_URL])
+        if hashlib.sha256(script.read_bytes()).hexdigest() != SCRIPT_SHA256:
+            raise Failure("error.digest", "LinuxMirrors Lite")
+        run(["bash", "-n", "--", str(script)])
+        config.write_text('APT::Update::Error-Mode "any";\nAcquire::Retries "0";\nAcquire::http::Timeout "15";\nAcquire::https::Timeout "15";\n')
+        env = dict(os.environ, APT_CONFIG=str(config), BASH_ENV="/dev/null", ENV="/dev/null", DEBIAN_FRONTEND="noninteractive")
+        def operation():
+            run(["bash", "--", str(script), *arguments(host, site)], env=env)
+            legacy = apt / "sources.list"
+            saved = capture_file(legacy)
+            if saved is not None:
+                data = decode(saved)
+                lines = data.decode().splitlines()
+                updated = "".join((f"deb [signed-by={host.keyring}] " + line[4:] if line.startswith("deb https://") else line) + "\n" for line in lines).encode()
+                if data != updated:
+                    write_saved(legacy, dict(data=base64.b64encode(updated).decode(), mode=saved["mode"]))
+            verify_result(apt, host, site)
+            strict_update(env)
+        transaction(apt, host, before, operation)
+    message("notice.mirror_applied", host.base(site))
+
+
+def restore_files(apt, host):
+    pending = apt / STATE / "pending.json"
+    if pending.exists():
+        rollback(apt, read_record(pending, host))
+        return
+    record = read_record(apt / STATE / "last.json", host)
+    if record["after"] != capture(apt, host):
+        raise Failure("error.mirror_changed", apt)
+    save_json(pending, record)
+    rollback(apt, record)
+
+
+@contextlib.contextmanager
+def package_lock():
+    path = safe_path(Path(os.environ.get("CQS_KERNEL_LOCK", "/run/lock/cqs-bbrv3.lock")))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise Failure("error.lock", path) from error
+        yield
+    finally:
+        os.close(fd)
+
+
+def main():
+    global MESSAGES
+    if os.environ.get("CQS_MESSAGES_FILE"):
+        MESSAGES = json.loads(Path(os.environ["CQS_MESSAGES_FILE"]).read_text(encoding="utf-8"))
+    else:
+        metadata = json.loads(subprocess.check_output(["bash", "-c", "cqs_metadata"]))
+        MESSAGES = metadata["catalogs"][os.environ.get("CQS_LANG", "en-US")]["messages"]
+    def cancelled(_signum, _frame):
+        global CANCELLED
+        CANCELLED = True
+    signal.signal(signal.SIGINT, cancelled)
+    signal.signal(signal.SIGTERM, cancelled)
+    try:
+        host = Host.detect()
+        operation = sys.argv[1]
+        if operation == "test":
+            benchmark(host)
+        else:
+            if os.geteuid() != 0:
+                raise Failure("error.root", "sudo cqs")
+            with package_lock():
+                if operation == "apply":
+                    apply(Path("/etc/apt"), host, sys.argv[2])
+                elif operation == "restore":
+                    restore_files(Path("/etc/apt"), host)
+                    message("notice.mirror_restored", "/etc/apt")
+                    strict_update()
+                else:
+                    raise Failure("error.action", operation)
+        return 0
+    except (Failure, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 130 if CANCELLED or (isinstance(error, Failure) and error.key == "error.cancelled") else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+CQS_MIRRORS_PY
+)
+
 cqs_download() {
     local url="$1" target="$2" seconds="${3:-300}"
     [[ "$url" == https://* && "$url" != *$'\n'* && "$url" != *$'\r'* ]] || return 1
@@ -2614,6 +3078,8 @@ try:
         if locale not in catalogs:
             locale = 'en-US'
     messages = catalogs[locale]['messages']
+    if os.environ.get('CQS_MESSAGES_FILE'):
+        Path(os.environ['CQS_MESSAGES_FILE']).write_text(json.dumps(messages, ensure_ascii=False), encoding='utf-8')
     rows = data['actions']
     for row in rows:
         row['label'] = messages['action.'+row['id']]
@@ -2761,7 +3227,7 @@ cqs_execute() {
     [[ "$root" != 1 ]] || require_root || return 1
     if [[ "$changes" == 1 ]]; then
         case "$id" in
-            kernel.install|kernel.remove|ai.*.install) ;;
+            kernel.install|kernel.remove|ai.*.install|system.mirror.apply) ;;
             *)
                 [[ "$id" != terminal.restore ]] || token=RESTORE
                 cqs_confirm "$label"$'\n'"$description"$'\n'"${parts[*]:5}" "$token" || return $?
@@ -2772,6 +3238,9 @@ cqs_execute() {
         system.info) cqs_system_info ;;
         system.public_ip) cqs_system_public_ip ;;
         system.update) cqs_system_update ;;
+        system.mirror.test) cqs_mirrors test ;;
+        system.mirror.apply) cqs_mirrors apply "${p[mirror_site]}" ;;
+        system.mirror.restore) cqs_mirrors restore ;;
         system.clean) cqs_system_clean "${p[scope]}" ;;
         system.timezone) cqs_system_timezone "${p[timezone]}" ;;
         swap.create) cqs_swap create "${p[size_mb]}" ;;
@@ -2828,6 +3297,7 @@ cqs_main() (
         echo 'CqShell Shell requires Python 3.11+ (TOML support).' >&2; return 1;
     }
     work=$(mktemp -d) || return 1
+    export CQS_MESSAGES_FILE="$work/messages.json"
     trap 'rm -rf -- "$work"' EXIT
     trap 'exit 130' INT TERM
     cqs_prepare "$@" > "$work/plan" || return $?
@@ -2898,6 +3368,55 @@ cqs_metadata() {
       "id": "system.update",
       "interactive": false,
       "label": "Update packages",
+      "mutates": true,
+      "parameters": [],
+      "root": true,
+      "unavailable_reason": null
+    },
+    {
+      "available": true,
+      "description": "Download a 1 MiB repository index sample from each of four HTTPS mirrors on this server, at most 8 seconds per mirror. Rank measured transfer speed, including connection time; report failed samples. Does not change sources. Results are a short sample, not a sustained bandwidth guarantee.",
+      "group": "system",
+      "id": "system.mirror.test",
+      "interactive": false,
+      "label": "Benchmark system mirrors",
+      "mutates": false,
+      "parameters": [],
+      "root": false,
+      "unavailable_reason": null
+    },
+    {
+      "available": true,
+      "description": "Use pinned, SHA-256 verified LinuxMirrors Lite. Choose official, Tsinghua, USTC, Aliyun, or auto to benchmark then confirm the fastest successful sample. Rebuild standard APT sources with upstream component/source-package defaults; keep separate third-party files. Use official security repositories. Back up and restore configuration on failure; never upgrade packages.",
+      "group": "system",
+      "id": "system.mirror.apply",
+      "interactive": false,
+      "label": "Change system mirror · LinuxMirrors",
+      "mutates": true,
+      "parameters": [
+        {
+          "choices": [
+            "auto",
+            "official",
+            "tuna",
+            "ustc",
+            "aliyun"
+          ],
+          "default": "auto",
+          "name": "mirror_site",
+          "required": true
+        }
+      ],
+      "root": true,
+      "unavailable_reason": null
+    },
+    {
+      "available": true,
+      "description": "Recover an interrupted mirror operation, or undo the last successful change. Refuse to overwrite later manual edits. Restore configuration before refreshing APT; an index refresh failure keeps the restored configuration.",
+      "group": "system",
+      "id": "system.mirror.restore",
+      "interactive": false,
+      "label": "Restore previous system sources",
       "mutates": true,
       "parameters": [],
       "root": true,
@@ -3963,6 +4482,25 @@ cqs_metadata() {
         "field.git": "Show Git",
         "field.source": "Install source",
         "field.mirror": "Registry mirror URL",
+        "field.mirror_site": "Mirror (auto = benchmark; tuna = Tsinghua; ustc = USTC)",
+        "action.system.mirror.test": "Benchmark system mirrors",
+        "description.system.mirror.test": "Download a 1 MiB repository index sample from each of four HTTPS mirrors on this server, at most 8 seconds per mirror. Rank measured transfer speed, including connection time; report failed samples. Does not change sources. Results are a short sample, not a sustained bandwidth guarantee.",
+        "action.system.mirror.apply": "Change system mirror · LinuxMirrors",
+        "description.system.mirror.apply": "Use pinned, SHA-256 verified LinuxMirrors Lite. Choose official, Tsinghua, USTC, Aliyun, or auto to benchmark then confirm the fastest successful sample. Rebuild standard APT sources with upstream component/source-package defaults; keep separate third-party files. Use official security repositories. Back up and restore configuration on failure; never upgrade packages.",
+        "action.system.mirror.restore": "Restore previous system sources",
+        "description.system.mirror.restore": "Recover an interrupted mirror operation, or undo the last successful change. Refuse to overwrite later manual edits. Restore configuration before refreshing APT; an index refresh failure keeps the restored configuration.",
+        "confirm.mirror": "Rebuild the listed system sources using LinuxMirrors defaults (including components and disabled source-package entries). Separate third-party files stay in place. Keep security updates on official HTTPS repositories. CqShell will back up and restore on failure; packages will not be upgraded.\n{detail}",
+        "notice.mirror_probe": "Mirror download test: {detail}. Four samples, up to 1 MiB and 8 seconds each; connection time is included.",
+        "notice.mirror_failed": "Mirror sample failed (excluded from ranking): {detail}",
+        "notice.mirror_best": "Fastest successful sample: {detail}",
+        "notice.mirror_applied": "System sources changed and APT verification passed: {detail}",
+        "notice.mirror_rolled_back": "Operation failed; previous source configuration restored: {detail}",
+        "notice.mirror_restored": "Source configuration restored; now refreshing APT indexes: {detail}",
+        "error.mirror_host": "Mirror integration supports Debian 12/13 and Ubuntu 22.04/24.04/26.04 on amd64/arm64. Derivatives and other releases require separate validation: {detail}",
+        "error.mirror_sample": "Invalid download sample: expected a complete 1 MiB HTTPS range from Packages.xz with valid timing: {detail}",
+        "error.mirror_speed": "All mirror samples failed. No mirror was selected and no sources were changed. Check network/TLS access or explicitly select a mirror: {detail}",
+        "error.mirror_config": "Unsupported or custom content in a system source file. Keep third-party sources in separate sources.list.d files; custom options, aliases and layouts need manual handling: {detail}",
+        "error.mirror_changed": "Source files changed since the snapshot; refusing to overwrite them: {detail}",
         "field.enabled": "IPv6",
         "field.purge_data": "Delete default Docker data/config directories",
         "field.directory": "Benchmark directory (absolute path)",
@@ -4295,6 +4833,25 @@ cqs_metadata() {
         "field.git": "显示 Git",
         "field.source": "安装来源",
         "field.mirror": "镜像源 URL",
+        "field.mirror_site": "镜像站（auto=测速推荐；tuna=清华；ustc=中科大）",
+        "action.system.mirror.test": "系统软件源测速",
+        "description.system.mirror.test": "在本机从四个 HTTPS 镜像站各下载 1 MiB 仓库索引样本，每站最多 8 秒。按包含建连时间的实际下载速度排名，并显示失败原因。不修改软件源；短时采样结果不保证持续带宽。",
+        "action.system.mirror.apply": "更换系统软件源 · LinuxMirrors",
+        "description.system.mirror.apply": "使用固定版本并校验 SHA-256 的 LinuxMirrors Lite。可选官方、清华、中科大、阿里云；auto 测速后确认最快的有效样本。按上游组件与源码仓库默认设置重建标准 APT 主源，保留独立第三方源文件。安全更新使用官方源。修改前备份，失败恢复配置，不升级软件。",
+        "action.system.mirror.restore": "恢复上次系统软件源",
+        "description.system.mirror.restore": "恢复未完成的换源操作，或撤销最近一次成功换源。检测到后续人工修改时拒绝覆盖。先恢复配置再刷新 APT；索引刷新失败时仍保留已恢复的配置。",
+        "confirm.mirror": "将按 LinuxMirrors 默认模板重建以下系统主源（包括组件设置和默认禁用源码仓库）。保留独立第三方源文件，安全更新使用官方 HTTPS 仓库。CqShell 会备份并在失败时恢复，不升级软件。\n{detail}",
+        "notice.mirror_probe": "镜像下载测速：{detail}。共四个样本，每站最多 1 MiB、8 秒，速度包含建连时间。",
+        "notice.mirror_failed": "镜像测速失败（不参与排名）：{detail}",
+        "notice.mirror_best": "最快的有效样本：{detail}",
+        "notice.mirror_applied": "系统源已更换且通过 APT 验证：{detail}",
+        "notice.mirror_rolled_back": "操作失败，已恢复此前的软件源配置：{detail}",
+        "notice.mirror_restored": "软件源配置已恢复，正在刷新 APT 索引：{detail}",
+        "error.mirror_host": "换源接入支持 Debian 12/13、Ubuntu 22.04/24.04/26.04 的 amd64/arm64；衍生系统及其他版本需单独验证：{detail}",
+        "error.mirror_sample": "下载样本无效：需要完整的 Packages.xz 1 MiB HTTPS 分段下载及有效计时：{detail}",
+        "error.mirror_speed": "全部镜像测速失败，未选择镜像也未修改软件源。请检查网络/TLS，或明确指定镜像站：{detail}",
+        "error.mirror_config": "系统主源文件包含不支持或自定义配置。第三方源应放在 sources.list.d 的独立文件；自定义选项、版本别名和布局需要手动处理：{detail}",
+        "error.mirror_changed": "源文件已在快照之后发生变化，拒绝覆盖：{detail}",
         "field.enabled": "IPv6",
         "field.purge_data": "删除 Docker 默认数据及配置目录",
         "field.directory": "测试目录（绝对路径）",

@@ -1,6 +1,6 @@
 # 独立 Shell 版本
 
-`cqs.sh` 从迁移前版本恢复网络/内核检查、cgroup 内存计算及终端基线处理，并按当前 Rust 实现补齐 52 个操作。它是单文件 Bash 程序，结构化数据、事务与菜单输入使用内嵌 Python；运行时无需仓库、Rust 二进制或 Node.js。
+`cqs.sh` 从迁移前版本恢复网络/内核检查、cgroup 内存计算及终端基线处理，并按当前 Rust 实现补齐 55 个操作。它是单文件 Bash 程序，结构化数据、事务与菜单输入使用内嵌 Python；运行时无需仓库、Rust 二进制或 Node.js。
 
 ## 启动和依赖
 
@@ -28,6 +28,8 @@ Shell 版沿用所有 `CQS_*`、HOME、XDG 和 ZDOTDIR 路径。网络、SSH、D
 
 AI 安装直接验证官方稳定版元数据、摘要、包结构、ELF 架构与实际版本后替换入口。IPQuality 与 Rust 使用相同固定 revision / SHA-256，保留 `-p` 隐私模式，不向上游转发 `--yes`。
 
+系统源的 `system.mirror.test / apply / restore` 与 Rust 使用同一 LinuxMirrors 固定版本、测速方法、候选站点及恢复记录。`auto` 测速后确认，安全更新固定走官方源；换源失败恢复配置，不升级软件。详细范围和测试方式见 [软件源说明](MIRRORS.md)。
+
 ## 验证与维护
 
 ```bash
@@ -40,3 +42,5 @@ CQS_TEST_BINARY=target/debug/cqs python3 -m unittest discover -s tests -p 'test_
 测试使用临时 HOME、真实文件、锁、编译的 ELF 和命令边界夹具，检查元数据一致性、参数拒绝、无启动写入、配置合并、下载校验及失败恢复。命令边界夹具不代表真实服务、官方在线下载、ARM64 或内核重启已验证；生产系统写操作仍需在可恢复的 VM 验收。
 
 维护新操作时同步 `src/actions.rs`、语言文件、`cqs.sh` 的执行分支与 `BEGIN BUNDLED CLI DATA` 数据块。CI 会检查中英文完整元数据与 Rust 的一致性。不要把状态文件或远程元数据当作 Shell 代码执行。
+
+构建后可用 `python3 tools/sync_shell_metadata.py --binary /absolute/path/to/cqs` 从 Rust CLI 和语言文件重新生成内嵌元数据，不改动 Shell 执行分支。

@@ -28,7 +28,7 @@ sudo bash cqs.sh batch tcp.tune bbr.enable --set tcp.tune.rtt=80
 sudo bash cqs.sh --install
 ```
 
-Both implementations expose the same 52 action IDs, parameters, defaults and choices. Shell supports `--lang`, `--config`, `--locale-dir`, `--yes`, `languages`, `list`, `run` and `batch`. Its numbered menu uses `o` for optional optimization, `r` for local status, `n` for public IP/ISP and `l` for language selection. Ratatui mouse controls and its live dashboard remain specific to the Rust UI. Startup does not install a shortcut or contact public IP services.
+Both implementations expose the same 55 action IDs, parameters, defaults and choices. Shell supports `--lang`, `--config`, `--locale-dir`, `--yes`, `languages`, `list`, `run` and `batch`. Its numbered menu uses `o` for optional optimization, `r` for local status, `n` for public IP/ISP and `l` for language selection. Ratatui mouse controls and its live dashboard remain specific to the Rust UI. Startup does not install a shortcut or contact public IP services.
 
 Configuration paths, network/terminal baselines and pending recovery records are compatible. Both versions target `/usr/local/bin/cqs` for explicit `--install`; installing one replaces that command. Do not modify the same configuration concurrently. See [Shell implementation notes](docs/SHELL.md). The `install.sh` instructions below continue to install the Rust binary.
 
@@ -110,6 +110,18 @@ Action IDs are language-independent. In `list --json`, `available` indicates tha
 Use **Network → Enable BBR in the running kernel** to configure its BBR implementation, including BBRv3 when supplied by that kernel. TCP tuning is available on the same page. **Kernel → Install BBRv3 kernel** supports Standard / Max and the latest matching or a specified version. Reboot into the installed kernel, then inspect BBR status and configure the queue.
 
 IP quality checks use [xykt/IPQuality](https://github.com/xykt/IPQuality): open **Tests → IP quality · xykt/IPQuality**, or run `cqs run test.ip --set ip_family=ipv4`. `ip_family` accepts `dual` (default), `ipv4`, or `ipv6`; `full_ip=on` explicitly reveals the full IP in the report. Output follows the Chinese/English UI language. Privacy mode (`-p`) disables online report upload, while checks still contact external providers. CqShell does not pass upstream `-y` or `-n`; dependency installation remains an upstream prompt. The pinned entry script is checksum- and syntax-checked before taking over the interactive Debian/Ubuntu terminal. See [integration details](docs/IPQUALITY.md).
+
+## System mirrors
+
+System management includes mirror benchmarking, switching through pinned LinuxMirrors Lite, and restoring the previous sources. Choose official, Tsinghua (`tuna`), USTC (`ustc`), Aliyun (`aliyun`), or `auto` to benchmark on the server and confirm the recommendation. Security repositories use official HTTPS endpoints. Failed changes restore the configuration; packages are not upgraded. See [mirror integration and recovery](docs/MIRRORS.md) for supported versions, custom-source restrictions and validation.
+
+```bash
+cqs run system.mirror.test
+sudo cqs run system.mirror.apply --set mirror_site=auto
+sudo cqs run system.mirror.restore
+```
+
+The standalone Shell version accepts the same commands after `bash cqs.sh`.
 
 ## Languages
 

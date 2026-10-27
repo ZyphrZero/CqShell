@@ -28,7 +28,7 @@ sudo bash cqs.sh batch tcp.tune bbr.enable --set tcp.tune.rtt=80
 sudo bash cqs.sh --install     # 显式安装到 /usr/local/bin/cqs
 ```
 
-Shell 版与 Rust 版提供相同的 52 个操作 ID、参数默认值与枚举，包括 AI 独立二进制安装、IPQuality、可选一键优化和终端还原。支持 `--lang`、`--config`、`--locale-dir`、`--yes`、`languages`、`list / run / batch`；启动不安装快捷命令、不查询公网信息。Shell 使用编号菜单，`o` 打开一键优化、`r` 读取本机状态、`n` 查询公网信息、`l` 切换语言；Ratatui 的鼠标、实时仪表盘与快捷键仅属于 Rust 界面。
+Shell 版与 Rust 版提供相同的 55 个操作 ID、参数默认值与枚举，包括 AI 独立二进制安装、IPQuality、可选一键优化和终端还原。支持 `--lang`、`--config`、`--locale-dir`、`--yes`、`languages`、`list / run / batch`；启动不安装快捷命令、不查询公网信息。Shell 使用编号菜单，`o` 打开一键优化、`r` 读取本机状态、`n` 查询公网信息、`l` 切换语言；Ratatui 的鼠标、实时仪表盘与快捷键仅属于 Rust 界面。
 
 配置路径、网络/终端恢复基线及未完成事务记录与 Rust 版兼容。两个版本共用全局 `cqs` 安装目标，`--install` 会替换该目标；不要并发修改同一系统配置。详情和验证命令见 [Shell 说明](docs/SHELL.md)。下方 `install.sh` 仍安装 Rust 二进制。
 
@@ -157,6 +157,16 @@ cqs --lang en-US run test.ip --set ip_family=ipv6 --set full_ip=on
 默认传入上游的 `-p`，禁用在线报告上传，默认不显示完整 IP；检测本身仍会访问外部数据库和服务。依赖缺失时由上游询问安装，CqShell 的 `--yes` 不会转成上游的自动安装参数。脚本完整下载并通过固定版本 SHA-256 和 Bash 语法检查后才执行，退出后返回 TUI。当前接入在 Debian / Ubuntu 的交互终端运行，详见 [接入说明](docs/IPQUALITY.md)。
 
 `list` 列出全部操作、默认值和枚举；操作 ID 不随语言改变。JSON 中 `available` 表示已提供该操作，具体执行仍检查平台、权限及参数。无终端时必须使用 CLI，`--yes` 可自动确认操作提示。
+
+## 系统软件源
+
+系统管理新增 **系统软件源测速 / 更换系统软件源 · LinuxMirrors / 恢复上次系统软件源**。支持官方、清华、中科大和阿里云；`auto` 在服务器上进行真实下载测速，显示推荐后确认换源。固定上游版本并校验摘要，保留官方安全更新源，失败恢复配置，不升级软件。支持范围、自定义配置限制和恢复说明见 [软件源说明](docs/MIRRORS.md)。
+
+```bash
+cqs run system.mirror.test
+sudo cqs run system.mirror.apply --set mirror_site=auto
+sudo cqs run system.mirror.restore
+```
 
 ## 常用工具与 AI 工具
 

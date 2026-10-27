@@ -14,6 +14,9 @@ pub enum Kind {
     Info,
     PublicIp,
     Update,
+    MirrorTest,
+    MirrorApply,
+    MirrorRestore,
     Clean,
     Timezone,
     SwapCreate,
@@ -230,6 +233,38 @@ pub fn specs() -> Vec<Spec> {
         vec![],
     );
     add("system.update", "system", Update, true, true, false, vec![]);
+    add(
+        "system.mirror.test",
+        "system",
+        MirrorTest,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "system.mirror.apply",
+        "system",
+        MirrorApply,
+        true,
+        true,
+        false,
+        vec![field(
+            "mirror_site",
+            "auto",
+            &["auto", "official", "tuna", "ustc", "aliyun"],
+            true,
+        )],
+    );
+    add(
+        "system.mirror.restore",
+        "system",
+        MirrorRestore,
+        true,
+        true,
+        false,
+        vec![],
+    );
     add(
         "system.clean",
         "system",
@@ -573,7 +608,7 @@ pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> 
     if spec.changes
         && !matches!(
             spec.kind,
-            Kind::KernelInstall | Kind::KernelRemove | Kind::AiInstall(_)
+            Kind::KernelInstall | Kind::KernelRemove | Kind::AiInstall(_) | Kind::MirrorApply
         )
     {
         let detail = format!(
@@ -600,6 +635,9 @@ pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> 
         Info => ops::system::info(ctx),
         PublicIp => ops::system::public_ip(ctx),
         Update => ops::system::update(ctx),
+        MirrorTest => ops::mirrors::test(ctx),
+        MirrorApply => ops::mirrors::apply(ctx, &p["mirror_site"]),
+        MirrorRestore => ops::mirrors::restore(ctx),
         Clean => ops::system::clean(ctx, &p["scope"]),
         Timezone => ops::system::timezone(ctx, &p["timezone"]),
         SwapCreate => ops::system::swap(ctx, "create", &p["size_mb"]),

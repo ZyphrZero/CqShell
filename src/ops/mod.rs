@@ -3,6 +3,7 @@ pub mod docker;
 pub mod ip_quality;
 pub mod kernel;
 pub mod memory;
+pub mod mirrors;
 pub mod network;
 pub mod packages;
 pub mod service;
