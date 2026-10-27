@@ -39,6 +39,7 @@ const GROUPS: &[&str] = &[
     "terminal",
     "tests",
     "app",
+    "clash",
     "optimization",
 ];
 const OPTIMIZATION_GROUP: usize = GROUPS.len() - 1;

@@ -91,6 +91,23 @@ pub fn command(i: &I18n) -> Command {
     for name in ["list", "languages"] {
         cmd = cmd.subcommand(Command::new(name).about(i.text(&format!("cli.{name}")).to_owned()));
     }
+    cmd = cmd.subcommand(
+        Command::new("proxy-env")
+            .about(i.text("cli.proxy_env").to_owned())
+            .arg(
+                Arg::new("state")
+                    .required(true)
+                    .value_parser(["on", "off"])
+                    .help(i.text("cli.proxy_env_state").to_owned()),
+            )
+            .arg(
+                Arg::new("shell")
+                    .long("shell")
+                    .default_value("bash")
+                    .value_parser(["bash", "zsh", "fish"])
+                    .help(i.text("cli.proxy_env_shell").to_owned()),
+            ),
+    );
     for name in ["run", "batch"] {
         cmd = cmd.subcommand(
             Command::new(name)
@@ -261,6 +278,12 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches) -> Result<()> {
                     println!("{id}\t{name}");
                 }
             }
+            Ok(())
+        }
+        Some(("proxy-env", matches)) => {
+            let enabled = matches.get_one::<String>("state").unwrap() == "on";
+            let shell = matches.get_one::<String>("shell").unwrap();
+            print!("{}", crate::ops::clash::proxy_env(ctx, enabled, shell)?);
             Ok(())
         }
         Some(("run", matches)) => {
