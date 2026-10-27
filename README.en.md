@@ -34,7 +34,7 @@ Configuration paths, network/terminal baselines and pending recovery records are
 
 ## Download and install
 
-End users do not need Rust. Releases provide **x86_64 (AMD64) and ARM64** Linux binaries for Debian / Ubuntu. The installer detects the architecture, downloads over HTTPS, checks SHA-256, verifies the executable version, and defaults to `/root/cqs`. Use `--install-dir` to choose another directory.
+End users do not need Rust. Releases provide **x86_64 (AMD64) and ARM64** Linux binaries for Debian / Ubuntu. The installer detects the architecture, downloads over HTTPS, checks SHA-256, verifies the executable version, and installs the global `/usr/local/bin/cqs` command by default. Use `--install-dir` to choose another directory.
 
 Run these two lines on the target server to install the latest stable release. **To change the download gateway, edit only the address on the first line**:
 
@@ -48,7 +48,7 @@ A trailing `/` on the gateway address is optional. Remove `sudo` when already ru
 Start CqShell after installation:
 
 ```bash
-sudo /root/cqs --lang en-US
+cqs --lang en-US
 ```
 
 Dependencies are Bash, curl, CA certificates, tar, gzip and coreutils. If needed, install download dependencies with `sudo apt-get update && sudo apt-get install -y curl ca-certificates tar gzip coreutils`.
@@ -57,7 +57,7 @@ Append these options to the installation command above to select a version or in
 
 | Purpose | Append |
 | --- | --- |
-| Pin a version, including when the gateway lacks API support or caches an older release | `--version v0.1.3` |
+| Pin a version, including when the gateway lacks API support or caches an older release | `--version v0.1.4` |
 | Install into a specific directory | `--install-dir /opt/cqs` |
 | Install for the current user (also remove `sudo`) | `--install-dir "$HOME/.local/bin"` |
 
@@ -65,7 +65,7 @@ For a user installation, add the directory to PATH with `export PATH="$HOME/.loc
 
 For a prerelease-only project, download `install.sh` from that specific release. The default selects the latest stable release. Repeat installation to upgrade, or use `--version` to select an older release. The installer replaces only the executable, preserves application configuration, and runs no system tuning. Download, checksum or version failures leave an existing installation intact. Built-in translations are included in the binary.
 
-Run the default installation using `/root/cqs` (with sudo for non-root users). Uninstall by deleting the installed file, for example `sudo rm -- /root/cqs`, or `cqs` in your selected directory. Configuration and recovery files are preserved. The program's own `--install` / `--uninstall` options manage the global `/usr/local/bin/cqs` command described below. You can also download the architecture-specific `.tar.gz` and `.sha256` assets from GitHub Releases, verify with `sha256sum --check`, extract, and run `./cqs/cqs` directly. See [release instructions](docs/RELEASING.md) for publishing and trusted mirrors.
+Run `cqs` after the default installation, or `sudo cqs` for system changes. Remove the default command with `sudo cqs --uninstall`; for a custom installation, delete `cqs` in your selected directory. Configuration and recovery files are preserved. The program's own `--install` / `--uninstall` options also manage `/usr/local/bin/cqs`, as described below. You can also download the architecture-specific `.tar.gz` and `.sha256` assets from GitHub Releases, verify with `sha256sum --check`, extract, and run `./cqs/cqs` directly. See [release instructions](docs/RELEASING.md) for publishing and trusted mirrors.
 
 ## Build from source and run
 

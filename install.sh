@@ -8,7 +8,7 @@ Install a prebuilt CqShell binary for Linux x86_64 or ARM64.
 Usage: bash install.sh [--version vX.Y.Z] [--install-dir /absolute/path] [--gh-proxy HTTPS_URL]
 
   --version TAG       Install an exact release (default: latest stable release).
-  --install-dir DIR   Install as DIR/cqs (default: /root).
+  --install-dir DIR   Install as DIR/cqs (default: /usr/local/bin).
   --gh-proxy URL      Use a trusted HTTPS GitHub download prefix (default: GH_PROXY).
   -h, --help          Show this help.
 
@@ -69,7 +69,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 main() {
-    local version='' install_dir='/root' gh_proxy="${GH_PROXY:-}"
+    local version='' install_dir='/usr/local/bin' gh_proxy="${GH_PROXY:-}"
     local release_base="${CQS_RELEASE_BASE_URL:-https://github.com/ZyphrZero/CqShell/releases}"
     local command_name target asset resolved checksum_line expected checksum_name extra actual_version
     local metadata github_api='' download_base proxy_port
@@ -186,7 +186,11 @@ main() {
     mv -fT -- "$staged_binary" "$install_dir/cqs"
     staged_binary=''
     printf 'Installed %s to %s/cqs\n' "$actual_version" "$install_dir"
-    printf 'Run: %q --lang zh-CN\n' "$install_dir/cqs"
+    if [[ "$(command -v cqs)" == "$install_dir/cqs" ]]; then
+        printf 'Run: cqs --lang zh-CN\n'
+    else
+        printf 'Run: %q --lang zh-CN\n' "$install_dir/cqs"
+    fi
     case ":$PATH:" in
         *":$install_dir:"*) ;;
         *) printf 'Add this directory to PATH: %s\n' "$install_dir" ;;

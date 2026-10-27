@@ -107,7 +107,7 @@ class InstallerTests(unittest.TestCase):
         checksum = f"{hashlib.sha256(body).hexdigest()}  {self.asset}\n".encode()
         self.server.responses[self.asset_path + ".sha256"] = (200, {}, checksum)
 
-    def run_installer(self, *args, env=None):
+    def run_installer(self, *args, env=None, use_default_dir=False):
         environment = {
             **os.environ,
             "CQS_RELEASE_BASE_URL": self.base,
@@ -118,8 +118,11 @@ class InstallerTests(unittest.TestCase):
             "TMPDIR": str(self.temp_dir),
             **(env or {}),
         }
+        command = ["bash", str(INSTALLER)]
+        if not use_default_dir:
+            command.extend(["--install-dir", str(self.bin_dir)])
         result = subprocess.run(
-            ["bash", str(INSTALLER), "--install-dir", str(self.bin_dir), *args],
+            [*command, *args],
             env=environment, text=True, capture_output=True, timeout=30,
         )
         self.assertEqual(list(self.temp_dir.iterdir()), [], result.stderr)
@@ -144,6 +147,34 @@ class InstallerTests(unittest.TestCase):
         self.assert_installed(self.run_installer())
         self.assertEqual(self.server.requests.count("/releases/latest"), 1)
         self.assertIn(self.asset_path, self.server.requests)
+
+    def test_default_installs_the_global_cqs_command(self):
+        boundary = self.root / "filesystem-boundary"
+        boundary.mkdir()
+        arguments = self.root / "mkdir-arguments"
+        mkdir = boundary / "mkdir"
+        # Stop before touching the host directory. Explicit-directory tests
+        # exercise the real install, executable mode and atomic replacement.
+        mkdir.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CQS_TEST_MKDIR_ARGS"\nexit 73\n')
+        mkdir.chmod(0o755)
+        result = self.run_installer(use_default_dir=True, env={
+            "PATH": str(boundary) + ":" + os.environ["PATH"],
+            "CQS_TEST_MKDIR_ARGS": str(arguments),
+        })
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cannot create the installation directory", result.stderr)
+        self.assertEqual(arguments.read_text().splitlines(), ["-p", "--", "/usr/local/bin"])
+        self.assertIn(self.asset_path, self.server.requests)
+        self.assertIn(self.asset_path + ".sha256", self.server.requests)
+
+    def test_installed_cqs_command_runs_from_path(self):
+        environment = {"PATH": str(self.bin_dir) + ":" + os.environ["PATH"]}
+        result = self.run_installer(env=environment)
+        self.assert_installed(result)
+        self.assertIn("Run: cqs --lang zh-CN", result.stdout)
+        version = subprocess.check_output(["cqs", "--version"], text=True,
+                                          env={**os.environ, **environment}).strip()
+        self.assertEqual(version, self.version_output)
 
     def test_pinned_version_does_not_resolve_latest(self):
         del self.server.responses["/releases/latest"]

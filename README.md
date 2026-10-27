@@ -34,7 +34,7 @@ Shell 版与 Rust 版提供相同的 55 个操作 ID、参数默认值与枚举�
 
 ## 下载与安装
 
-普通用户无需安装 Rust。发布版提供 Debian / Ubuntu 使用的 **x86_64（AMD64）和 ARM64** Linux 可执行文件，安装器自动选择架构、通过 HTTPS 下载并校验 SHA-256，默认安装到 `/root/cqs`，也可用 `--install-dir` 指定目录。
+普通用户无需安装 Rust。发布版提供 Debian / Ubuntu 使用的 **x86_64（AMD64）和 ARM64** Linux 可执行文件，安装器自动选择架构、通过 HTTPS 下载并校验 SHA-256，默认安装全局命令 `/usr/local/bin/cqs`，也可用 `--install-dir` 指定目录。
 
 在目标服务器执行以下两行，安装最新稳定版。**更换加速网关时，只需修改第一行的地址**：
 
@@ -48,7 +48,7 @@ curl -fsSL "${GH_PROXY%/}/https://raw.githubusercontent.com/ZyphrZero/CqShell/ma
 安装完成后启动：
 
 ```bash
-sudo /root/cqs --lang zh-CN
+cqs --lang zh-CN
 ```
 
 服务器需要 Bash、curl、CA 证书、tar、gzip 和 coreutils。缺少下载依赖时先执行 `sudo apt-get update && sudo apt-get install -y curl ca-certificates tar gzip coreutils`。
@@ -57,7 +57,7 @@ sudo /root/cqs --lang zh-CN
 
 | 用途 | 追加参数 |
 | --- | --- |
-| 安装指定版本；网关不支持 API 或缓存未更新时也可使用 | `--version v0.1.3` |
+| 安装指定版本；网关不支持 API 或缓存未更新时也可使用 | `--version v0.1.4` |
 | 安装到指定目录 | `--install-dir /opt/cqs` |
 | 安装到当前用户目录（同时去掉 `sudo`） | `--install-dir "$HOME/.local/bin"` |
 
@@ -65,7 +65,7 @@ sudo /root/cqs --lang zh-CN
 
 预发布版本的安装器可从对应 Release 手动下载；默认安装仅选择最新稳定版。重复执行安装命令即可升级，也可用 `--version` 安装指定旧版本。安装器只替换 `cqs` 程序，不修改应用配置、不执行系统优化；下载、校验或版本检查失败时保留原有程序。内置中英文翻译随程序分发，无需额外安装语言文件。
 
-默认安装后通过 `/root/cqs` 运行；普通用户需加 `sudo`。卸载时删除实际安装的文件，例如 `sudo rm -- /root/cqs`；指定目录安装则删除该目录下的 `cqs`，保留配置与恢复材料。程序自身的 `--install` / `--uninstall` 管理的是 `/usr/local/bin/cqs` 全局命令，见下方源码构建说明。也可以直接在 GitHub Releases 下载对应架构的 `.tar.gz` 和 `.sha256` 文件：
+默认安装后直接运行 `cqs`；需要系统写操作时使用 `sudo cqs`。卸载默认命令可执行 `sudo cqs --uninstall`；指定目录安装则删除该目录下的 `cqs`，保留配置与恢复材料。程序自身的 `--install` / `--uninstall` 也管理 `/usr/local/bin/cqs`，见下方源码构建说明。也可以直接在 GitHub Releases 下载对应架构的 `.tar.gz` 和 `.sha256` 文件：
 
 ```bash
 sha256sum --check cqs-x86_64-unknown-linux-musl.tar.gz.sha256
