@@ -3,6 +3,7 @@
 import hashlib
 import http.server
 import io
+import json
 import os
 from pathlib import Path
 import platform
@@ -113,6 +114,7 @@ class InstallerTests(unittest.TestCase):
             "CURL_CA_BUNDLE": str(self.cert),
             "NO_PROXY": "localhost,127.0.0.1",
             "no_proxy": "localhost,127.0.0.1",
+            "GH_PROXY": "",
             "TMPDIR": str(self.temp_dir),
             **(env or {}),
         }
@@ -147,6 +149,100 @@ class InstallerTests(unittest.TestCase):
         del self.server.responses["/releases/latest"]
         self.assert_installed(self.run_installer("--version", self.tag))
         self.assertNotIn("/releases/latest", self.server.requests)
+
+    def proxy_fixture(self):
+        self.github = "https://github.com/ZyphrZero/CqShell/releases"
+        self.proxy = self.base.removesuffix("/releases") + "/proxy/"
+        self.proxy_api = "/proxy/https://api.github.com/repos/ZyphrZero/CqShell/releases/latest"
+        self.proxy_asset = f"/proxy/{self.github}/download/{self.tag}/{self.asset}"
+        self.server.requests = []
+        self.server.responses = {
+            self.proxy_api: (200, {}, json.dumps({"tag_name": self.tag, "draft": False, "prerelease": False}).encode()),
+            self.proxy_asset: (200, {}, self.archive),
+            self.proxy_asset + ".sha256": (200, {}, f"{hashlib.sha256(self.archive).hexdigest()}  {self.asset}\n".encode()),
+        }
+        return {"CQS_RELEASE_BASE_URL": self.github}
+
+    def test_github_proxy_covers_latest_api_archive_and_checksum(self):
+        for trailing in (False, True):
+            with self.subTest(trailing_slash=trailing):
+                env = self.proxy_fixture()
+                proxy = self.proxy if trailing else self.proxy.rstrip("/")
+                self.assert_installed(self.run_installer("--gh-proxy", proxy, env=env))
+                self.assertEqual(self.server.requests, [self.proxy_api, self.proxy_asset, self.proxy_asset + ".sha256"])
+
+    def test_github_proxy_environment_and_pinned_version_skip_latest(self):
+        env = self.proxy_fixture()
+        del self.server.responses[self.proxy_api]
+        env["GH_PROXY"] = self.proxy
+        self.assert_installed(self.run_installer("--version", self.tag, env=env))
+        self.assertEqual(self.server.requests, [self.proxy_asset, self.proxy_asset + ".sha256"])
+
+    def test_explicit_github_proxy_overrides_environment(self):
+        env = self.proxy_fixture()
+        env["GH_PROXY"] = "http://invalid.example"
+        self.assert_installed(self.run_installer("--gh-proxy", self.proxy, env=env))
+
+    def test_proxy_uses_the_configured_github_repository(self):
+        env = self.proxy_fixture()
+        env["CQS_RELEASE_BASE_URL"] = "https://github.com/fixture/fork/releases"
+        self.server.responses = {path.replace("/ZyphrZero/CqShell/", "/fixture/fork/"): value
+                                 for path, value in self.server.responses.items()}
+        self.assert_installed(self.run_installer("--gh-proxy", self.proxy, env=env))
+        self.assertEqual(len(self.server.requests), 3)
+        self.assertTrue(all("/fixture/fork/" in path for path in self.server.requests))
+
+    def test_invalid_github_proxy_fails_before_network(self):
+        for value in ("http://example.com/", "https://", "https:///example.com", "https://user@example.com/",
+                      "https://example.com/?token=value", "https://example.com/#fragment", "https://example.com/\\path",
+                      "https://example.com/\n", "https://example.com:abc/", "https://example.com:0/", "https://example.com:65536/"):
+            with self.subTest(proxy=value):
+                self.assert_rejected("--gh-proxy", env={"GH_PROXY": value})
+        self.assertEqual(self.server.requests, [])
+        self.assert_rejected("--gh-proxy requires", "--gh-proxy")
+        self.assert_rejected("--gh-proxy requires", "--gh-proxy", "")
+
+    def test_proxy_and_non_github_release_mirror_cannot_be_combined(self):
+        self.assert_rejected("GitHub releases URL", "--gh-proxy", self.base + "/proxy/")
+        self.assertEqual(self.server.requests, [])
+
+    def test_proxy_corruption_still_preserves_existing_installation(self):
+        env = self.proxy_fixture()
+        self.server.responses[self.proxy_asset] = (200, {}, self.archive + b"corrupt")
+        self.assert_rejected("SHA-256 verification failed", "--gh-proxy", self.proxy, env=env)
+
+    def test_proxy_cannot_downgrade_to_http(self):
+        env = self.proxy_fixture()
+        self.server.responses[self.proxy_asset] = (302, {"Location": "http://localhost/unsafe"}, b"")
+        self.assert_rejected("Cannot download", "--gh-proxy", self.proxy, env=env)
+
+    def test_proxy_latest_failures_do_not_fall_back_to_direct_github(self):
+        env = self.proxy_fixture()
+        self.server.responses[self.proxy_api] = (403, {}, b"API not supported")
+        self.assert_rejected("--version", "--gh-proxy", self.proxy, env=env)
+        self.assertEqual(self.server.requests, [self.proxy_api])
+
+    def test_proxy_latest_requires_one_unescaped_valid_release_tag(self):
+        invalid = [b'<html>Not a release</html>', b'{"message":"rate limited"}',
+                   b'{"tag_name":"../../escape"}', b'{"tag_name":42}',
+                   b'{"tag_name":"v1.2.3","tag_name":"v4.5.6"}',
+                   b'{"tag_name":"v1.2.3","tag_name":null}',
+                   b'{"tag_name":null,"tag_name":"v1.2.3"}',
+                   b'{"tag_name":"v1.2.3"invalid}',
+                   b'{"tag_name":"v1.2.3"', b'{"body":"tag_name: v1.2.3"}',
+                   json.dumps({"body": '"tag_name":"v1.2.3"'}).encode()]
+        for body in invalid:
+            with self.subTest(body=body):
+                env = self.proxy_fixture()
+                self.server.responses[self.proxy_api] = (200, {}, body)
+                self.assert_rejected("release metadata", "--gh-proxy", self.proxy, env=env)
+                self.assertEqual(self.server.requests, [self.proxy_api])
+
+    def test_proxy_latest_accepts_pretty_json_without_matching_escaped_body_text(self):
+        env = self.proxy_fixture()
+        body = {"body": 'Example: {"tag_name":"v9876.0.0"}', "tag_name": self.tag, "draft": False, "prerelease": False}
+        self.server.responses[self.proxy_api] = (200, {}, json.dumps(body, indent=2).encode())
+        self.assert_installed(self.run_installer("--gh-proxy", self.proxy, env=env))
 
     def test_upgrade_replaces_existing_binary(self):
         self.destination.write_bytes(b"previous version")

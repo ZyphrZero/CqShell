@@ -3373,7 +3373,7 @@ cqs_main() (
 cqs_metadata() {
     cat <<'CQS_METADATA_JSON'
 {
-  "version": "0.1.2",
+  "version": "0.1.3",
   "actions": [
     {
       "available": true,

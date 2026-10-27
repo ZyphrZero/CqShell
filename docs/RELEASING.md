@@ -27,6 +27,7 @@ sudo /root/cqs --lang zh-CN
 | 无参数 | 下载最新稳定版，安装到 `/root/cqs` |
 | `--version v0.1.0` | 下载指定版本；标签必须以 `v` 开头 |
 | `--install-dir /absolute/path` | 安装到该目录的 `cqs`；支持空格，要求绝对路径 |
+| `--gh-proxy https://gh-proxy.org/` | GitHub HTTPS 下载前缀，覆盖版本查询、安装包与校验文件；优先于 `GH_PROXY` 环境变量 |
 | `--help` | 显示帮助，不联网 |
 
 默认安装需要 root 权限，安装后执行 `/root/cqs`（普通用户使用 `sudo /root/cqs`）。可用 `sudo bash install.sh --install-dir /opt/cqs` 安装到 `/opt/cqs/cqs`，也可以用 `bash install.sh --install-dir "$HOME/.local/bin"` 安装到当前用户目录；将该目录加入 PATH 后即可执行 `cqs`，系统写操作仍需要 root。卸载时删除实际文件，例如 `sudo rm -- /root/cqs`。程序自身的 `--uninstall` 仅移除 `/usr/local/bin/cqs` 全局命令。安装和升级只替换程序，不删除配置或恢复材料。
@@ -34,6 +35,23 @@ sudo /root/cqs --lang zh-CN
 安装器要求 Linux x86_64 / ARM64、Bash、curl、可信 CA、tar、gzip、coreutils。它先解析一次最新版本标签，然后使用固定标签下载两个文件，避免下载期间新版本发布导致压缩包与校验值混用。文件通过 SHA-256 校验后，仅提取 `cqs/cqs` 的内容，验证 `--version`，最后在安装目录内暂存并原子替换目标。HTTP 降级、缺失文件、校验失败、无法运行或版本不符都会返回非零退出码。
 
 如临时目录挂载为 `noexec`，可通过 `TMPDIR` 指定可执行且可写的临时目录。默认下载地址是 `https://github.com/ZyphrZero/CqShell/releases`。Fork 或受信镜像可用 `CQS_RELEASE_BASE_URL` 指定另一 HTTPS 地址；它必须实现同样的 `/latest` → `/tag/vX.Y.Z` 重定向和 `/download/vX.Y.Z/<文件>` 路径。该地址决定程序和校验值的来源，只应指向自己信任的发布方；脚本不支持关闭 TLS 或跳过校验。
+
+### GitHub 下载代理
+
+从 v0.1.3 起，安装器支持 `--gh-proxy HTTPS_URL` 和 `GH_PROXY` 环境变量，显式参数优先。这里的代理是将原始 GitHub URL 拼接在 HTTPS 服务地址后面的下载中转，不是 curl 的 HTTP CONNECT / SOCKS 代理。
+
+```bash
+GH_PROXY='https://gh-proxy.org/'
+curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
+  "${GH_PROXY}https://raw.githubusercontent.com/ZyphrZero/CqShell/main/install.sh" \
+  -o install.sh && sudo bash install.sh --gh-proxy "$GH_PROXY"
+```
+
+外层和内部下载必须使用同一显式选择的代理；只代理外层 curl，不能改变安装器后续请求。`sudo` 可能清除环境变量，因此示例通过参数传递。未指定代理时保持直连；代理失败会报错，不自动尝试其他站点或直连。
+
+不少中转服务只允许下载资源，会拒绝 `/releases/latest` 网页。代理模式改用 `${GH_PROXY}https://api.github.com/repos/<owner>/<repo>/releases/latest`，从响应中提取并校验唯一的未转义 `tag_name` 字段，再下载该固定标签的安装包及 `.sha256`。没有引入 jq / Python 安装依赖。若服务不支持 API、限流或缓存未更新，使用 `--version v0.1.3` 跳过版本查询。支持 GitHub 仓库形式的 `CQS_RELEASE_BASE_URL`，不允许把下载代理与非 GitHub 镜像地址叠加。
+
+代理必须是 HTTPS 地址，不接受用户信息、查询参数、片段或空白字符。TLS、禁止 HTTP 降级、文件名检查、SHA-256 与二进制版本检查仍然生效。代理传输程序和校验文件，必须选择可信服务；SHA-256 用于完整性检查，不替代对下载来源的信任。此设置只在本次安装中生效，不保存系统或 CqShell 运行时代理配置。
 
 ## CI 和构建
 
@@ -46,11 +64,11 @@ sudo /root/cqs --lang zh-CN
 ## 发布一个版本
 
 1. 修改 `Cargo.toml` 的 `package.version`，运行 Cargo 更新并提交对应的 `Cargo.lock`。确保源码、翻译、安装器、文档和 `.github/workflows/` 全部提交并推送；工作流只读取标签指向的提交，不包含本地未提交修改。
-2. 对需要发布的提交打标签。标签必须严格等于 `v` 加 `Cargo.toml` 版本，例如当前 `0.1.2` 对应：
+2. 对需要发布的提交打标签。标签必须严格等于 `v` 加 `Cargo.toml` 版本，例如当前 `0.1.3` 对应：
 
    ```bash
-   git tag -a v0.1.2 -m "CqShell v0.1.2"
-   git push origin v0.1.2
+   git tag -a v0.1.3 -m "CqShell v0.1.3"
+   git push origin v0.1.3
    ```
 
 3. 在 Actions 查看 `Build and release Linux binaries`。检查和两个架构的构建全部通过后，流程创建草稿、上传全部文件，再发布 Release。`0.2.0-rc.1` 这样的版本会标记为预发布，用户必须指定 `--version v0.2.0-rc.1` 安装。

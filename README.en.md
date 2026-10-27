@@ -45,6 +45,17 @@ curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
 sudo /root/cqs --lang en-US
 ```
 
+For devices unable to reach GitHub directly, explicitly choose a trusted download proxy. Both the initial installer download and its internal version, archive and checksum requests use the proxy:
+
+```bash
+GH_PROXY='https://gh-proxy.org/'
+curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
+  "${GH_PROXY}https://raw.githubusercontent.com/ZyphrZero/CqShell/main/install.sh" \
+  -o install.sh && sudo bash install.sh --gh-proxy "$GH_PROXY"
+```
+
+An exported `GH_PROXY` is also supported; pass the argument explicitly with `sudo`, which may remove environment variables. Add `--version v0.1.3` if the proxy does not support the GitHub API or caches an older latest release. This option covers installation downloads only and does not configure a system proxy. HTTPS and SHA-256 checks remain enabled; choose a proxy you trust as a source of executable code.
+
 Dependencies are Bash, curl, CA certificates, tar, gzip and coreutils. If needed, install download dependencies with `sudo apt-get update && sudo apt-get install -y curl ca-certificates tar gzip coreutils`.
 
 Pin a version (including prereleases), or choose another directory:

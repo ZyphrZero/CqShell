@@ -45,6 +45,17 @@ curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
 sudo /root/cqs --lang zh-CN
 ```
 
+无法直连 GitHub 的设备可显式指定受信的下载代理。外层获取安装器和安装器内部的版本查询、安装包、校验文件下载都会通过该代理：
+
+```bash
+GH_PROXY='https://gh-proxy.org/'
+curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
+  "${GH_PROXY}https://raw.githubusercontent.com/ZyphrZero/CqShell/main/install.sh" \
+  -o install.sh && sudo bash install.sh --gh-proxy "$GH_PROXY"
+```
+
+也支持导出的 `GH_PROXY` 环境变量；使用 `sudo` 时推荐像上面一样显式传参。部分下载代理不支持 GitHub API，或缓存的最新版本未更新时，可追加 `--version v0.1.3`，直接下载指定版本。该选项仅控制安装阶段的下载，不配置系统代理。HTTPS 与 SHA-256 校验继续启用；下载代理是你选择信任的程序来源。
+
 服务器需要 Bash、curl、CA 证书、tar、gzip 和 coreutils。缺少下载依赖时先执行 `sudo apt-get update && sudo apt-get install -y curl ca-certificates tar gzip coreutils`。
 
 安装指定版本（包含预发布版本），或指定其他目录：

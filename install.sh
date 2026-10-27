@@ -5,14 +5,17 @@ usage() {
     cat <<'EOF'
 Install a prebuilt CqShell binary for Linux x86_64 or ARM64.
 
-Usage: bash install.sh [--version vX.Y.Z] [--install-dir /absolute/path]
+Usage: bash install.sh [--version vX.Y.Z] [--install-dir /absolute/path] [--gh-proxy HTTPS_URL]
 
   --version TAG       Install an exact release (default: latest stable release).
   --install-dir DIR   Install as DIR/cqs (default: /root).
+  --gh-proxy URL      Use a trusted HTTPS GitHub download prefix (default: GH_PROXY).
   -h, --help          Show this help.
 
 Use sudo for system installation, or --install-dir "$HOME/.local/bin".
 CQS_RELEASE_BASE_URL may select a trusted HTTPS mirror with GitHub's release layout.
+--gh-proxy overrides GH_PROXY and covers version lookup, archives and checksums.
+Pass --gh-proxy explicitly through sudo; sudo may discard GH_PROXY.
 EOF
 }
 
@@ -23,6 +26,23 @@ die() {
 
 valid_version() {
     [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
+}
+
+release_tag_from_metadata() {
+    local metadata="$1" tag remainder
+    local object='^[[:space:]]*\{.*\}[[:space:]]*$'
+    local key='(^|[,{[:space:]])"tag_name"[[:space:]]*:'
+    local value='^[[:space:]]*"([^"\\]*)"'
+    local separator='^[[:space:]]*[,}]'
+    # GitHub emits an unescaped tag_name. Extract only that bounded field, never
+    # interpret remote data as shell code or add a Python/jq runtime dependency.
+    [[ "$metadata" =~ $object && "$metadata" =~ $key ]] || return 1
+    remainder="${metadata#*"${BASH_REMATCH[0]}"}"
+    [[ "$remainder" =~ $value ]] || return 1
+    tag="${BASH_REMATCH[1]}"
+    remainder="${remainder#"${BASH_REMATCH[0]}"}"
+    [[ "$remainder" =~ $separator && ! "$remainder" =~ $key ]] && valid_version "$tag" || return 1
+    printf '%s\n' "$tag"
 }
 
 download() {
@@ -49,9 +69,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 main() {
-    local version='' install_dir='/root'
+    local version='' install_dir='/root' gh_proxy="${GH_PROXY:-}"
     local release_base="${CQS_RELEASE_BASE_URL:-https://github.com/ZyphrZero/CqShell/releases}"
     local command_name target asset resolved checksum_line expected checksum_name extra actual_version
+    local metadata github_api='' download_base proxy_port
+    local proxy_pattern='^https://([[:alnum:]][[:alnum:].-]*|\[[[:xdigit:]:.]+\])(:[0-9]{1,5})?(/[[:alnum:]_.~%/-]*)?$'
+    local github_pattern='^https://github\.com/([[:alnum:]][[:alnum:]_.-]*)/([[:alnum:]][[:alnum:]_.-]*)/releases$'
 
     while (($#)); do
         case "$1" in
@@ -70,6 +93,13 @@ main() {
                 install_dir="$2"
                 shift 2
                 ;;
+            --gh-proxy)
+                if (($# < 2)) || [[ -z "$2" ]]; then
+                    die '--gh-proxy requires a trusted HTTPS download prefix.'
+                fi
+                gh_proxy="$2"
+                shift 2
+                ;;
             -h|--help) usage; return ;;
             *) die "Unknown argument: $1 (see --help)." ;;
         esac
@@ -79,6 +109,21 @@ main() {
     release_base="${release_base%/}"
     [[ "$release_base" == https://?* && ! "$release_base" =~ [[:space:]\?\#@] ]] \
         || die 'CQS_RELEASE_BASE_URL must be an HTTPS URL without credentials, query or fragment.'
+    if [[ -n "$gh_proxy" ]]; then
+        [[ "$gh_proxy" =~ $proxy_pattern ]] \
+            || die '--gh-proxy/GH_PROXY must be an HTTPS URL without credentials, query, fragment or whitespace.'
+        if [[ -n "${BASH_REMATCH[2]:-}" ]]; then
+            proxy_port="${BASH_REMATCH[2]#:}"
+            ((10#$proxy_port > 0 && 10#$proxy_port <= 65535)) || die '--gh-proxy/GH_PROXY contains an invalid port.'
+        fi
+        while [[ "$gh_proxy" == */ ]]; do gh_proxy="${gh_proxy%/}"; done
+        gh_proxy="$gh_proxy/"
+        [[ "$release_base" =~ $github_pattern ]] \
+            || die '--gh-proxy requires a GitHub releases URL; use CQS_RELEASE_BASE_URL alone for other mirrors.'
+        github_api="https://api.github.com/repos/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/releases/latest"
+        printf 'Using the configured GitHub download proxy.\n'
+    fi
+    download_base="$gh_proxy$release_base"
     [[ "$(uname -s)" == Linux ]] || die 'Only Linux is supported; use Debian / Ubuntu or WSL.'
     case "$(uname -m)" in
         x86_64|amd64) target='x86_64-unknown-linux-musl' ;;
@@ -91,18 +136,28 @@ main() {
 
     if [[ -z "$version" ]]; then
         # Resolve latest once so both downloads use the same version tag.
-        resolved=$(download --output /dev/null --write-out '%{url_effective}' "$release_base/latest") \
-            || die 'Cannot resolve the latest release. Check connectivity and whether a stable release is published.'
-        [[ "$resolved" == "$release_base/tag/"* ]] || die "Unexpected release redirect: $resolved"
-        version="${resolved#"$release_base/tag/"}"
-        valid_version "$version" || die "Invalid release tag: $version"
+        if [[ -n "$gh_proxy" ]]; then
+            # Download proxies commonly reject GitHub HTML pages, including
+            # releases/latest. Use the proxied API instead of that redirect.
+            metadata=$(download --max-time 60 --max-filesize 1048576 \
+                --header 'Accept: application/vnd.github+json' "$gh_proxy$github_api") \
+                || die 'Cannot resolve the latest release through the GitHub proxy. Check its API support or supply --version vX.Y.Z.'
+            version=$(release_tag_from_metadata "$metadata") \
+                || die 'Invalid release metadata from the GitHub proxy. Supply --version vX.Y.Z or use another trusted proxy.'
+        else
+            resolved=$(download --output /dev/null --write-out '%{url_effective}' "$release_base/latest") \
+                || die 'Cannot resolve the latest release. Check connectivity, use --gh-proxy HTTPS_URL, or supply --version vX.Y.Z.'
+            [[ "$resolved" == "$release_base/tag/"* ]] || die "Unexpected release redirect: $resolved"
+            version="${resolved#"$release_base/tag/"}"
+            valid_version "$version" || die "Invalid release tag: $version"
+        fi
     fi
     asset="cqs-${target}.tar.gz"
     printf 'Downloading CqShell %s (%s)...\n' "$version" "$target"
     work_dir=$(mktemp -d "${TMPDIR:-/tmp}/cqs-install.XXXXXXXX")
-    download --output "$work_dir/archive.tar.gz" "$release_base/download/$version/$asset" \
+    download --output "$work_dir/archive.tar.gz" "$download_base/download/$version/$asset" \
         || die "Cannot download $asset for $version. Check that this release has Linux binary assets."
-    download --output "$work_dir/archive.sha256" "$release_base/download/$version/$asset.sha256" \
+    download --output "$work_dir/archive.sha256" "$download_base/download/$version/$asset.sha256" \
         || die "Cannot download the checksum for $asset."
 
     checksum_line=$(<"$work_dir/archive.sha256")
