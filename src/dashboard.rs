@@ -5,6 +5,7 @@ use crate::{
     runtime::Context,
 };
 use std::{
+    ffi::OsString,
     fs,
     path::Path,
     sync::{
@@ -16,6 +17,19 @@ use std::{
     time::{Duration, Instant},
 };
 use sysinfo::{Disks, System};
+
+const PROXY_ENV_VARS: &[&str] = &[
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+];
+
+fn proxy_environment_enabled(values: impl IntoIterator<Item = OsString>) -> bool {
+    values.into_iter().any(|value| !value.is_empty())
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reading<T> {
@@ -57,6 +71,7 @@ pub struct LocalSnapshot {
     pub arch: String,
     pub cpu: Reading<String>,
     pub cpu_usage: Reading<f32>,
+    pub terminal_proxy: Reading<bool>,
     pub memory: Reading<Usage>,
     pub swap: Reading<Usage>,
     pub disk: Reading<Usage>,
@@ -79,6 +94,7 @@ impl Default for LocalSnapshot {
             arch: std::env::consts::ARCH.into(),
             cpu: Reading::Loading,
             cpu_usage: Reading::Loading,
+            terminal_proxy: Reading::Loading,
             memory: Reading::Loading,
             swap: Reading::Loading,
             disk: Reading::Loading,
@@ -193,6 +209,11 @@ impl Sampler {
             arch: std::env::consts::ARCH.into(),
             cpu,
             cpu_usage,
+            terminal_proxy: Reading::Value(proxy_environment_enabled(
+                PROXY_ENV_VARS
+                    .iter()
+                    .filter_map(|name| std::env::var_os(name)),
+            )),
             memory: if self.system.total_memory() == 0 {
                 Reading::Unavailable("memory statistics unavailable".into())
             } else {
@@ -553,8 +574,17 @@ mod tests {
     fn initial_snapshot_does_not_invent_measurements_or_query_public_services() {
         let snapshot = Snapshot::default();
         assert_eq!(snapshot.local.cpu_usage, Reading::Loading);
+        assert_eq!(snapshot.local.terminal_proxy, Reading::Loading);
         assert_eq!(snapshot.public.ipv4, Reading::NotQueried);
         assert_eq!(snapshot.public.isp, Reading::NotQueried);
+    }
+
+    #[test]
+    fn terminal_proxy_status_only_requires_a_proxy_variable_with_a_value() {
+        assert!(!proxy_environment_enabled([OsString::from("")]));
+        assert!(proxy_environment_enabled([OsString::from(
+            "http://127.0.0.1:7890"
+        )]));
     }
     #[test]
     fn ip_responses_are_validated_and_error_pages_rejected() {
