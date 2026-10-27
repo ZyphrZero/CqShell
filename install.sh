@@ -8,11 +8,12 @@ Install a prebuilt CqShell binary for Linux x86_64 or ARM64.
 Usage: bash install.sh [--version vX.Y.Z] [--install-dir /absolute/path] [--gh-proxy HTTPS_URL]
 
   --version TAG       Install an exact release (default: latest stable release).
-  --install-dir DIR   Install as DIR/cqs (default: /usr/local/bin).
+  --install-dir DIR   Install as DIR/cqs and skip the location prompt.
   --gh-proxy URL      Use a trusted HTTPS GitHub download prefix (default: GH_PROXY).
   -h, --help          Show this help.
 
-Use sudo for system installation, or --install-dir "$HOME/.local/bin".
+Interactive installs offer /usr/local/bin, ~/.local/bin, and a custom path; Enter keeps /usr/local/bin.
+Non-interactive installs keep /usr/local/bin. Use sudo for system installation.
 CQS_RELEASE_BASE_URL may select a trusted HTTPS mirror with GitHub's release layout.
 --gh-proxy overrides GH_PROXY and covers version lookup, archives and checksums.
 Pass --gh-proxy explicitly through sudo; sudo may discard GH_PROXY.
@@ -22,6 +23,66 @@ EOF
 die() {
     printf 'cqs installer: %s\n' "$*" >&2
     exit 1
+}
+
+choose_install_dir() {
+    # Keep scripted installs non-interactive while making a terminal install
+    # explicit about the system-wide and per-user locations.
+    local input_fd=0 output_fd=1 user_dir="${HOME:-}/.local/bin" choice custom passwd_entry
+    local user_install=''
+    if [[ ! -t 0 || ! -t 1 ]]; then
+        if ! { exec 3<>/dev/tty; } 2>/dev/null; then
+            return 0
+        fi
+        input_fd=3
+        output_fd=3
+    fi
+    if [[ -n "${SUDO_USER:-}" && "${EUID:-$(id -u)}" == 0 ]] && command -v getent >/dev/null 2>&1; then
+        passwd_entry=$(getent passwd "$SUDO_USER" || true)
+        if [[ -n "$passwd_entry" ]]; then
+            IFS=: read -r _ _ _ _ _ user_dir _ <<< "$passwd_entry"
+            user_dir="$user_dir/.local/bin"
+            user_install="$SUDO_USER"
+        fi
+    fi
+    printf '\nChoose an installation directory:\n' >&"$output_fd"
+    printf '  1) /usr/local/bin (system-wide, default)\n' >&"$output_fd"
+    printf '  2) %s (current user)\n' "$user_dir" >&"$output_fd"
+    printf '  3) Enter a custom absolute path\n' >&"$output_fd"
+    while :; do
+        printf 'Selection [1]: ' >&"$output_fd"
+        if ((input_fd == 3)); then
+            IFS= read -r choice <&3 || { exec 3>&-; return 0; }
+        else
+            IFS= read -r choice || return 0
+        fi
+        case "${choice:-1}" in
+            1)
+                install_dir='/usr/local/bin'
+                if ((input_fd == 3)); then exec 3>&-; fi
+                return 0
+                ;;
+            2)
+                install_dir="$user_dir"
+                install_user="$user_install"
+                if ((input_fd == 3)); then exec 3>&-; fi
+                return 0
+                ;;
+            3)
+                printf 'Custom installation directory: ' >&"$output_fd"
+                if ((input_fd == 3)); then
+                    IFS= read -r custom <&3 || die 'Cannot read the installation directory.'
+                else
+                    IFS= read -r custom || die 'Cannot read the installation directory.'
+                fi
+                [[ -n "$custom" ]] || { printf 'The installation directory cannot be empty.\n' >&2; continue; }
+                install_dir="$custom"
+                if ((input_fd == 3)); then exec 3>&-; fi
+                return 0
+                ;;
+            *) printf 'Please choose 1, 2 or 3.\n' >&"$output_fd" ;;
+        esac
+    done
 }
 
 valid_version() {
@@ -69,7 +130,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 main() {
-    local version='' install_dir='/usr/local/bin' gh_proxy="${GH_PROXY:-}"
+    local version='' install_dir='/usr/local/bin' install_dir_explicit=0 install_user='' gh_proxy="${GH_PROXY:-}"
     local release_base="${CQS_RELEASE_BASE_URL:-https://github.com/ZyphrZero/CqShell/releases}"
     local command_name target asset resolved checksum_line expected checksum_name extra actual_version
     local metadata github_api='' download_base proxy_port
@@ -91,6 +152,7 @@ main() {
                     die '--install-dir requires an absolute path.'
                 fi
                 install_dir="$2"
+                install_dir_explicit=1
                 shift 2
                 ;;
             --gh-proxy)
@@ -104,6 +166,10 @@ main() {
             *) die "Unknown argument: $1 (see --help)." ;;
         esac
     done
+
+    if ((install_dir_explicit == 0)); then
+        choose_install_dir
+    fi
 
     [[ "$install_dir" == /* && "$install_dir" != *$'\n'* ]] || die '--install-dir must be an absolute path.'
     release_base="${release_base%/}"
@@ -177,7 +243,17 @@ main() {
     actual_version=$("$work_dir/cqs" --version) || die 'The downloaded program cannot run on this system.'
     [[ "$actual_version" == "cqs ${version#v}" ]] || die "Binary version mismatch: expected cqs ${version#v}, got $actual_version"
 
-    mkdir -p -- "$install_dir" || die 'Cannot create the installation directory. Use sudo or a writable --install-dir.'
+    if [[ -n "$install_user" && ! -d "$install_dir" ]]; then
+        local user_uid user_gid parent_dir
+        user_uid=$(id -u "$install_user") || die 'Cannot resolve the selected user account.'
+        user_gid=$(id -g "$install_user") || die 'Cannot resolve the selected user group.'
+        parent_dir="${install_dir%/*}"
+        mkdir -p -- "$parent_dir" || die 'Cannot create the user installation directory.'
+        install -d -m 755 -o "$user_uid" -g "$user_gid" -- "$install_dir" \
+            || die 'Cannot create the user installation directory.'
+    else
+        mkdir -p -- "$install_dir" || die 'Cannot create the installation directory. Use sudo or a writable --install-dir.'
+    fi
     [[ -w "$install_dir" ]] || die 'Installation directory is not writable. Use sudo or a writable --install-dir (see --help).'
     [[ ! -d "$install_dir/cqs" ]] || die "Destination is a directory: $install_dir/cqs"
     # Stage on the destination filesystem, then atomically replace the old binary (including symlinks).

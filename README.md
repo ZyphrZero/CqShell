@@ -10,7 +10,7 @@
 
 ## 下载与安装
 
-普通用户无需安装 Rust。发布版提供 Debian / Ubuntu 使用的 **x86_64（AMD64）和 ARM64** Linux 可执行文件，安装器自动选择架构、通过 HTTPS 下载并校验 SHA-256，默认安装全局命令 `/usr/local/bin/cqs`，也可用 `--install-dir` 指定目录。
+普通用户无需安装 Rust。发布版提供 Debian / Ubuntu 使用的 **x86_64（AMD64）和 ARM64** Linux 可执行文件，安装器自动选择架构、通过 HTTPS 下载并校验 SHA-256。有可用终端时可以选择 `/usr/local/bin`、`$HOME/.local/bin` 或自定义目录，直接回车保持 `/usr/local/bin`；没有可用终端时默认使用 `/usr/local/bin`，也可用 `--install-dir` 直接指定目录。
 
 在目标服务器执行以下两行，安装最新稳定版。**更换加速网关时，只需修改第一行的地址**：
 

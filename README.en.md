@@ -10,7 +10,7 @@ The `install.sh` instructions below install the Rust binary.
 
 ## Download and install
 
-End users do not need Rust. Releases provide **x86_64 (AMD64) and ARM64** Linux binaries for Debian / Ubuntu. The installer detects the architecture, downloads over HTTPS, checks SHA-256, verifies the executable version, and installs the global `/usr/local/bin/cqs` command by default. Use `--install-dir` to choose another directory.
+End users do not need Rust. Releases provide **x86_64 (AMD64) and ARM64** Linux binaries for Debian / Ubuntu. The installer detects the architecture, downloads over HTTPS, checks SHA-256, and verifies the executable version. When a terminal is available, choose `/usr/local/bin`, `$HOME/.local/bin`, or a custom directory; press Enter to keep `/usr/local/bin`. Without a terminal it uses `/usr/local/bin`, and `--install-dir` selects a directory directly.
 
 Run these two lines on the target server to install the latest stable release. **To change the download gateway, edit only the address on the first line**:
 

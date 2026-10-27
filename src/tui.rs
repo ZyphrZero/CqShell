@@ -381,6 +381,26 @@ impl App {
         }
         Ok(())
     }
+    fn cycle_language(&mut self) -> Result<()> {
+        let locales = self
+            .ctx
+            .i18n
+            .languages()
+            .into_iter()
+            .map(|(id, _)| id.to_owned())
+            .collect::<Vec<_>>();
+        let next = (locales
+            .iter()
+            .position(|id| id == self.ctx.i18n.locale())
+            .unwrap_or(0)
+            + 1)
+            % locales.len();
+        let locale = &locales[next];
+        let mut preferences = crate::config::Preferences::read(&self.ctx.paths.preferences, false)?;
+        preferences.language = Some(locale.clone());
+        preferences.write(&self.ctx.paths.preferences)?;
+        self.ctx.i18n.select(locale)
+    }
     fn optimization_jobs(&mut self) -> Result<Effect> {
         if !self.optimization() {
             return Ok(Effect::None);
@@ -641,22 +661,7 @@ impl App {
             KeyCode::Char('n' | 'N') => return Ok(Effect::PublicIp),
             KeyCode::Char('g' | 'G') => self.logs_open = !self.logs_open,
             KeyCode::F(2) => self.log_modal = !self.log_modal,
-            KeyCode::Char('l' | 'L') => {
-                let locales = self
-                    .ctx
-                    .i18n
-                    .languages()
-                    .into_iter()
-                    .map(|(id, _)| id.to_owned())
-                    .collect::<Vec<_>>();
-                let next = (locales
-                    .iter()
-                    .position(|id| id == self.ctx.i18n.locale())
-                    .unwrap_or(0)
-                    + 1)
-                    % locales.len();
-                self.ctx.i18n.select(&locales[next])?;
-            }
+            KeyCode::Char('l' | 'L') => self.cycle_language()?,
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = if self.focus == Focus::Actions {
                     Focus::Categories
@@ -975,6 +980,37 @@ mod tests {
             false,
         ))
     }
+
+    #[test]
+    fn language_switch_is_saved_and_preserves_other_preferences() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("locales")).unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        let preferences_path = ctx.paths.preferences.clone();
+        crate::config::Preferences {
+            language: None,
+            locale_dir: Some(temp.path().join("locales")),
+        }
+        .write(&preferences_path)
+        .unwrap();
+        ctx.i18n = crate::i18n::I18n::load(Some("en-US"), None).unwrap();
+        let mut app = App::new(ctx);
+
+        assert!(matches!(
+            app.key(key(KeyCode::Char('l'))).unwrap(),
+            Effect::None
+        ));
+
+        assert_eq!(app.ctx.i18n.locale(), "zh-CN");
+        let saved = crate::config::Preferences::read(&preferences_path, true).unwrap();
+        assert_eq!(saved.language.as_deref(), Some("zh-CN"));
+        assert_eq!(saved.locale_dir, Some(temp.path().join("locales")));
+        let restarted =
+            crate::i18n::I18n::load(saved.language.as_deref(), saved.locale_dir.as_deref())
+                .unwrap();
+        assert_eq!(restarted.locale(), "zh-CN");
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
