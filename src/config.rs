@@ -10,6 +10,8 @@ use std::{
 pub struct Preferences {
     pub language: Option<String>,
     pub locale_dir: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub category_order: Vec<String>,
 }
 
 impl Preferences {

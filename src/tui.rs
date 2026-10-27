@@ -43,7 +43,80 @@ const GROUPS: &[&str] = &[
     "optimization",
 ];
 const OPTIMIZATION_GROUP: usize = GROUPS.len() - 1;
+const DEFAULT_CATEGORY_ORDER: &[&str] = &[
+    "system",
+    "kernel",
+    "network",
+    "ssh",
+    "docker",
+    "clash",
+    "tools",
+    "ai",
+    "terminal",
+    "tests",
+    "app",
+    "optimization",
+];
 type Jobs = Vec<(Spec, Parameters)>;
+
+fn default_category_order() -> Vec<usize> {
+    let mut order = DEFAULT_CATEGORY_ORDER
+        .iter()
+        .map(|id| {
+            GROUPS
+                .iter()
+                .position(|group| group == id)
+                .expect("category ID")
+        })
+        .collect::<Vec<_>>();
+    for index in 0..GROUPS.len() {
+        if !order.contains(&index) {
+            order.push(index);
+        }
+    }
+    order
+}
+
+fn category_order_from_ids(ids: &[String]) -> Result<Vec<usize>> {
+    if ids.is_empty() {
+        return Ok(default_category_order());
+    }
+    if ids.len() > GROUPS.len() {
+        return Err(Error::new(
+            "error.config",
+            "category_order contains too many categories",
+        ));
+    }
+    let mut seen = [false; GROUPS.len()];
+    let mut order = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(index) = GROUPS.iter().position(|group| *group == id) else {
+            return Err(Error::new(
+                "error.config",
+                format!("unknown category: {id}"),
+            ));
+        };
+        if seen[index] {
+            return Err(Error::new(
+                "error.config",
+                format!("duplicate category: {id}"),
+            ));
+        }
+        seen[index] = true;
+        order.push(index);
+    }
+    for index in default_category_order() {
+        if !seen[index] {
+            order.push(index);
+        }
+    }
+    Ok(order)
+}
+
+fn load_category_order(ctx: &Context) -> Result<Vec<usize>> {
+    let preferences = crate::config::Preferences::read(&ctx.paths.preferences, false)?;
+    category_order_from_ids(&preferences.category_order)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Focus {
@@ -103,6 +176,7 @@ struct Confirmation {
 pub struct App {
     ctx: Context,
     group: usize,
+    category_order: Vec<usize>,
     positions: [usize; GROUPS.len()],
     focus: Focus,
     marked: BTreeSet<String>,
@@ -137,6 +211,7 @@ impl App {
         Self {
             ctx,
             group: 0,
+            category_order: default_category_order(),
             positions: [0; GROUPS.len()],
             focus: Focus::Actions,
             marked: BTreeSet::new(),
@@ -161,6 +236,16 @@ impl App {
             completed_since_refresh: false,
             viewport: Rect::new(0, 0, 120, 36),
         }
+    }
+    fn category_position(&self) -> usize {
+        self.category_order
+            .iter()
+            .position(|index| *index == self.group)
+            .unwrap_or(0)
+    }
+    fn set_category_order(&mut self, order: Vec<usize>) {
+        self.group = order[0];
+        self.category_order = order;
     }
     fn optimization(&self) -> bool {
         self.group == OPTIMIZATION_GROUP
@@ -605,6 +690,27 @@ impl App {
             let _ = confirm.reply.send(false);
         }
     }
+    fn reorder_category(&mut self, forward: bool) -> Result<()> {
+        let position = self.category_position();
+        let destination = if forward {
+            position + 1
+        } else {
+            position.saturating_sub(1)
+        };
+        if destination >= self.category_order.len() || destination == position {
+            return Ok(());
+        }
+        let mut order = self.category_order.clone();
+        order.swap(position, destination);
+        let mut preferences = crate::config::Preferences::read(&self.ctx.paths.preferences, false)?;
+        preferences.category_order = order
+            .iter()
+            .map(|index| GROUPS[*index].to_owned())
+            .collect();
+        preferences.write(&self.ctx.paths.preferences)?;
+        self.category_order = order;
+        Ok(())
+    }
     fn key(&mut self, key: KeyEvent) -> Result<Effect> {
         // Exit/cancel must remain reachable through logs and other modal views.
         let interrupt = matches!(key.code, KeyCode::Char('c' | 'C'))
@@ -656,6 +762,22 @@ impl App {
             self.request_cancel(false);
             return Ok(Effect::None);
         }
+        if self.worker.is_none()
+            && self.focus == Focus::Categories
+            && key.modifiers.contains(KeyModifiers::ALT)
+        {
+            match key.code {
+                KeyCode::Up => {
+                    self.reorder_category(false)?;
+                    return Ok(Effect::None);
+                }
+                KeyCode::Down => {
+                    self.reorder_category(true)?;
+                    return Ok(Effect::None);
+                }
+                _ => (),
+            }
+        }
         match key.code {
             KeyCode::Char('r' | 'R') => return Ok(Effect::Refresh),
             KeyCode::Char('n' | 'N') => return Ok(Effect::PublicIp),
@@ -681,14 +803,17 @@ impl App {
                 if self.focus == Focus::Actions {
                     self.positions[self.group] = 0;
                 } else {
-                    self.group = 0;
+                    self.group = self.category_order[0];
                 }
             }
             KeyCode::End => {
                 if self.focus == Focus::Actions {
                     self.positions[self.group] = self.items().len() - 1;
                 } else {
-                    self.group = GROUPS.len() - 1;
+                    self.group = *self
+                        .category_order
+                        .last()
+                        .expect("category order is not empty");
                 }
             }
             KeyCode::Char('q' | 'Q') if self.worker.is_none() => return Ok(Effect::Quit),
@@ -704,11 +829,13 @@ impl App {
     }
     fn move_selection(&mut self, forward: bool) {
         if self.focus == Focus::Categories {
-            self.group = if forward {
-                (self.group + 1) % GROUPS.len()
+            let position = self.category_position();
+            let next = if forward {
+                (position + 1) % self.category_order.len()
             } else {
-                (self.group + GROUPS.len() - 1) % GROUPS.len()
+                (position + self.category_order.len() - 1) % self.category_order.len()
             };
+            self.group = self.category_order[next];
         } else {
             let n = self.items().len();
             let index = &mut self.positions[self.group];
@@ -811,12 +938,12 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) if categories.contains(point) => {
                 let row = event.row.saturating_sub(layout.categories.y + 1) as usize;
                 let offset = view::list_offset(
-                    self.group,
-                    GROUPS.len(),
+                    self.category_position(),
+                    self.category_order.len(),
                     layout.categories.height.saturating_sub(2) as usize,
                 );
                 if row + offset < GROUPS.len() {
-                    self.group = row + offset;
+                    self.group = self.category_order[row + offset];
                     self.focus = Focus::Categories;
                 }
             }
@@ -909,6 +1036,7 @@ impl Drop for TerminalGuard {
 }
 
 pub fn run(ctx: Context) -> Result<()> {
+    let category_order = load_category_order(&ctx)?;
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = leave();
@@ -921,6 +1049,7 @@ pub fn run(ctx: Context) -> Result<()> {
     terminal.clear()?;
     let monitor = Monitor::start(&ctx);
     let mut app = App::new(ctx);
+    app.set_category_order(category_order);
     let result = (|| {
         loop {
             app.receive();
@@ -990,6 +1119,7 @@ mod tests {
         crate::config::Preferences {
             language: None,
             locale_dir: Some(temp.path().join("locales")),
+            category_order: vec!["kernel".into(), "system".into()],
         }
         .write(&preferences_path)
         .unwrap();
@@ -1005,10 +1135,78 @@ mod tests {
         let saved = crate::config::Preferences::read(&preferences_path, true).unwrap();
         assert_eq!(saved.language.as_deref(), Some("zh-CN"));
         assert_eq!(saved.locale_dir, Some(temp.path().join("locales")));
+        assert_eq!(saved.category_order, ["kernel", "system"]);
         let restarted =
             crate::i18n::I18n::load(saved.language.as_deref(), saved.locale_dir.as_deref())
                 .unwrap();
         assert_eq!(restarted.locale(), "zh-CN");
+    }
+
+    #[test]
+    fn category_order_defaults_for_legacy_preferences_and_rejects_invalid_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        std::fs::write(&ctx.paths.preferences, "language = \"en-US\"\n").unwrap();
+        assert_eq!(load_category_order(&ctx).unwrap(), default_category_order());
+        assert_eq!(category_order_from_ids(&["kernel".into()]).unwrap()[0], 2);
+
+        let mut unknown = DEFAULT_CATEGORY_ORDER
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect::<Vec<_>>();
+        unknown[0] = "unknown".into();
+        assert!(category_order_from_ids(&unknown).is_err());
+
+        let mut duplicate = DEFAULT_CATEGORY_ORDER
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect::<Vec<_>>();
+        duplicate[1] = duplicate[0].clone();
+        assert!(category_order_from_ids(&duplicate).is_err());
+    }
+
+    #[test]
+    fn category_reordering_persists_stable_ids_and_preserves_other_preferences() {
+        let temp = tempfile::tempdir().unwrap();
+        let locale_dir = temp.path().join("locales");
+        std::fs::create_dir(&locale_dir).unwrap();
+        let ctx = crate::tests::context(temp.path());
+        let preferences_path = ctx.paths.preferences.clone();
+        crate::config::Preferences {
+            language: Some("en-US".into()),
+            locale_dir: Some(locale_dir.clone()),
+            category_order: Vec::new(),
+        }
+        .write(&preferences_path)
+        .unwrap();
+
+        let mut app = App::new(ctx);
+        let tools = GROUPS.iter().position(|group| *group == "tools").unwrap();
+        app.group = tools;
+        app.focus = Focus::Categories;
+        app.positions[tools] = 2;
+        assert_eq!(app.category_position(), 6);
+        assert!(matches!(
+            app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT))
+                .unwrap(),
+            Effect::None
+        ));
+
+        assert_eq!(app.group, tools);
+        assert_eq!(app.selected(), 2);
+        assert_eq!(app.category_order[5], tools);
+        let saved = crate::config::Preferences::read(&preferences_path, true).unwrap();
+        assert_eq!(saved.language.as_deref(), Some("en-US"));
+        assert_eq!(saved.locale_dir, Some(locale_dir));
+        assert_eq!(
+            saved.category_order[5], "tools",
+            "the moved category is stored by stable ID"
+        );
+
+        let mut restarted = App::new(crate::tests::context(temp.path()));
+        restarted.set_category_order(load_category_order(&restarted.ctx).unwrap());
+        assert_eq!(restarted.category_order, app.category_order);
+        assert_eq!(restarted.group, app.category_order[0]);
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -1115,7 +1313,10 @@ mod tests {
         app.key(key(KeyCode::Tab)).unwrap();
         assert_eq!(app.focus, Focus::Categories);
         app.key(key(KeyCode::Down)).unwrap();
-        assert_eq!(app.group, 1);
+        assert_eq!(
+            app.group,
+            GROUPS.iter().position(|group| *group == "kernel").unwrap()
+        );
         app.key(key(KeyCode::Enter)).unwrap();
         assert_eq!(app.focus, Focus::Actions);
         app.key(key(KeyCode::Esc)).unwrap();

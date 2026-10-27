@@ -12,6 +12,20 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+const CANVAS: Color = Color::Rgb(9, 14, 22);
+const PANEL: Color = Color::Rgb(17, 27, 39);
+const PANEL_ALT: Color = Color::Rgb(24, 38, 53);
+const BORDER: Color = Color::Rgb(61, 82, 101);
+const BORDER_ACTIVE: Color = Color::Rgb(69, 205, 182);
+const TEXT: Color = Color::Rgb(229, 237, 243);
+const MUTED: Color = Color::Rgb(145, 162, 176);
+const TEAL: Color = Color::Rgb(69, 205, 182);
+const BLUE: Color = Color::Rgb(112, 170, 255);
+const AMBER: Color = Color::Rgb(255, 190, 94);
+const VIOLET: Color = Color::Rgb(181, 145, 255);
+const GREEN: Color = Color::Rgb(93, 216, 136);
+const RED: Color = Color::Rgb(255, 117, 133);
+
 pub(super) struct Regions {
     pub header: Rect,
     pub environment: Rect,
@@ -43,7 +57,7 @@ impl Regions {
         ])
         .split(area);
         let body =
-            Layout::horizontal([Constraint::Length(18), Constraint::Min(30)]).split(vertical[3]);
+            Layout::horizontal([Constraint::Length(22), Constraint::Min(30)]).split(vertical[3]);
         let (actions, details) = if area.width >= 112 {
             let columns =
                 Layout::horizontal([Constraint::Length(44), Constraint::Min(25)]).split(body[1]);
@@ -72,26 +86,38 @@ fn block(title: impl Into<String>, active: bool) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .title(title.into())
-        .border_style(Style::default().fg(if active { Color::Cyan } else { Color::DarkGray }))
+        .title_style(
+            Style::default()
+                .fg(if active { TEAL } else { TEXT })
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(PANEL))
+        .border_style(Style::default().fg(if active { BORDER_ACTIVE } else { BORDER }))
 }
 fn highlight(active: bool) -> Style {
+    highlight_with(active, TEAL)
+}
+fn highlight_with(active: bool, accent: Color) -> Style {
     if active {
         Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
+            .fg(CANVAS)
+            .bg(accent)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White).bg(Color::DarkGray)
+        Style::default().fg(TEXT).bg(PANEL_ALT)
     }
 }
 fn phase_color(phase: Phase) -> Color {
     match phase {
-        Phase::Completed => Color::Green,
-        Phase::Failed => Color::Red,
-        Phase::Cancelled | Phase::Cancelling => Color::Yellow,
-        Phase::Running => Color::Cyan,
-        Phase::Idle => Color::DarkGray,
+        Phase::Completed => GREEN,
+        Phase::Failed => RED,
+        Phase::Cancelled | Phase::Cancelling => AMBER,
+        Phase::Running => BLUE,
+        Phase::Idle => MUTED,
     }
+}
+fn metric_color(index: usize) -> Color {
+    [TEAL, BLUE, AMBER, VIOLET][index % 4]
 }
 pub(super) fn list_offset(selected: usize, count: usize, height: usize) -> usize {
     selected
@@ -141,10 +167,19 @@ fn bytes(value: u64) -> String {
         format!("{:.0} MiB", value as f64 / 1048576.0)
     }
 }
+fn meter(percent: f64, width: usize) -> String {
+    let filled = (percent.clamp(0.0, 100.0) / 100.0 * width as f64).round() as usize;
+    format!(
+        "{}{}",
+        "█".repeat(filled),
+        "░".repeat(width.saturating_sub(filled))
+    )
+}
 fn usage(value: &Reading<Usage>, i: &I18n) -> String {
     match value {
         Reading::Value(v) => format!(
-            "{} / {} ({:.0}%)",
+            "{} {} / {} ({:.0}%)",
+            meter(v.percent(), 4),
             bytes(v.used),
             bytes(v.total),
             v.percent()
@@ -169,8 +204,30 @@ fn uptime(value: &Reading<u64>, i: &I18n) -> String {
 }
 fn cpu_usage(app: &App) -> String {
     match app.snapshot.local.cpu_usage {
-        Reading::Value(value) => format!("{value:.1}%"),
+        Reading::Value(value) => format!("{} {value:.1}%", meter(value as f64, 4)),
         _ => text(&app.snapshot.local.cpu_usage, &app.ctx.i18n),
+    }
+}
+fn kernel_status(value: &Reading<String>, i: &I18n) -> String {
+    match value {
+        Reading::Value(version) => i.format("dash.kernel_running", &[("version", version)]),
+        _ => text(value, i),
+    }
+}
+fn metric_value_color(key: &str, app: &App) -> Color {
+    match key {
+        "dash.cpu_usage" => RED,
+        "dash.memory" => VIOLET,
+        "dash.disk" => AMBER,
+        "dash.swap" => BLUE,
+        "dash.kernel_status" if matches!(&app.snapshot.local.kernel, Reading::Value(_)) => GREEN,
+        "dash.terminal_proxy" => match &app.snapshot.local.terminal_proxy {
+            Reading::Value(true) => GREEN,
+            Reading::Value(false) => MUTED,
+            _ => TEXT,
+        },
+        "dash.ipv4" | "dash.ipv6" => TEAL,
+        _ => TEXT,
     }
 }
 fn bbr(app: &App) -> String {
@@ -197,6 +254,26 @@ fn bbr(app: &App) -> String {
     };
     format!("{enabled} · {available}{version}")
 }
+fn network_summary(app: &App) -> String {
+    let i = &app.ctx.i18n;
+    let data = &app.snapshot.local;
+    let mut parts = Vec::new();
+    for value in [&data.congestion, &data.qdisc] {
+        if !matches!(value, Reading::NotApplicable) {
+            parts.push(text(value, i));
+        }
+    }
+    if !matches!(data.bbr_available, Reading::NotApplicable)
+        || !matches!(data.bbr_version, Reading::NotApplicable)
+    {
+        parts.push(bbr(app));
+    }
+    if parts.is_empty() {
+        i.text("dash.na").into()
+    } else {
+        parts.join(" / ")
+    }
+}
 type Metric = (&'static str, String);
 fn metric_rows(app: &App) -> Vec<(Metric, Metric)> {
     let i = &app.ctx.i18n;
@@ -208,7 +285,7 @@ fn metric_rows(app: &App) -> Vec<(Metric, Metric)> {
             ("dash.os", text(&data.os, i)),
         ),
         (
-            ("dash.kernel", text(&data.kernel, i)),
+            ("dash.kernel_status", kernel_status(&data.kernel, i)),
             (
                 "dash.arch",
                 format!("{} · {}", data.arch, uptime(&data.uptime, i)),
@@ -230,17 +307,18 @@ fn metric_rows(app: &App) -> Vec<(Metric, Metric)> {
             ("dash.timezone", text(&data.timezone, i)),
         ),
         (
+            (
+                "dash.terminal_proxy",
+                boolean(&data.terminal_proxy, i, "status.enabled", "status.disabled"),
+            ),
+            ("dash.isp", text(&public.isp, i)),
+        ),
+        (
             ("dash.ipv4", text(&public.ipv4, i)),
             ("dash.ipv6", text(&public.ipv6, i)),
         ),
         (
-            ("dash.isp", text(&public.isp, i)),
-            (
-                "dash.network",
-                format!("{} / {}", text(&data.congestion, i), text(&data.qdisc, i)),
-            ),
-        ),
-        (
+            ("dash.network", network_summary(app)),
             (
                 "dash.tcp",
                 boolean(
@@ -250,7 +328,6 @@ fn metric_rows(app: &App) -> Vec<(Metric, Metric)> {
                     "dash.not_configured",
                 ),
             ),
-            ("dash.bbr", bbr(app)),
         ),
     ]
 }
@@ -278,19 +355,31 @@ fn draw_dashboard(app: &App, f: &mut Frame, area: Rect) {
     for (column, rect) in columns.iter().enumerate() {
         let lines = rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(row_index, row)| {
                 let (key, value) = if column == 0 { &row.0 } else { &row.1 };
                 let label = format!(" {}: ", i.text(key));
                 Line::from(vec![
-                    Span::styled(label.clone(), Style::default().fg(Color::Cyan)),
-                    Span::raw(clipped(
-                        value,
-                        (rect.width as usize).saturating_sub(label.width() + 1),
-                    )),
+                    Span::styled(
+                        label.clone(),
+                        Style::default()
+                            .fg(metric_color(row_index))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        clipped(
+                            value,
+                            (rect.width as usize).saturating_sub(label.width() + 1),
+                        ),
+                        Style::default().fg(metric_value_color(key, app)),
+                    ),
                 ])
             })
             .collect::<Vec<_>>();
-        f.render_widget(Paragraph::new(lines), *rect);
+        f.render_widget(
+            Paragraph::new(lines).style(Style::default().bg(PANEL)),
+            *rect,
+        );
     }
 }
 fn action_description(app: &App) -> Vec<Line<'static>> {
@@ -299,16 +388,14 @@ fn action_description(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::styled(
             i.text(&spec.label()).to_owned(),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(TEAL).add_modifier(Modifier::BOLD),
         ),
         Line::default(),
     ];
     if let Err(error) = app.available(spec) {
         lines.push(Line::styled(
             i.text("ui.unavailable").to_owned(),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(AMBER),
         ));
         lines.push(Line::from(i.error(&error)));
         lines.push(Line::default());
@@ -325,7 +412,7 @@ fn action_description(app: &App) -> Vec<Line<'static>> {
             }),
             i.text(if spec.root { "ui.root" } else { "ui.user" })
         ),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(MUTED),
     ));
     if !spec.fields.is_empty() {
         lines.push(Line::default());
@@ -355,20 +442,36 @@ fn action_description(app: &App) -> Vec<Line<'static>> {
             "ui.action_details"
         })
         .to_owned(),
-        Style::default().fg(Color::Cyan),
+        Style::default().fg(TEAL),
     ));
     lines
 }
 fn draw_lists(app: &App, f: &mut Frame, regions: &Regions) {
     let i = &app.ctx.i18n;
-    let items = super::GROUPS
+    let items = app
+        .category_order
         .iter()
-        .map(|g| ListItem::new(i.text(&format!("group.{g}"))))
+        .enumerate()
+        .map(|(display_index, group_index)| {
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    "● ",
+                    Style::default()
+                        .fg(metric_color(display_index))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    i.text(&format!("group.{}", super::GROUPS[*group_index])),
+                    Style::default().fg(TEXT),
+                ),
+            ]))
+        })
         .collect::<Vec<_>>();
-    let mut state = ListState::default().with_selected(Some(app.group));
+    let category_position = app.category_position();
+    let mut state = ListState::default().with_selected(Some(category_position));
     *state.offset_mut() = list_offset(
-        app.group,
-        super::GROUPS.len(),
+        category_position,
+        app.category_order.len(),
         regions.categories.height.saturating_sub(2) as usize,
     );
     f.render_stateful_widget(
@@ -377,7 +480,7 @@ fn draw_lists(app: &App, f: &mut Frame, regions: &Regions) {
                 i.text("ui.categories"),
                 app.focus == Focus::Categories,
             ))
-            .highlight_style(highlight(app.focus == Focus::Categories))
+            .highlight_style(highlight_with(app.focus == Focus::Categories, AMBER))
             .highlight_symbol("› "),
         regions.categories,
         &mut state,
@@ -386,24 +489,27 @@ fn draw_lists(app: &App, f: &mut Frame, regions: &Regions) {
     let list = specs
         .iter()
         .map(|spec| {
-            let label = if app.optimization() {
-                format!(
-                    "[{}] {}",
-                    if app.marked.contains(spec.id) {
-                        "x"
-                    } else {
-                        " "
-                    },
-                    i.text(&spec.label())
-                )
+            let available = app.available(spec).is_ok();
+            let label = i.text(&spec.label()).to_owned();
+            if app.optimization() {
+                let marked = app.marked.contains(spec.id);
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        if marked { "[x] " } else { "[ ] " },
+                        Style::default().fg(if marked { AMBER } else { MUTED }),
+                    ),
+                    Span::styled(
+                        label,
+                        Style::default().fg(if available { TEXT } else { MUTED }),
+                    ),
+                ]))
             } else {
-                i.text(&spec.label()).into()
-            };
-            ListItem::new(label).style(if app.available(spec).is_err() {
-                Style::default().fg(Color::DarkGray)
-            } else {
-                Style::default()
-            })
+                ListItem::new(label).style(Style::default().fg(if available {
+                    TEXT
+                } else {
+                    MUTED
+                }))
+            }
         })
         .collect::<Vec<_>>();
     let mut state = ListState::default().with_selected(Some(app.selected()));
@@ -461,7 +567,12 @@ fn draw_logs(app: &App, f: &mut Frame, area: Rect) {
         app.task_title(),
         i.text(app.phase.key())
     );
-    f.render_widget(Paragraph::new(lines).block(block(title, false)), area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().fg(TEXT).bg(PANEL))
+            .block(block(title, app.phase != Phase::Idle)),
+        area,
+    );
 }
 pub(super) fn log_rows(logs: &std::collections::VecDeque<String>, width: usize) -> Vec<String> {
     if width == 0 {
@@ -599,7 +710,7 @@ fn draw_form(app: &App, f: &mut Frame) {
         } else {
             "ui.form_single_title"
         }))
-        .style(Style::default().fg(Color::DarkGray)),
+        .style(Style::default().fg(MUTED)),
         sections[0],
     );
     let n = form.values.len();
@@ -628,7 +739,7 @@ fn draw_form(app: &App, f: &mut Frame) {
                 Paragraph::new(format!(" {value}")).style(if active {
                     highlight(true)
                 } else {
-                    Style::default().bg(Color::DarkGray)
+                    Style::default().fg(TEXT).bg(PANEL_ALT)
                 }),
                 input,
             );
@@ -643,7 +754,7 @@ fn draw_form(app: &App, f: &mut Frame) {
                 Paragraph::new(format!(" ‹ {} ›", form.values[index].text)).style(if active {
                     highlight(true)
                 } else {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(BLUE)
                 }),
                 input,
             );
@@ -653,7 +764,7 @@ fn draw_form(app: &App, f: &mut Frame) {
         f.render_widget(
             Paragraph::new(error.as_str())
                 .wrap(Wrap { trim: true })
-                .style(Style::default().fg(Color::Red)),
+                .style(Style::default().fg(RED)),
             sections[2],
         );
     }
@@ -669,7 +780,7 @@ fn draw_form(app: &App, f: &mut Frame) {
                 if form.index == n {
                     highlight(true)
                 } else {
-                    Style::default().fg(Color::Cyan)
+                    Style::default().fg(TEAL)
                 },
             ),
             Span::styled(
@@ -762,7 +873,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
     for (key, value) in [
         ("dash.host", &data.host),
         ("dash.os", &data.os),
-        ("dash.kernel", &data.kernel),
+        ("dash.kernel_status", &data.kernel),
         ("dash.cpu", &data.cpu),
         ("dash.timezone", &data.timezone),
         ("dash.network", &data.congestion),
@@ -779,7 +890,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         lines.push(Line::default());
         lines.push(Line::styled(
             i.text("dash.diagnostics").to_owned(),
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(AMBER),
         ));
         lines.extend(errors.into_iter().map(Line::from));
     }
@@ -788,9 +899,12 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
 pub(super) fn draw(app: &App, f: &mut Frame) {
     let i = &app.ctx.i18n;
     let area = f.area();
+    f.render_widget(Block::default().style(Style::default().bg(CANVAS)), area);
     if area.width < 80 || area.height < 24 {
         f.render_widget(
-            Paragraph::new(i.text("ui.small")).wrap(Wrap { trim: true }),
+            Paragraph::new(i.text("ui.small"))
+                .style(Style::default().fg(TEXT).bg(CANVAS))
+                .wrap(Wrap { trim: true }),
             area,
         );
         return;
@@ -801,15 +915,20 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
             Span::styled(
                 format!(" CqShell {} ", env!("CARGO_PKG_VERSION")),
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(TEAL)
+                    .bg(PANEL)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(format!(
-                "  {}  ·  {}",
-                i.text(&format!("group.{}", super::GROUPS[app.group])),
-                i.locale()
-            )),
-        ])),
+            Span::styled(
+                format!(
+                    "  {}  /  {}",
+                    i.text(&format!("group.{}", super::GROUPS[app.group])),
+                    i.locale()
+                ),
+                Style::default().fg(MUTED).bg(PANEL),
+            ),
+        ]))
+        .style(Style::default().bg(PANEL)),
         regions.header,
     );
     let environment = if app.platform_error.is_some() {
@@ -820,11 +939,15 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
         i.text("ui.user_banner")
     };
     f.render_widget(
-        Paragraph::new(environment).style(Style::default().fg(if app.platform_error.is_some() {
-            Color::Yellow
-        } else {
-            Color::DarkGray
-        })),
+        Paragraph::new(format!("  {}", environment)).style(
+            Style::default()
+                .fg(if app.platform_error.is_some() {
+                    AMBER
+                } else {
+                    MUTED
+                })
+                .bg(CANVAS),
+        ),
         regions.environment,
     );
     draw_dashboard(app, f, regions.dashboard);
@@ -861,10 +984,13 @@ pub(super) fn draw(app: &App, f: &mut Frame) {
             } else {
                 "dash.refresh_hint"
             }),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(MUTED),
         ));
     }
-    f.render_widget(Paragraph::new(lines), regions.footer);
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().fg(TEXT).bg(CANVAS)),
+        regions.footer,
+    );
     if app.overview {
         let rect = popup(area, 112, area.height.saturating_sub(2));
         f.render_widget(Clear, rect);
@@ -934,6 +1060,8 @@ mod tests {
             let text = render(&app, width, height);
             assert!(text.contains("Host:"));
             assert!(text.contains("CPU:"));
+            assert!(text.contains("Kernelstatus:"));
+            assert!(text.contains("Terminalproxy:"));
             assert!(text.contains("IPv4:"));
             assert!(!text.contains("[x]"));
             assert!(!text.contains("[]"));
@@ -942,6 +1070,31 @@ mod tests {
         let text = render(&app, 120, 40);
         assert!(text.contains("[]"));
         assert!(text.contains("Selected:0"));
+    }
+    #[test]
+    fn network_summary_collapses_linux_only_fields_on_other_platforms() {
+        let mut app = App::new(Context::new(
+            Paths::from_env().unwrap(),
+            I18n::load(Some("en-US"), None).unwrap(),
+            false,
+        ));
+        app.snapshot.local.congestion = Reading::NotApplicable;
+        app.snapshot.local.qdisc = Reading::NotApplicable;
+        app.snapshot.local.bbr_available = Reading::NotApplicable;
+        app.snapshot.local.bbr_version = Reading::NotApplicable;
+
+        let summary = metric_rows(&app)
+            .into_iter()
+            .flat_map(|row| [row.0, row.1])
+            .find_map(|(key, value)| (key == "dash.network").then_some(value))
+            .unwrap();
+        assert_eq!(summary, app.ctx.i18n.text("dash.na"));
+
+        app.snapshot.local.congestion = Reading::Value("bbr".into());
+        app.snapshot.local.qdisc = Reading::Value("fq".into());
+        app.snapshot.local.bbr_available = Reading::Value(true);
+        app.snapshot.local.bbr_version = Reading::Value("v3".into());
+        assert_eq!(network_summary(&app), "bbr / fq / Enabled · available / v3");
     }
     #[test]
     fn logs_expand_with_the_terminal_without_crowding_navigation() {
