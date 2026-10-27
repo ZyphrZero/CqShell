@@ -62,9 +62,14 @@ pub struct Field {
     pub name: &'static str,
     pub default: &'static str,
     pub choices: &'static [&'static str],
+    pub allow_custom: bool,
     pub required: bool,
 }
 impl Field {
+    pub fn editable(&self) -> bool {
+        self.choices.is_empty() || self.allow_custom
+    }
+
     pub fn label(&self) -> String {
         format!("field.{}", self.name)
     }
@@ -79,6 +84,7 @@ fn field(
         name,
         default,
         choices,
+        allow_custom: false,
         required,
     }
 }
@@ -115,7 +121,7 @@ impl Spec {
                 .find(|f| f.name == key)
                 .ok_or_else(|| Error::new("error.input", format!("{}: {key}", self.id)))?;
             if value.chars().any(char::is_control)
-                || (!field.choices.is_empty() && !field.choices.contains(&value.as_str()))
+                || (!field.editable() && !field.choices.contains(&value.as_str()))
             {
                 return Err(Error::new("error.input", format!("{key}={value}")));
             }
@@ -281,7 +287,40 @@ pub fn specs() -> Vec<Spec> {
         true,
         true,
         false,
-        vec![field("timezone", "Asia/Shanghai", &[], true)],
+        vec![Field {
+            allow_custom: true,
+            ..field(
+                "timezone",
+                "Asia/Shanghai",
+                &[
+                    "Asia/Shanghai",
+                    "Asia/Hong_Kong",
+                    "Asia/Taipei",
+                    "Asia/Singapore",
+                    "Asia/Tokyo",
+                    "Asia/Seoul",
+                    "Asia/Bangkok",
+                    "Asia/Kolkata",
+                    "Asia/Dubai",
+                    "America/New_York",
+                    "America/Chicago",
+                    "America/Denver",
+                    "America/Los_Angeles",
+                    "America/Toronto",
+                    "Europe/London",
+                    "Europe/Berlin",
+                    "Europe/Paris",
+                    "Europe/Amsterdam",
+                    "Europe/Helsinki",
+                    "Europe/Moscow",
+                    "Australia/Sydney",
+                    "Australia/Perth",
+                    "Pacific/Auckland",
+                    "UTC",
+                ],
+                true,
+            )
+        }],
     );
     add(
         "swap.create",

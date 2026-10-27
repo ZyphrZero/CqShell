@@ -109,6 +109,8 @@ Action IDs are language-independent. In `list --json`, `available` indicates tha
 
 Use **Network → Enable BBR in the running kernel** to configure its BBR implementation, including BBRv3 when supplied by that kernel. TCP tuning is available on the same page. **Kernel → Install BBRv3 kernel** supports Standard / Max and the latest matching or a specified version. Reboot into the installed kernel, then inspect BBR status and configure the queue.
 
+After installation and boot checks succeed, both Rust and Shell show the running kernel, target kernel and verification steps, then ask whether to reboot now. Cancel or leave the answer blank to keep the installation and run `sudo reboot` later. `--yes` never automatically approves a reboot; noninteractive runs only print manual instructions. After reconnecting, check the target kernel with `uname -r`; if the old kernel is still running, check the GRUB boot selection.
+
 IP quality checks use [xykt/IPQuality](https://github.com/xykt/IPQuality): open **Tests → IP quality · xykt/IPQuality**, or run `cqs run test.ip --set ip_family=ipv4`. `ip_family` accepts `dual` (default), `ipv4`, or `ipv6`; `full_ip=on` explicitly reveals the full IP in the report. Output follows the Chinese/English UI language. Privacy mode (`-p`) disables online report upload, while checks still contact external providers. CqShell does not pass upstream `-y` or `-n`; dependency installation remains an upstream prompt. The pinned entry script is checksum- and syntax-checked before taking over the interactive Debian/Ubuntu terminal. See [integration details](docs/IPQUALITY.md).
 
 ## System mirrors
@@ -152,7 +154,7 @@ cqs run ai.codex.install
 cqs run ai.status
 ```
 
-The **AI tools** category downloads official **Linux x86_64 / ARM64 standalone binaries** for all three tools. No Node.js/npm or remote install scripts are used. Pi retains its complete archive, including themes and WASM resources; Codex uses the complete `codex-package` with helper programs and sandbox resources; Claude Code uses its platform binary. Only curl, CA certificates and network access are needed for installation. Run as the intended user without `sudo`; direct root logins can install for root. TUI installs run with progress logs; unattended CLI installation is supported, for example `cqs --yes run ai.pi.install`.
+The **Agent tools** category downloads official **Linux x86_64 / ARM64 standalone binaries** for all three tools. No Node.js/npm or remote install scripts are used. Pi retains its complete archive, including themes and WASM resources; Codex uses the complete `codex-package` with helper programs and sandbox resources; Claude Code uses its platform binary. Only curl, CA certificates and network access are needed for installation. Run as the intended user without `sudo`; direct root logins can install for root. TUI installs run with progress logs; unattended CLI installation is supported, for example `cqs --yes run ai.pi.install`.
 
 The confirmation shows the stable version, source, SHA-256 and command path. Downloads are checked against GitHub Release asset digests for Pi/Codex and the official manifest for Claude Code. Size, ELF architecture, package layout and actual `--version` output must pass before switching the command. Extraction rejects escaping paths, links and special files. Failures are reported without falling back to npm.
 
@@ -164,7 +166,7 @@ Distribution sources checked on 2026-10-27: [Pi releases](https://github.com/ear
 
 Features include system overview, public IP/ISP lookup, package updates, cleanup, timezone, swap, fail2ban, BBR/TCP tuning, third-party kernel management, SSH configuration, Docker, prompt customization, and server benchmarks.
 
-Configuration operations retain snapshots, locks, validation and recovery handling. Kernel installation supports Debian 12+ / Ubuntu 24.04+ on amd64 / arm64, with an independent kernel environment and GRUB. Reboot manually after installation. WSL and containers cannot replace the host kernel; removal targets only a specified non-running kernel.
+Configuration operations retain snapshots, locks, validation and recovery handling. Kernel installation supports Debian 12+ / Ubuntu 24.04+ on amd64 / arm64, with an independent kernel environment and GRUB. After installation, confirm a reboot or reboot manually later. WSL and containers cannot replace the host kernel; removal targets only a specified non-running kernel.
 
 See [migration notes](docs/MIGRATION.md), [architecture/testing](docs/TECHNICAL.md), and [localization](docs/I18N.md). Existing network/prompt recovery baselines remain readable. Do not run old and new applications concurrently.
 

@@ -229,7 +229,13 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches) -> Result<()> {
         Some(("list", _)) => {
             let specs = actions::specs();
             if args.get_flag("json") {
-                let rows = specs.iter().map(|s| serde_json::json!({"id":s.id, "group":s.group, "label":ctx.i18n.text(&s.label()), "description":ctx.i18n.text(&s.description()), "root":s.root, "mutates":s.changes, "interactive":s.external, "available":true, "unavailable_reason":null, "parameters":s.fields.iter().map(|f| serde_json::json!({"name":f.name,"default":f.default,"choices":f.choices,"required":f.required})).collect::<Vec<_>>() })).collect::<Vec<_>>();
+                let rows = specs.iter().map(|s| serde_json::json!({"id":s.id, "group":s.group, "label":ctx.i18n.text(&s.label()), "description":ctx.i18n.text(&s.description()), "root":s.root, "mutates":s.changes, "interactive":s.external, "available":true, "unavailable_reason":null, "parameters":s.fields.iter().map(|f| {
+                    let mut parameter = serde_json::json!({"name":f.name,"default":f.default,"choices":f.choices,"required":f.required});
+                    if f.allow_custom {
+                        parameter["allow_custom"] = true.into();
+                    }
+                    parameter
+                }).collect::<Vec<_>>() })).collect::<Vec<_>>();
                 println!("{}", serde_json::to_string_pretty(&rows)?);
             } else {
                 for spec in specs {

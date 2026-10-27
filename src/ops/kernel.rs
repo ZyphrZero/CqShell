@@ -436,7 +436,25 @@ pub(crate) fn install_verified(
             format!("{error}; {}", backup.display()),
         ));
     }
-    ctx.message("notice.kernel_installed", &release.kernel);
+    reboot_after_install(ctx, &release.kernel, running)
+}
+
+pub(crate) fn reboot_after_install(ctx: &Context, installed: &str, running: &str) -> Result<()> {
+    ctx.message("notice.kernel_installed", installed);
+    ctx.message("notice.running_kernel", running);
+    ctx.message("notice.kernel_verify", installed);
+    if ctx.events.is_some() || ctx.interactive {
+        // Installing with --yes must not also authorize a host reboot.
+        let mut prompt = ctx.clone();
+        prompt.yes = false;
+        match prompt.confirm("confirm.kernel_reboot", installed, "YES") {
+            Ok(()) => return ctx.run("reboot", &[]),
+            // Deferring a reboot does not cancel the completed installation.
+            Err(error) if error.key == "error.cancelled" => (),
+            Err(error) => return Err(error),
+        }
+    }
+    ctx.log(ctx.i18n.text("notice.kernel_reboot_later"));
     Ok(())
 }
 

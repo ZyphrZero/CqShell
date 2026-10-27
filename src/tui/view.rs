@@ -27,7 +27,9 @@ impl Regions {
         let log_height =
             if area.height >= 34 && app.logs_open && (app.worker.is_some() || !app.logs.is_empty())
             {
-                9
+                // Share the space below the dashboard with logs, keeping 10 menu rows.
+                let content_height = area.height.saturating_sub(15);
+                ((u32::from(content_height) * 3 / 5) as u16).min(content_height.saturating_sub(10))
             } else {
                 0
             };
@@ -619,7 +621,7 @@ fn draw_form(app: &App, f: &mut Frame) {
             )),
             label,
         );
-        if field.choices.is_empty() {
+        if field.editable() {
             let (value, cursor) =
                 form.values[index].visible(input.width.saturating_sub(2) as usize);
             f.render_widget(
@@ -942,7 +944,7 @@ mod tests {
         assert!(text.contains("Selected:0"));
     }
     #[test]
-    fn empty_logs_do_not_reserve_a_panel_and_large_logs_are_bounded() {
+    fn logs_expand_with_the_terminal_without_crowding_navigation() {
         let mut app = App::new(Context::new(
             Paths::from_env().unwrap(),
             I18n::load(Some("en-US"), None).unwrap(),
@@ -951,7 +953,19 @@ mod tests {
         assert_eq!(Regions::new(Rect::new(0, 0, 160, 50), &app).logs.height, 0);
         app.logs_open = true;
         app.log("working");
-        assert_eq!(Regions::new(Rect::new(0, 0, 160, 50), &app).logs.height, 9);
+        let large = Regions::new(Rect::new(0, 0, 160, 50), &app);
+        assert!(large.logs.height >= 20);
+        assert!(large.categories.height >= 10);
+        for height in [34, 40, 50, 80] {
+            let regions = Regions::new(Rect::new(0, 0, 160, height), &app);
+            assert!(regions.logs.height >= 9);
+            assert!(regions.categories.height >= 10);
+            assert_eq!(regions.dashboard.height, 10);
+            assert_eq!(regions.footer.height, 3);
+        }
+        assert_eq!(Regions::new(Rect::new(0, 0, 80, 24), &app).logs.height, 0);
+        app.logs_open = false;
+        assert_eq!(Regions::new(Rect::new(0, 0, 160, 50), &app).logs.height, 0);
     }
     #[test]
     fn long_logs_wrap_without_losing_unicode_or_tail_content() {

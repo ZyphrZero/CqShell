@@ -184,6 +184,55 @@ bbrv3_install_kernel standard
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "INSTALL_ATTEMPTED").exists())
 
+    def test_reboot_guidance_requires_explicit_terminal_confirmation(self):
+        import pty
+
+        body = r'''
+# A failing sentinel verifies dispatch without rebooting the host.
+reboot() { touch "$TEST_ROOT/REBOOT_REQUESTED"; return 73; }
+bbrv3_reboot_after_install 7.3.0-joeyblog-bbrv3 6.12.86+deb13-amd64
+'''
+        command = ["bash", "-c", f"source {shlex.quote(str(SCRIPT))}\n" + body]
+        for lang in ("zh-CN", "en-US"):
+            for answer in (b"\n", b"no\n", b"YES\n", b"\x04"):
+                with self.subTest(lang=lang, answer=answer):
+                    marker = self.root / "REBOOT_REQUESTED"
+                    marker.unlink(missing_ok=True)
+                    master, slave = pty.openpty()
+                    try:
+                        child = subprocess.Popen(
+                            command, stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, env=dict(self.env, CQS_LANG=lang), cwd=self.root,
+                        )
+                        try:
+                            os.write(master, answer)
+                            stdout, stderr = child.communicate(timeout=15)
+                        except BaseException:
+                            child.kill()
+                            child.wait()
+                            raise
+                    finally:
+                        os.close(master)
+                        os.close(slave)
+                    accepted = answer == b"YES\n"
+                    self.assertEqual(child.returncode, 73 if accepted else 0, stdout + stderr)
+                    self.assertEqual(marker.exists(), accepted)
+                    for text in ("7.3.0-joeyblog-bbrv3", "6.12.86+deb13-amd64", "SSH", "uname -r"):
+                        self.assertIn(text, stdout)
+                    if not accepted:
+                        self.assertIn("sudo reboot", stdout)
+
+    def test_reboot_guidance_without_a_terminal_only_prints_next_steps(self):
+        for yes in ("0", "1"):
+            result = self.run_shell(r'''
+reboot() { touch "$TEST_ROOT/REBOOT_REQUESTED"; return 73; }
+bbrv3_reboot_after_install 7.3.0-joeyblog-bbrv3 6.12.86+deb13-amd64 </dev/null
+''', CQS_YES=yes)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("sudo reboot", result.stdout)
+            self.assertIn("uname -r", result.stdout)
+            self.assertFalse((self.root / "REBOOT_REQUESTED").exists())
+
     def test_shared_kernel_lock_is_held_before_package_preflight(self):
         import fcntl
         with (self.root / "kernel.lock").open("w") as locked:

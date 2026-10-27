@@ -443,22 +443,22 @@ impl App {
             };
             return;
         }
-        let choices = form.spec.fields[form.index].choices;
-        if choices.is_empty() {
+        let field = &form.spec.fields[form.index];
+        let choices = field.choices;
+        let value = &form.values[form.index].text;
+        let current = choices.iter().position(|v| *v == value);
+        if choices.is_empty() || (field.allow_custom && !value.is_empty() && current.is_none()) {
             if forward {
                 form.values[form.index].right();
             } else {
                 form.values[form.index].left();
             }
         } else {
-            let current = choices
-                .iter()
-                .position(|v| *v == form.values[form.index].text)
-                .unwrap_or(0);
-            let next = if forward {
-                (current + 1) % choices.len()
-            } else {
-                (current + choices.len() - 1) % choices.len()
+            let next = match (current, forward) {
+                (Some(current), true) => (current + 1) % choices.len(),
+                (Some(current), false) => (current + choices.len() - 1) % choices.len(),
+                (None, true) => 0,
+                (None, false) => choices.len() - 1,
             };
             form.values[form.index].replace(choices[next].into());
         }
@@ -493,16 +493,16 @@ impl App {
             }
             KeyCode::Home => form.values[form.index].cursor = 0,
             KeyCode::End => form.values[form.index].cursor = form.values[form.index].text.len(),
-            KeyCode::Backspace if form.spec.fields[form.index].choices.is_empty() => {
+            KeyCode::Backspace if form.spec.fields[form.index].editable() => {
                 form.values[form.index].backspace()
             }
-            KeyCode::Delete if form.spec.fields[form.index].choices.is_empty() => {
+            KeyCode::Delete if form.spec.fields[form.index].editable() => {
                 form.values[form.index].delete()
             }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !c.is_control()
-                    && form.spec.fields[form.index].choices.is_empty() =>
+                    && form.spec.fields[form.index].editable() =>
             {
                 form.values[form.index].insert(c)
             }
@@ -1085,6 +1085,42 @@ mod tests {
         app.key(key(KeyCode::Up)).unwrap();
         assert_eq!(app.selected(), 2);
     }
+    #[test]
+    fn timezone_presets_cycle_and_custom_names_remain_editable() {
+        let mut app = app();
+        let spec = actions::find("system.timezone").unwrap();
+        let choices = spec.fields[0].choices;
+        for required in [
+            "Asia/Singapore",
+            "America/New_York",
+            "America/Los_Angeles",
+            "Europe/London",
+        ] {
+            assert!(choices.contains(&required));
+        }
+        app.form = Some(app.make_form(spec, FormMode::Optimization).unwrap());
+        for choice in choices {
+            assert_eq!(app.form.as_ref().unwrap().values[0].text, *choice);
+            app.form_key(key(KeyCode::Right)).unwrap();
+        }
+        assert_eq!(app.form.as_ref().unwrap().values[0].text, "Asia/Shanghai");
+        app.form_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL))
+            .unwrap();
+        for c in "Africa/Johannesburg".chars() {
+            app.form_key(key(KeyCode::Char(c))).unwrap();
+        }
+        app.form_key(key(KeyCode::Left)).unwrap();
+        let value = &app.form.as_ref().unwrap().values[0];
+        assert_eq!(value.text, "Africa/Johannesburg");
+        assert_eq!(value.cursor, value.text.len() - 1);
+        assert!(matches!(app.submit_form().unwrap(), Effect::None));
+        assert_eq!(
+            app.parameters["system.timezone"]["timezone"],
+            "Africa/Johannesburg"
+        );
+        assert!(app.worker.is_none());
+    }
+
     #[test]
     fn kernel_install_opens_the_standard_or_max_form_on_a_supported_host() {
         let mut app = app();

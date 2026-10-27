@@ -15,7 +15,7 @@
 | 内核列表 / 卸载 | kernel.list / remove |
 | SSH 端口 / 密钥登录 | ssh.port / key |
 | 十种工具 / 全部安装 | tools.curl / wget / nano / unzip / tar / tmux / iftop / btop / gdu / fzf 独立入口；tools.install 的 package 参数保留，默认 all |
-| AI 工具（新增） | ai.pi.install / ai.claude.install / ai.codex.install / ai.status |
+| Agent 工具（新增） | ai.pi.install / ai.claude.install / ai.codex.install / ai.status |
 | 终端组件 / 配置 / 状态 / 还原 | terminal.install / apply / status / restore |
 | Docker 全部功能 | docker.install / status / clean / mirror / ipv6 / uninstall |
 | 六种服务器测试 | test.speed / ip / route / performance / connectivity / io |

@@ -146,6 +146,8 @@ sudo cqs batch tcp.tune bbr.enable --set tcp.tune.rtt=80
 
 启用已有内核的 BBR / BBRv3：进入 **网络优化 → 启用当前内核的 BBR**，选择 `fq` 等队列并执行；需要调整 TCP 缓冲区时使用同页的 TCP 调优。安装 BBRv3：进入 **内核管理 → 安装 BBRv3 内核**，可选 `standard` / `max`，版本留空使用最新匹配版本，也可填写 `x.y.z`；重启进入新内核后再查看 BBR 状态及配置队列。
 
+Rust 和 Shell 版在内核安装及引导检查成功后，会显示当前内核、目标内核及重连后的验证步骤，并询问是否立即重启。取消或留空会保留安装结果，可稍后执行 `sudo reboot`。`--yes` 不会自动同意重启；非交互运行只输出手动重启指引。重连后用 `uname -r` 核对目标内核，若仍运行旧内核，请检查 GRUB 启动选择。
+
 IP 质量检测使用 [xykt/IPQuality](https://github.com/xykt/IPQuality)，入口为 **服务器测试 → IP 质量体检 · xykt/IPQuality**。支持双栈、仅 IPv4、仅 IPv6，输出语言跟随中英文界面；它检测的是目标机器的 IP，不是状态栏的公网地址查询。
 
 ```bash
@@ -168,7 +170,7 @@ sudo cqs run system.mirror.apply --set mirror_site=auto
 sudo cqs run system.mirror.restore
 ```
 
-## 常用工具与 AI 工具
+## 常用工具与 Agent 工具
 
 **常用工具**恢复旧版的十个独立安装入口：curl、wget、nano、unzip、tar、tmux、iftop、btop、gdu、fzf。选择条目即可安装对应软件；“全部安装 / 自选软件”默认选择 `all`，同时安装 zsh / Starship 组件。提示符配置和还原位于独立的**终端美化**分类。
 
@@ -179,7 +181,7 @@ sudo cqs run tools.install                         # 全部常用工具及终端
 sudo cqs run tools.install --set package=fzf       # 保留原来的 CLI 用法
 ```
 
-新增独立的 **AI 工具**分类，提供 Pi（pi.dev）、Claude Code、Codex CLI 的安装 / 更新与版本检查：
+新增独立的 **Agent 工具**分类，提供 Pi（pi.dev）、Claude Code、Codex CLI 的安装 / 更新与版本检查：
 
 ```bash
 cqs run ai.pi.install
@@ -228,10 +230,10 @@ cqs --locale-dir ./locales languages
 | SSH | 端口修改与监听验证、公钥导入和关闭密码认证 |
 | 服务器测试 | Speedtest、IP 质量、NextTrace、YABS、连通性、磁盘 I/O |
 | 常用工具 | 十种工具独立安装、全部安装、Bash / zsh 提示符配置与首次基线还原 |
-| AI 工具 | Pi（pi.dev）、Claude Code、Codex CLI 安装 / 更新与版本检查 |
+| Agent 工具 | Pi（pi.dev）、Claude Code、Codex CLI 安装 / 更新与版本检查 |
 | Docker | 安装、状态、镜像源、IPv6、清理和卸载 |
 
-内核安装支持 Debian 12+ / Ubuntu 24.04+ 的 amd64 / arm64 主机，需要独立内核环境和 GRUB。安装后手动重启进入新内核；状态页读取实际运行的 BBR 版本。WSL / 容器不支持更换宿主内核，卸载入口仅处理未运行的指定内核。
+内核安装支持 Debian 12+ / Ubuntu 24.04+ 的 amd64 / arm64 主机，需要独立内核环境和 GRUB。安装后可确认立即重启或稍后手动重启进入新内核；状态页读取实际运行的 BBR 版本。WSL / 容器不支持更换宿主内核，卸载入口仅处理未运行的指定内核。
 
 旧版本升级前请阅读 [迁移说明](docs/MIGRATION.md)。网络和提示符的旧恢复基线可继续读取；不要同时运行新旧程序，也不要删除未完成操作的恢复记录。
 

@@ -495,13 +495,40 @@ bbrv3_install_kernel() (
     if apt-get install -y --no-remove "$work/image.deb" "$work/headers.deb" &&
         bbrv3_boot_ready "$release" "$work/kernel.config"; then
         install_complete=1
-        echo "内核包和引导配置已安装；当前仍运行 $(uname -r)，尚不能宣称新 BBRv3 已生效"
-        echo "请自行重启并通过 BBR 状态菜单验证；启动失败时从 GRUB 选择旧内核"
+        bbrv3_reboot_after_install "$release" "$(uname -r)"
     else
         echo "内核安装/引导验证失败，可能存在部分安装的软件包；请查看 apt/DKMS 错误，暂勿重启" >&2
         return 1
     fi
 )
+
+bbrv3_reboot_after_install() {
+    local installed="$1" running="$2" prompt later status
+    if [[ "${CQS_LANG:-en-US}" == zh-CN ]]; then
+        printf '内核软件包安装及引导检查已完成：%s。需要重启进入该内核后才能使用其 BBRv3。\n' "$installed"
+        printf '运行内核：%s\n' "$running"
+        printf '重连后执行 uname -r，确认运行内核为 %s；若仍是旧内核，请检查 GRUB 启动选择。然后在网络优化中启用 BBR 并查看状态。\n' "$installed"
+        prompt="现在重启系统以启动已安装的 BBRv3 内核？"$'\n'"目标内核：$installed"$'\n'"重启会暂时中断服务并断开 SSH 连接。选择取消可稍后手动重启，已完成的安装会保留。"
+        later='已保留安装结果。准备好后执行 sudo reboot；重连后用 uname -r 验证运行内核。'
+    else
+        printf 'Kernel packages and boot checks completed: %s. Boot this kernel to use its BBRv3 implementation.\n' "$installed"
+        printf 'Running kernel: %s\n' "$running"
+        printf 'After reconnecting, run uname -r and verify that the running kernel is %s. If the old kernel is still running, check the GRUB boot selection. Then enable BBR and check its status under Network.\n' "$installed"
+        prompt="Reboot now to start the installed BBRv3 kernel?"$'\n'"Target kernel: $installed"$'\n'"Rebooting temporarily interrupts services and disconnects SSH. Cancel to reboot manually later; the completed installation will be kept."
+        later='The installation has been kept. Run sudo reboot when ready; after reconnecting, use uname -r to verify the running kernel.'
+    fi
+    if [[ -t 0 ]]; then
+        # --yes applies to installation, never to the optional host reboot.
+        if CQS_YES=0 cqs_confirm "$prompt" YES; then
+            reboot
+            return $?
+        else
+            status=$?
+            [[ "$status" == 130 ]] || return "$status"
+        fi
+    fi
+    printf '%s\n' "$later"
+}
 
 bbrv3_list_kernels() {
     local installed
@@ -2779,7 +2806,7 @@ def publish(binary, target, resolved):
 
 
 def install(tool):
-    require(tool in BINARIES, f"未知 AI 工具: {tool}")
+    require(tool in BINARIES, f"未知 Agent 工具: {tool}")
     require(platform.system() == "Linux", "AI 安装仅支持 Linux")
     require(not (os.geteuid() == 0 and os.environ.get("SUDO_USER", "") not in ("", "root")),
             "请以当前用户运行 AI 安装，不要使用 sudo")
@@ -2814,7 +2841,7 @@ def install(tool):
             # 发布后必须保留版本目录，避免回退失败使入口悬空。
             keep_release = True
             publish(binary, target, package["version"])
-            print(f"AI 工具已就绪: {target}", flush=True)
+            print(f"Agent 工具已就绪: {target}", flush=True)
         finally:
             if not keep_release:
                 shutil.rmtree(staged)
@@ -2917,6 +2944,17 @@ def parameters(row):
     print(row['description'])
     result = {}
     for field in row['parameters']:
+        if field.get('allow_custom'):
+            for index, zone in enumerate(field['choices'], 1):
+                print(f"  {index}. {zone}")
+            hint = '编号或自定义时区' if zh else 'number or custom timezone'
+            value = ask(f"{hint} [{field['default']}] (q=cancel): ")
+            if value.lower() == 'q':
+                return None
+            if value.isdecimal() and 1 <= int(value) <= len(field['choices']):
+                value = field['choices'][int(value) - 1]
+            result[field['name']] = value or field['default']
+            continue
         choices = '/'.join(field['choices'])
         value = ask(f"{field['name']} ({choices}) [{field['default']}] (q=cancel): ")
         if value.lower() == 'q':
@@ -3144,7 +3182,7 @@ try:
                     name = key[len(action)+1:] if mode == 'batch' else key
                     if name not in fields or any(unicodedata.category(c) == 'Cc' for c in value):
                         fail('invalid parameter: '+key)
-                    if fields[name]['choices'] and value not in fields[name]['choices']:
+                    if fields[name]['choices'] and not fields[name].get('allow_custom') and value not in fields[name]['choices']:
                         fail('invalid choice: '+key)
                     params[name] = value
                     remaining.remove(key)
@@ -3446,7 +3484,7 @@ cqs_metadata() {
     },
     {
       "available": true,
-      "description": "Set the system timezone using timedatectl.",
+      "description": "Choose common timezones in China, Singapore, Japan, the US (Eastern/Central/Mountain/Pacific), the UK, Germany, France and other regions, or enter another IANA timezone name. Apply using timedatectl.",
       "group": "system",
       "id": "system.timezone",
       "interactive": false,
@@ -3454,7 +3492,33 @@ cqs_metadata() {
       "mutates": true,
       "parameters": [
         {
-          "choices": [],
+          "allow_custom": true,
+          "choices": [
+            "Asia/Shanghai",
+            "Asia/Hong_Kong",
+            "Asia/Taipei",
+            "Asia/Singapore",
+            "Asia/Tokyo",
+            "Asia/Seoul",
+            "Asia/Bangkok",
+            "Asia/Kolkata",
+            "Asia/Dubai",
+            "America/New_York",
+            "America/Chicago",
+            "America/Denver",
+            "America/Los_Angeles",
+            "America/Toronto",
+            "Europe/London",
+            "Europe/Berlin",
+            "Europe/Paris",
+            "Europe/Amsterdam",
+            "Europe/Helsinki",
+            "Europe/Moscow",
+            "Australia/Sydney",
+            "Australia/Perth",
+            "Pacific/Auckland",
+            "UTC"
+          ],
           "default": "Asia/Shanghai",
           "name": "timezone",
           "required": true
@@ -3893,7 +3957,7 @@ cqs_metadata() {
       "group": "ai",
       "id": "ai.status",
       "interactive": false,
-      "label": "AI tool versions",
+      "label": "Agent tool versions",
       "mutates": false,
       "parameters": [],
       "root": false,
@@ -4254,14 +4318,14 @@ cqs_metadata() {
         "description.tools.gdu": "Install gdu through apt to analyze directory disk usage.",
         "action.tools.fzf": "fzf fuzzy finder",
         "description.tools.fzf": "Install the fzf interactive fuzzy finder through apt.",
-        "group.ai": "AI tools",
+        "group.ai": "Agent tools",
         "action.ai.pi.install": "Install / update Pi · pi.dev",
         "description.ai.pi.install": "Download the official standalone Pi Linux binary package, verify SHA-256 and retain themes, WASM and other resources. No Node.js/npm required. Verify the version before updating the current user's command.",
         "action.ai.claude.install": "Install / update Claude Code",
         "description.ai.claude.install": "Download the official Claude Code Linux binary and verify SHA-256 against its manifest. No Node.js/npm required. Verify the version before updating ~/.local/bin/claude; retain user configuration and previous versions.",
         "action.ai.codex.install": "Install / update Codex CLI",
         "description.ai.codex.install": "Download the complete official Codex Linux binary package with its helper programs and resources. Verify SHA-256 and the version. No Node.js/npm required. Default entrypoint: ~/.local/bin/codex; respects CODEX_INSTALL_DIR.",
-        "action.ai.status": "AI tool versions",
+        "action.ai.status": "Agent tool versions",
         "description.ai.status": "Check common user installation directories and PATH for Pi, Claude Code and Codex, then read --version. Distinguish missing commands from execution failures. Does not sign in.",
         "confirm.ai_install": "Install this official binary release? Verify SHA-256, architecture and version before switching the command. Back up the existing entrypoint and retain previous versions and login configuration. Restart the tool after updating.\n{detail}",
         "notice.ai_version": "Verified command: {detail}",
@@ -4269,7 +4333,7 @@ cqs_metadata() {
         "notice.ai_ready": "Binary installed and verified: {detail}. Launch using this full path, or add its directory to PATH. Use the same install action for future updates and sign in through the tool on first use.",
         "error.ai_arch": "AI binary installation supports Linux x86_64 / ARM64 only: {detail}",
         "notice.ai_backup": "Previous command entrypoint backed up (previous file): {detail}",
-        "error.ai_sudo": "Run cqs without sudo as the intended AI tool user to avoid installing into root's HOME. A direct root login can still install for root: {detail}",
+        "error.ai_sudo": "Run cqs without sudo as the intended Agent tool user to avoid installing into root's HOME. A direct root login can still install for root: {detail}",
         "field.ip_family": "IP family (dual / ipv4 / ipv6)",
         "field.full_ip": "Show the full IP address in the report",
         "confirm.ip_quality": "Run xykt/IPQuality? It queries external risk databases, streaming/AI services and mail connectivity. Privacy mode disables its online report upload; external providers still receive probe requests. Missing dependencies may trigger an upstream installation prompt.\n{detail}",
@@ -4382,6 +4446,7 @@ cqs_metadata() {
         "confirm.remote": "Download and execute this third-party Bash script with the current user's privileges. HTTPS is not an independent signature:\n{detail}",
         "confirm.kernel_download": "Download and verify the selected BBRv3 kernel?\n{detail}",
         "confirm.kernel_install": "Package checks passed. Install this kernel and update GRUB?\n{detail}",
+        "confirm.kernel_reboot": "Reboot now to start the installed BBRv3 kernel?\nTarget kernel: {detail}\nRebooting temporarily interrupts services and disconnects SSH. Cancel to reboot manually later; the completed installation will be kept.",
         "confirm.kernel_remove": "Remove this non-running kernel and update GRUB?\n{detail}",
         "confirm.key_tested": "Public key installed. Open a NEW SSH connection with that key and verify access before confirming. This will disable password and keyboard-interactive authentication in the global configuration. Keep the existing session open.\n{detail}",
         "confirm.clean_full": "Irreversible cleanup: truncate logs, delete old temporary files and user caches, and prune unused Docker data:\n{detail}",
@@ -4394,7 +4459,9 @@ cqs_metadata() {
         "notice.bbr_version": "Running BBR implementation version: {detail}",
         "notice.bbr_unknown": "Running BBR version is unknown; the kernel does not expose a recognized sysfs version.",
         "notice.ssh": "Keep the current session open. Verify the firewall and a new external SSH connection; local service checks do not prove external reachability.",
-        "notice.kernel_installed": "Kernel packages and boot checks completed: {detail}. Reboot manually, then verify the running kernel and networking.",
+        "notice.kernel_installed": "Kernel packages and boot checks completed: {detail}. Boot this kernel to use its BBRv3 implementation.",
+        "notice.kernel_verify": "After reconnecting, run uname -r and verify that the running kernel is {detail}. If the old kernel is still running, check the GRUB boot selection. Then enable BBR and check its status under Network.",
+        "notice.kernel_reboot_later": "The installation has been kept. Run sudo reboot when ready; after reconnecting, use uname -r to verify the running kernel.",
         "notice.running_kernel": "Running kernel: {detail}",
         "notice.terminal": "Prompt configuration saved. Open a new shell session. The login shell and installed software are unchanged.",
         "notice.download_speed": "Download: {detail}",
@@ -4464,7 +4531,7 @@ cqs_metadata() {
         "group.tests": "Tests",
         "group.app": "CqShell",
         "field.scope": "Cleanup scope",
-        "field.timezone": "Timezone",
+        "field.timezone": "Timezone (←→ presets; Ctrl+U to enter custom)",
         "field.size_mb": "Size (MiB)",
         "field.port": "SSH port",
         "field.public_key": "Public key file (absolute path)",
@@ -4511,7 +4578,7 @@ cqs_metadata() {
         "action.system.clean": "Clean system",
         "description.system.clean": "Standard: apt cache and journals older than 7 days. Full also deletes logs, temporary files, user caches and unused Docker data. All kernels are retained.",
         "action.system.timezone": "Set timezone",
-        "description.system.timezone": "Set the system timezone using timedatectl.",
+        "description.system.timezone": "Choose common timezones in China, Singapore, Japan, the US (Eastern/Central/Mountain/Pacific), the UK, Germany, France and other regions, or enter another IANA timezone name. Apply using timedatectl.",
         "action.swap.create": "Create swap",
         "description.swap.create": "Create /swapfile and register it in fstab; refuse an existing file.",
         "action.swap.auto": "Rebuild swap automatically",
@@ -4605,14 +4672,14 @@ cqs_metadata() {
         "description.tools.gdu": "通过 apt 安装 gdu，用于分析目录的磁盘占用。",
         "action.tools.fzf": "fzf 模糊搜索",
         "description.tools.fzf": "通过 apt 安装 fzf 交互式模糊搜索工具。",
-        "group.ai": "AI 工具",
+        "group.ai": "Agent 工具",
         "action.ai.pi.install": "安装 / 更新 Pi · pi.dev",
         "description.ai.pi.install": "直接下载 Pi 官方 Linux 独立二进制包，校验 SHA-256 并保留主题、WASM 等配套资源。无需 Node.js/npm；验证版本后更新当前用户的命令入口。",
         "action.ai.claude.install": "安装 / 更新 Claude Code",
         "description.ai.claude.install": "直接下载 Claude Code 官方 Linux 二进制，按官方 manifest 校验 SHA-256。无需 Node.js/npm；验证版本后更新 ~/.local/bin/claude，保留用户配置与旧版本。",
         "action.ai.codex.install": "安装 / 更新 Codex CLI",
         "description.ai.codex.install": "直接下载 Codex 官方完整 Linux 二进制包，包含运行所需的辅助程序与资源，校验 SHA-256 和版本。无需 Node.js/npm；默认入口为 ~/.local/bin/codex，遵循 CODEX_INSTALL_DIR。",
-        "action.ai.status": "查看 AI 工具版本",
+        "action.ai.status": "查看 Agent 工具版本",
         "description.ai.status": "检查 Pi、Claude Code、Codex 的常见用户安装目录及 PATH，读取 --version。缺失与执行失败分别显示；不执行登录。",
         "confirm.ai_install": "安装以下官方二进制版本？校验 SHA-256、架构及版本后切换命令入口；已有入口会备份，旧版本文件与登录配置保留。更新后请重新启动工具。\n{detail}",
         "notice.ai_version": "已验证命令：{detail}",
@@ -4620,7 +4687,7 @@ cqs_metadata() {
         "notice.ai_ready": "二进制已安装并验证：{detail}。可用此完整路径启动；也可将其目录加入 PATH。后续更新使用同一安装入口，首次使用请自行登录。",
         "error.ai_arch": "AI 二进制安装仅支持 Linux x86_64 / ARM64：{detail}",
         "notice.ai_backup": "原命令入口已备份（previous 文件）：{detail}",
-        "error.ai_sudo": "请退出 sudo，以实际使用 AI 工具的用户运行 cqs 后安装，避免写入 root 的 HOME。直接以 root 登录的服务器仍可为 root 安装：{detail}",
+        "error.ai_sudo": "请退出 sudo，以实际使用 Agent 工具的用户运行 cqs 后安装，避免写入 root 的 HOME。直接以 root 登录的服务器仍可为 root 安装：{detail}",
         "field.ip_family": "检测协议（dual 双栈 / ipv4 / ipv6）",
         "field.full_ip": "报告中显示完整 IP 地址",
         "confirm.ip_quality": "运行 xykt/IPQuality？它会访问外部风险数据库、流媒体/AI 服务并检测邮件连通性。隐私模式禁用在线报告上传，外部服务仍会收到检测请求。缺少依赖时，上游可能询问是否安装。\n{detail}",
@@ -4733,6 +4800,7 @@ cqs_metadata() {
         "confirm.remote": "将下载并以当前用户权限执行此第三方 Bash 脚本。HTTPS 不代表独立签名认证：\n{detail}",
         "confirm.kernel_download": "下载并校验所选 BBRv3 内核？\n{detail}",
         "confirm.kernel_install": "软件包检查已通过。安装此内核并更新 GRUB？\n{detail}",
+        "confirm.kernel_reboot": "现在重启系统以启动已安装的 BBRv3 内核？\n目标内核：{detail}\n重启会暂时中断服务并断开 SSH 连接。选择取消可稍后手动重启，已完成的安装会保留。",
         "confirm.kernel_remove": "卸载此未运行的内核并更新 GRUB？\n{detail}",
         "confirm.key_tested": "公钥已安装。请用该密钥建立新的 SSH 连接并确认可以登录，然后再确认。本操作会关闭全局密码及键盘交互认证。请保留当前会话。\n{detail}",
         "confirm.clean_full": "不可逆清理：清空日志、删除过期临时文件和用户缓存，并清理未使用的 Docker 数据：\n{detail}",
@@ -4745,7 +4813,9 @@ cqs_metadata() {
         "notice.bbr_version": "运行中的 BBR 实现版本：{detail}",
         "notice.bbr_unknown": "运行中的 BBR 版本未知；内核未暴露可识别的 sysfs 版本。",
         "notice.ssh": "请保留当前会话，检查防火墙并验证新的外部 SSH 连接；本地服务检查不代表外部可达。",
-        "notice.kernel_installed": "内核软件包安装及引导检查已完成：{detail}。请自行重启，然后验证运行内核和网络。",
+        "notice.kernel_installed": "内核软件包安装及引导检查已完成：{detail}。需要重启进入该内核后才能使用其 BBRv3。",
+        "notice.kernel_verify": "重连后执行 uname -r，确认运行内核为 {detail}；若仍是旧内核，请检查 GRUB 启动选择。然后在网络优化中启用 BBR 并查看状态。",
+        "notice.kernel_reboot_later": "已保留安装结果。准备好后执行 sudo reboot；重连后用 uname -r 验证运行内核。",
         "notice.running_kernel": "运行内核：{detail}",
         "notice.terminal": "提示符配置已保存，请打开新的 Shell 会话。登录 Shell 和已安装的软件保持不变。",
         "notice.download_speed": "下载：{detail}",
@@ -4815,7 +4885,7 @@ cqs_metadata() {
         "group.tests": "服务器测试",
         "group.app": "CqShell",
         "field.scope": "清理范围",
-        "field.timezone": "时区",
+        "field.timezone": "时区（←→选择；Ctrl+U 清空后自定义）",
         "field.size_mb": "容量（MiB）",
         "field.port": "SSH 端口",
         "field.public_key": "公钥文件（绝对路径）",
@@ -4862,7 +4932,7 @@ cqs_metadata() {
         "action.system.clean": "清理系统",
         "description.system.clean": "标准清理：apt 缓存及超过 7 天的 journal。完整清理还会删除日志、临时文件、用户缓存和未使用的 Docker 数据。保留全部内核。",
         "action.system.timezone": "设置时区",
-        "description.system.timezone": "使用 timedatectl 设置系统时区。",
+        "description.system.timezone": "选择中国、新加坡、日本、美国东部/中部/山地/西部、英国、德国、法国等常用时区，或输入其他 IANA 时区名称。使用 timedatectl 应用。",
         "action.swap.create": "创建 SWAP",
         "description.swap.create": "创建 /swapfile 并注册到 fstab；已有文件时拒绝覆盖。",
         "action.swap.auto": "自动重建 SWAP",

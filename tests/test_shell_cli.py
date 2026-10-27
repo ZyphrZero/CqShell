@@ -61,6 +61,27 @@ class ShellTestCase(unittest.TestCase):
 
 
 class ShellCliTests(ShellTestCase):
+    def test_timezone_presets_and_custom_names_use_the_validated_plan(self):
+        from zoneinfo import ZoneInfo
+
+        metadata = self.command("list", "--json")
+        self.assert_success(metadata)
+        action = next(row for row in json.loads(metadata.stdout) if row["id"] == "system.timezone")
+        field = action["parameters"][0]
+        self.assertTrue(field["allow_custom"])
+        for zone in field["choices"] + ["Africa/Johannesburg"]:
+            with self.subTest(zone=zone):
+                ZoneInfo(zone)  # Check against the host's installed timezone database.
+                result = subprocess.run(
+                    ["bash", "-c", f'source {shlex.quote(str(SCRIPT))}\ncqs_prepare "$@"',
+                     "cqs-plan", "run", "system.timezone", "--set", f"timezone={zone}"],
+                    stdin=subprocess.DEVNULL, text=True, capture_output=True,
+                    timeout=15, cwd=self.home, env=self.env,
+                )
+                self.assert_success(result)
+                self.assertIn(f"timezone={zone}", result.stdout)
+        self.assert_untouched()
+
     def test_help_version_and_metadata_do_not_write_or_prompt(self):
         for args in (("--help",), ("--version",), ("list",),
                      ("list", "--json"), ("languages",),

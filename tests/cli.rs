@@ -328,7 +328,7 @@ sys.exit(23)
                 .contains("功能分类")
         {
             if exit_key.is_some() {
-                // Focus categories, select AI tools, and start its first action.
+                // Focus categories, select Agent tools, and start its first action.
                 master
                     .write_all(b"\t\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r\r\x1bOQ")
                     .unwrap();

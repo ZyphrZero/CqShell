@@ -1183,6 +1183,82 @@ test ! -e "$CQS_TEST_ROOT/fail_packages"
     }
 
     #[test]
+    fn kernel_reboot_requires_a_fresh_confirmation_even_with_yes() {
+        use crate::runtime::Event;
+        use std::{sync::mpsc, time::Duration};
+
+        for yes in [false, true] {
+            for accept in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let mut ctx = boundary(temp.path());
+                ctx.yes = yes;
+                ctx.interactive = false;
+                // Stop at the reboot process boundary; never reboot the test host.
+                executable(
+                    &temp.path().join("bin/reboot"),
+                    "#!/bin/sh\ntouch \"$CQS_TEST_ROOT/reboot-requested\"\nexit 73\n",
+                );
+                let (tx, rx) = mpsc::channel();
+                ctx.events = Some(tx);
+                let worker = std::thread::spawn(move || {
+                    kernel::reboot_after_install(
+                        &ctx,
+                        "7.3.0-joeyblog-bbrv3",
+                        "6.12.86+deb13-amd64",
+                    )
+                });
+                let mut prompted = false;
+                let mut logs = Vec::new();
+                while let Ok(event) = rx.recv_timeout(Duration::from_secs(5)) {
+                    match event {
+                        Event::Confirm { text, token, reply } => {
+                            assert!(!prompted);
+                            assert!(text.contains("7.3.0-joeyblog-bbrv3"));
+                            assert!(text.contains("SSH"));
+                            assert_eq!(token, "YES");
+                            prompted = true;
+                            reply.send(accept).unwrap();
+                        }
+                        Event::Log(text) => logs.push(text),
+                        Event::Finished(_) => panic!("unexpected completion event"),
+                    }
+                }
+                let result = worker.join().unwrap();
+                assert!(prompted, "--yes must not authorize a reboot");
+                assert!(logs.iter().any(|line| line.contains("uname -r")));
+                assert!(logs.iter().any(|line| line.contains("6.12.86+deb13-amd64")));
+                assert_eq!(temp.path().join("reboot-requested").exists(), accept);
+                if accept {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.key, "error.command");
+                    assert!(error.detail.contains("reboot"));
+                    assert!(error.detail.contains("73"));
+                } else {
+                    result.unwrap();
+                    assert!(logs.iter().any(|line| line.contains("sudo reboot")));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn kernel_reboot_is_deferred_without_a_terminal() {
+        for yes in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut ctx = boundary(temp.path());
+            ctx.yes = yes;
+            ctx.interactive = false;
+            executable(
+                &temp.path().join("bin/reboot"),
+                "#!/bin/sh\ntouch \"$CQS_TEST_ROOT/reboot-requested\"\nexit 73\n",
+            );
+            kernel::reboot_after_install(&ctx, "7.3.0-joeyblog-bbrv3", "6.12.86+deb13-amd64")
+                .unwrap();
+            assert!(!temp.path().join("reboot-requested").exists());
+        }
+    }
+
+    #[test]
     fn kernel_install_failure_restores_grub_but_reports_partial_package_state() {
         for package_failure in [true, false] {
             let temp = tempfile::tempdir().unwrap();
