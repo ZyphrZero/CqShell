@@ -143,6 +143,93 @@ pub fn supported_system(id: &str, version: &str) -> bool {
         _ => false,
     }
 }
+
+fn valid_kernel_release(release: &str) -> bool {
+    !release.is_empty()
+        && release.len() <= 128
+        && release.as_bytes()[0].is_ascii_alphanumeric()
+        && release
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".+_~-".contains(&byte))
+}
+
+fn grub_id<'a>(line: &'a str, kind: &str) -> Option<&'a str> {
+    let header = line.trim_start();
+    let rest = header.strip_prefix(kind)?;
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    let (_, value) = header.split_once("$menuentry_id_option")?;
+    let value = value.trim_start();
+    let quote = value.chars().next()?;
+    if !matches!(quote, '\'' | '"') {
+        return None;
+    }
+    let value = value.strip_prefix(quote)?;
+    let id = &value[..value.find(quote)?];
+    (!id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".+_~-".contains(&byte)))
+    .then_some(id)
+}
+
+fn grub_title<'a>(line: &'a str, kind: &str) -> Option<&'a str> {
+    let header = line.trim_start();
+    let rest = header.strip_prefix(kind)?;
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    let rest = rest.trim_start();
+    let quote = rest.chars().next()?;
+    if !matches!(quote, '\'' | '"') {
+        return None;
+    }
+    let title = rest.strip_prefix(quote)?;
+    let title = &title[..title.find(quote)?];
+    (!title.is_empty() && !title.contains('>')).then_some(title)
+}
+
+pub(crate) fn grub_boot_entry(config: &str, release: &str) -> Result<String> {
+    if !valid_kernel_release(release) {
+        return Err(Error::new("error.input", release));
+    }
+    let prefix = format!("gnulinux-{release}-advanced-");
+    let title_suffix = format!("with Linux {release}");
+    let candidates: Vec<_> = config
+        .lines()
+        .filter_map(|line| {
+            let title = grub_title(line, "menuentry")?;
+            if !title.ends_with(&title_suffix) {
+                return None;
+            }
+            let id = grub_id(line, "menuentry")?;
+            let suffix = id.strip_prefix(&prefix)?;
+            (!suffix.is_empty()).then_some((line, title, suffix))
+        })
+        .collect();
+    if candidates.len() != 1 {
+        return Err(Error::new("error.kernel_boot_entry", release));
+    }
+    let (line, title, suffix) = candidates[0];
+    let submenu_id = format!("gnulinux-advanced-{suffix}");
+    let submenus: Vec<_> = config
+        .lines()
+        .filter_map(|line| {
+            (grub_id(line, "submenu")? == submenu_id)
+                .then(|| grub_title(line, "submenu"))
+                .flatten()
+        })
+        .collect();
+    if submenus.len() == 1 {
+        return Ok(format!("{}>{title}", submenus[0]));
+    }
+    if submenus.is_empty() && line.len() == line.trim_start().len() {
+        return Ok(title.to_owned());
+    }
+    Err(Error::new("error.kernel_boot_entry", release))
+}
+
 fn nonempty(path: &Path) -> Result<()> {
     storage::check_path(path, true)?;
     if fs::metadata(path)?.len() == 0 {
@@ -213,6 +300,37 @@ fn preflight(ctx: &Context, install: bool) -> Result<String> {
     }
     Ok(running)
 }
+
+fn boot_preflight(ctx: &Context) -> Result<String> {
+    ctx.require(&[
+        "dpkg-query",
+        "grub-reboot",
+        "grub-editenv",
+        "reboot",
+        "systemd-detect-virt",
+    ])?;
+    let virt = ctx.command("systemd-detect-virt", &["--container"], false)?;
+    let running = ctx.output("uname", &["-r"])?;
+    if virt.status.code() != Some(1)
+        || Path::new("/.dockerenv").exists()
+        || Path::new("/proc/vz").exists()
+        || running.to_ascii_lowercase().contains("microsoft")
+    {
+        return Err(Error::new(
+            "error.kernel_host",
+            format!("{running}; {}", String::from_utf8_lossy(&virt.stdout)),
+        ));
+    }
+    for p in [
+        ctx.paths.boot.join("grub/grub.cfg"),
+        ctx.paths.boot.join(format!("vmlinuz-{running}")),
+        ctx.paths.boot.join(format!("initrd.img-{running}")),
+    ] {
+        nonempty(&p)?;
+    }
+    Ok(running)
+}
+
 fn check_hyperv(ctx: &Context, config: &str, initrd: Option<&str>) -> Result<()> {
     if !Path::new("/sys/bus/vmbus").exists() {
         return Ok(());
@@ -471,6 +589,84 @@ pub fn validate_removal_plan(plan: &str, release: &str) -> Result<()> {
     }
     Ok(())
 }
+
+pub(crate) fn schedule_boot(
+    ctx: &Context,
+    running: &str,
+    release: &str,
+    entry: &str,
+) -> Result<()> {
+    let environment = ctx.output("grub-editenv", &["list"])?;
+    if let Some(pending) = environment
+        .lines()
+        .find_map(|line| line.strip_prefix("next_entry="))
+        .filter(|value| !value.is_empty())
+    {
+        return Err(Error::new("error.kernel_boot_pending", pending));
+    }
+
+    let reboot_now = ctx.events.is_some() || ctx.interactive;
+    if reboot_now {
+        let mut prompt = ctx.clone();
+        prompt.yes = false;
+        prompt.confirm(
+            "confirm.kernel_boot_reboot",
+            format!("{running} -> {release}"),
+            "REBOOT",
+        )?;
+    } else {
+        ctx.confirm(
+            "confirm.kernel_boot",
+            format!("{running} -> {release}"),
+            "BOOT",
+        )?;
+    }
+
+    let result = (|| {
+        ctx.run("grub-reboot", &[&entry])?;
+        let environment = ctx.output("grub-editenv", &["list"])?;
+        if !environment
+            .lines()
+            .any(|line| line == format!("next_entry={entry}"))
+        {
+            return Err(Error::new("error.kernel_boot_verify", &entry));
+        }
+        ctx.message("notice.kernel_boot", release);
+        if reboot_now {
+            ctx.run("reboot", &[])
+        } else {
+            ctx.log(ctx.i18n.text("notice.kernel_reboot_later"));
+            Ok(())
+        }
+    })();
+    if let Err(error) = result {
+        return match ctx.recovery().run("grub-editenv", &["unset", "next_entry"]) {
+            Ok(()) => Err(error),
+            Err(recovery) => {
+                Err(error.with_recovery(recovery, &ctx.paths.boot.join("grub/grubenv")))
+            }
+        };
+    }
+    Ok(())
+}
+
+pub fn boot(ctx: &Context, release: &str) -> Result<()> {
+    if !valid_kernel_release(release) {
+        return Err(Error::new("error.input", release));
+    }
+    let _lock = Lock::acquire(&ctx.paths.kernel_lock)?;
+    let running = boot_preflight(ctx)?;
+    if release == running {
+        return Err(Error::new("error.kernel_boot_running", release));
+    }
+    package_complete(ctx, &format!("linux-image-{release}"))?;
+    nonempty(&ctx.paths.boot.join(format!("vmlinuz-{release}")))?;
+    nonempty(&ctx.paths.boot.join(format!("initrd.img-{release}")))?;
+    let config = fs::read_to_string(ctx.paths.boot.join("grub/grub.cfg"))?;
+    let entry = grub_boot_entry(&config, release)?;
+    schedule_boot(ctx, &running, release, &entry)
+}
+
 pub fn remove(ctx: &Context, release: &str) -> Result<()> {
     if !Regex::new(r"^\d+\.\d+\.\d+-joeyblog-bbrv3(-max)?$")
         .unwrap()

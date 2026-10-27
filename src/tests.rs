@@ -503,6 +503,46 @@ fn kernel_distribution_and_removal_plan_guards() {
             .is_err()
     );
 }
+
+#[test]
+fn kernel_boot_action_accepts_generic_releases_and_rejects_grub_syntax() {
+    let spec = actions::find("kernel.boot").unwrap();
+    assert_eq!(spec.kind, actions::Kind::KernelBoot);
+    assert!(
+        spec.parameters(&BTreeMap::from([(
+            "release".into(),
+            "6.12.86+deb13-amd64".into()
+        )]))
+        .is_ok()
+    );
+    for release in ["../vmlinuz", "6.12>recovery", "6.12 86"] {
+        assert!(
+            spec.parameters(&BTreeMap::from([("release".into(), release.into())]))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn grub_boot_entry_resolves_unique_normal_nested_and_flat_entries() {
+    let release = "6.12.86+deb13-amd64";
+    let id = format!("gnulinux-{release}-advanced-384b8a87-248e-434b-8932-add577388de1");
+    let submenu = "gnulinux-advanced-384b8a87-248e-434b-8932-add577388de1";
+    let target_title = format!("Debian, with Linux {release}");
+    let config = format!(
+        "submenu 'Advanced options' $menuentry_id_option '{submenu}' {{\n  menuentry '{target_title}' $menuentry_id_option '{id}' {{\n  }}\n  menuentry 'Debian, with Linux {release} (recovery mode)' $menuentry_id_option '{id}-recovery' {{\n  }}\n}}\n"
+    );
+    assert_eq!(
+        kernel::grub_boot_entry(&config, release).unwrap(),
+        format!("Advanced options>{target_title}")
+    );
+    let flat_title = format!("Linux, with Linux {release}");
+    let flat = format!("menuentry '{flat_title}' $menuentry_id_option '{id}' {{\n}}\n");
+    assert_eq!(kernel::grub_boot_entry(&flat, release).unwrap(), flat_title);
+    assert!(kernel::grub_boot_entry(&config, "../etc").is_err());
+    assert!(kernel::grub_boot_entry("", release).is_err());
+}
+
 #[test]
 fn terminal_rc_preserves_bytes_and_requires_balanced_markers() {
     let original = b"# user\r\necho \xff\n";

@@ -32,6 +32,7 @@ pub enum Kind {
     TcpRestore,
     KernelList,
     KernelInstall,
+    KernelBoot,
     KernelRemove,
     ToolsInstall,
     ToolInstall(&'static str),
@@ -164,6 +165,9 @@ impl Spec {
                     .unwrap()
                     .is_match(&p["release"])
             }
+            Kind::KernelBoot => regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9.+_~-]{0,127}$")
+                .unwrap()
+                .is_match(&p["release"]),
             Kind::Timezone => {
                 !p["timezone"].starts_with('/')
                     && !p["timezone"]
@@ -443,6 +447,15 @@ pub fn specs() -> Vec<Spec> {
         ],
     );
     add(
+        "kernel.boot",
+        "kernel",
+        KernelBoot,
+        true,
+        true,
+        false,
+        vec![field("release", "", &[], true)],
+    );
+    add(
         "kernel.remove",
         "kernel",
         KernelRemove,
@@ -647,7 +660,11 @@ pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> 
     if spec.changes
         && !matches!(
             spec.kind,
-            Kind::KernelInstall | Kind::KernelRemove | Kind::AiInstall(_) | Kind::MirrorApply
+            Kind::KernelInstall
+                | Kind::KernelRemove
+                | Kind::KernelBoot
+                | Kind::AiInstall(_)
+                | Kind::MirrorApply
         )
     {
         let detail = format!(
@@ -692,6 +709,7 @@ pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> 
         TcpRestore => ops::network::restore(ctx, &ctx.paths.tcp),
         KernelList => ops::kernel::list(ctx),
         KernelInstall => ops::kernel::install(ctx, &p["profile"], &p["version"]),
+        KernelBoot => ops::kernel::boot(ctx, &p["release"]),
         KernelRemove => ops::kernel::remove(ctx, &p["release"]),
         ToolsInstall => ops::tools::packages(ctx, &p["package"]),
         ToolInstall(package) => ops::tools::packages(ctx, package),
