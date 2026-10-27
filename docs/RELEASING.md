@@ -9,9 +9,9 @@
 | x86_64 / AMD64 | `cqs-x86_64-unknown-linux-musl.tar.gz` |
 | ARM64 / aarch64 | `cqs-aarch64-unknown-linux-musl.tar.gz` |
 
-每个压缩包附带同名 `.sha256` 文件。后续 Release 还包含 `install.sh`、`cqs.sh` 及各自的 `.sha256` 文件。压缩包内的 Rust 可执行文件固定为 `cqs/cqs`，其余内容包括独立 Shell 脚本、许可证、文档、示例配置和翻译文件。现有 v0.1.0 / v0.1.1 附件保持不变；当前 Shell 版可从仓库 main 分支获取。构建与发布仅面向 Linux。
+每个压缩包附带同名 `.sha256` 文件。从 v0.1.2 起，Release 同时提供 `install.sh`、`cqs.sh` 及各自的 `.sha256` 文件。压缩包内的 Rust 可执行文件固定为 `cqs/cqs`，其余内容包括独立 Shell 脚本、许可证、文档、示例配置和翻译文件。旧版 v0.1.0 / v0.1.1 附件保持不变。构建与发布仅面向 Linux。
 
-推荐先下载完整安装器，再运行。首个稳定版发布后，执行：
+推荐先下载完整安装器，再运行：
 
 ```bash
 curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
@@ -46,11 +46,11 @@ sudo /root/cqs --lang zh-CN
 ## 发布一个版本
 
 1. 修改 `Cargo.toml` 的 `package.version`，运行 Cargo 更新并提交对应的 `Cargo.lock`。确保源码、翻译、安装器、文档和 `.github/workflows/` 全部提交并推送；工作流只读取标签指向的提交，不包含本地未提交修改。
-2. 对需要发布的提交打标签。标签必须严格等于 `v` 加 `Cargo.toml` 版本，例如当前 `0.1.0` 对应：
+2. 对需要发布的提交打标签。标签必须严格等于 `v` 加 `Cargo.toml` 版本，例如当前 `0.1.2` 对应：
 
    ```bash
-   git tag -a v0.1.0 -m "CqShell v0.1.0"
-   git push origin v0.1.0
+   git tag -a v0.1.2 -m "CqShell v0.1.2"
+   git push origin v0.1.2
    ```
 
 3. 在 Actions 查看 `Build and release Linux binaries`。检查和两个架构的构建全部通过后，流程创建草稿、上传全部文件，再发布 Release。`0.2.0-rc.1` 这样的版本会标记为预发布，用户必须指定 `--version v0.2.0-rc.1` 安装。

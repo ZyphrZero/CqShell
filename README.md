@@ -36,7 +36,7 @@ Shell 版与 Rust 版提供相同的 55 个操作 ID、参数默认值与枚举�
 
 普通用户无需安装 Rust。发布版提供 Debian / Ubuntu 使用的 **x86_64（AMD64）和 ARM64** Linux 可执行文件，安装器自动选择架构、通过 HTTPS 下载并校验 SHA-256，默认安装到 `/root/cqs`，也可用 `--install-dir` 指定目录。
 
-**以下下载入口在首个稳定版 GitHub Release 发布后可用。** 在目标服务器执行：
+以下命令下载最新稳定版。在目标服务器执行：
 
 ```bash
 curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \

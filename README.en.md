@@ -36,7 +36,7 @@ Configuration paths, network/terminal baselines and pending recovery records are
 
 End users do not need Rust. Releases provide **x86_64 (AMD64) and ARM64** Linux binaries for Debian / Ubuntu. The installer detects the architecture, downloads over HTTPS, checks SHA-256, verifies the executable version, and defaults to `/root/cqs`. Use `--install-dir` to choose another directory.
 
-**The following download becomes available after the first stable GitHub Release is published.** Run on the target server:
+Download the latest stable release by running the following on the target server:
 
 ```bash
 curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
