@@ -26,6 +26,20 @@ use std::{
 const STOP_WAIT: Duration = Duration::from_secs(5);
 const MAX_ARCHIVE: u64 = 128 * 1024 * 1024;
 const MAX_BINARY: usize = 512 * 1024 * 1024;
+const MAX_INSTALL_RECORD: u64 = 4096;
+
+pub mod compat;
+pub mod controller;
+mod logs;
+pub mod panel;
+pub mod service;
+pub mod tun;
+
+#[cfg(test)]
+mod regression;
+
+pub use logs::logs;
+use logs::open_private_log;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -85,16 +99,61 @@ pub fn status(ctx: &Context) -> Result<()> {
         proxy_address(ctx, true).unwrap_or_else(|| "not configured".into()),
     );
     ctx.message("notice.clash_status", detail);
+    let profiles = read_profiles(ctx)?;
+    ctx.message(
+        "notice.clash_subscriptions",
+        profiles.current.as_deref().unwrap_or("none"),
+    );
+    if let State::Running(pid) = state
+        && let Some(seconds) = process_uptime(pid)
+    {
+        ctx.message(
+            "notice.clash_uptime",
+            format!(
+                "{}h {}m {}s",
+                seconds / 3600,
+                seconds / 60 % 60,
+                seconds % 60
+            ),
+        );
+    }
+    controller::status(ctx)?;
+    panel::status(ctx)?;
+    tun::status(ctx)?;
     Ok(())
 }
 
+fn process_uptime(pid: u32) -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let ticks = process_start_time(pid)?.parse::<f64>().ok()?;
+        let frequency = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if frequency <= 0 {
+            return None;
+        }
+        let uptime = fs::read_to_string("/proc/uptime").ok()?;
+        let elapsed =
+            uptime.split_whitespace().next()?.parse::<f64>().ok()? - ticks / frequency as f64;
+        (elapsed.is_finite() && elapsed >= 0.0).then_some(elapsed as u64)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 pub fn start(ctx: &Context) -> Result<()> {
+    if service::start_managed(ctx)? {
+        return Ok(());
+    }
     start_inner(ctx, true)
 }
 
 fn start_inner(ctx: &Context, report: bool) -> Result<()> {
     ctx.check()?;
     let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+    recover_interrupted_files(ctx)?;
     match state(ctx)? {
         State::Running(pid) => {
             if report {
@@ -105,7 +164,7 @@ fn start_inner(ctx: &Context, report: bool) -> Result<()> {
             }
             return Ok(());
         }
-        State::Unknown => return Err(Error::new("error.data", "Mihomo PID record is invalid")),
+        State::Unknown => return Err(unknown_process()),
         State::NotInstalled | State::Stopped => (),
     }
     ensure_layout(ctx)?;
@@ -113,23 +172,36 @@ fn start_inner(ctx: &Context, report: bool) -> Result<()> {
     let binary = path_string(&ctx.paths.clash_binary)?;
     let resources = path_string(&ctx.paths.clash_resources)?;
     let runtime_bytes = build_runtime_config(ctx)?;
+    tun::validate_start(ctx, &runtime_bytes)?;
     let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
     fs::write(candidate.path(), &runtime_bytes)?;
     validate_config(ctx, candidate.path(), true)?;
-    let candidate_path = path_string(candidate.path())?;
-    ctx.run(&binary, &["-d", &resources, "-f", &candidate_path, "-t"])?;
+    validate_with_mihomo(ctx, candidate.path())?;
     storage::atomic_write(&ctx.paths.clash_runtime, &runtime_bytes, 0o600)?;
     let runtime = path_string(&ctx.paths.clash_runtime)?;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&ctx.paths.clash_log)?;
+    let log = open_private_log(ctx)?;
     let stderr = log.try_clone()?;
-    let mut child = Command::new(&binary)
+    let mut command = Command::new(&binary);
+    command
         .args(["-d", &resources, "-f", &runtime])
+        .envs(&ctx.environment)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr))
+        .stderr(Stdio::from(stderr));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // The daemon must outlive its CLI's terminal and cancellation group.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| Error::new("error.command", format!("{binary}: {e}")))?;
     let pid = child.id();
@@ -153,10 +225,38 @@ fn start_inner(ctx: &Context, report: bool) -> Result<()> {
         return Err(error);
     }
     thread::sleep(Duration::from_millis(100));
+    if let Err(cancelled) = ctx.check() {
+        let cleanup = (|| {
+            signal(pid, false)?;
+            let deadline = std::time::Instant::now() + STOP_WAIT;
+            while std::time::Instant::now() < deadline {
+                if child.try_wait()?.is_some() {
+                    storage::remove_file(&ctx.paths.clash_pid)?;
+                    storage::remove_file(&ctx.paths.clash_pid_start)?;
+                    return Ok(());
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(Error::new(
+                "error.recovery",
+                format!(
+                    "start was cancelled but Mihomo did not stop after SIGTERM (PID {pid}); PID records retained"
+                ),
+            ))
+        })();
+        reap_child(ctx, child);
+        cleanup?;
+        return Err(cancelled);
+    }
     if !pid_matches(ctx, pid) {
-        let log_tail = fs::read_to_string(&ctx.paths.clash_log).unwrap_or_default();
+        let exited = child.try_wait();
+        reap_child(ctx, child);
+        if exited?.is_none() {
+            return Err(unknown_process());
+        }
         let _ = storage::remove_file(&ctx.paths.clash_pid);
         let _ = storage::remove_file(&ctx.paths.clash_pid_start);
+        let log_tail = logs::startup_tail(ctx)?;
         return Err(Error::new(
             "error.command",
             format!("Mihomo exited during startup: {}", tail(&log_tail)),
@@ -165,32 +265,54 @@ fn start_inner(ctx: &Context, report: bool) -> Result<()> {
     if report {
         ctx.message("notice.clash_started", format!("PID {pid}"));
     }
+    reap_child(ctx, child);
     Ok(())
 }
 
+fn reap_child(ctx: &Context, mut child: std::process::Child) {
+    // A long-lived TUI remains the daemon's parent, including failed or
+    // cancelled starts whose PID records must be retained for recovery.
+    let logger = ctx.clone();
+    thread::spawn(move || {
+        if let Err(error) = child.wait() {
+            logger.message("notice.clash_reap", error);
+        }
+    });
+}
+
 pub fn stop(ctx: &Context) -> Result<()> {
+    if service::stop_managed(ctx)? {
+        return Ok(());
+    }
     ctx.check()?;
     let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
     let pid = match state(ctx)? {
         State::Running(pid) => pid,
         State::Stopped | State::NotInstalled => {
-            let _ = storage::remove_file(&ctx.paths.clash_pid);
-            let _ = storage::remove_file(&ctx.paths.clash_pid_start);
+            storage::remove_file(&ctx.paths.clash_pid)?;
+            storage::remove_file(&ctx.paths.clash_pid_start)?;
             ctx.message("notice.clash_stopped", "already stopped");
             return Ok(());
         }
-        State::Unknown => return Err(Error::new("error.data", "Mihomo PID record is invalid")),
+        State::Unknown => return Err(unknown_process()),
     };
     signal(pid, false)?;
     let deadline = std::time::Instant::now() + STOP_WAIT;
     while std::time::Instant::now() < deadline {
-        if !pid_matches(ctx, pid) {
-            let _ = storage::remove_file(&ctx.paths.clash_pid);
-            let _ = storage::remove_file(&ctx.paths.clash_pid_start);
-            ctx.message("notice.clash_stopped", format!("PID {pid}"));
-            return Ok(());
+        match process_state(ctx, pid) {
+            State::Stopped => {
+                storage::remove_file(&ctx.paths.clash_pid)?;
+                storage::remove_file(&ctx.paths.clash_pid_start)?;
+                ctx.message("notice.clash_stopped", format!("PID {pid}"));
+                return Ok(());
+            }
+            State::Running(_) | State::Unknown => (),
+            State::NotInstalled => return Err(unknown_process()),
         }
         thread::sleep(Duration::from_millis(100));
+    }
+    if matches!(process_state(ctx, pid), State::Unknown) {
+        return Err(unknown_process());
     }
     Err(Error::new(
         "error.command",
@@ -208,24 +330,26 @@ pub fn proxy_env(ctx: &Context, enabled: bool, shell: &str) -> Result<String> {
     if !enabled {
         return Ok(match shell {
             "bash" | "zsh" => "unset http_proxy https_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY\n".into(),
-            "fish" => "set -e http_proxy https_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY\n".into(),
+            "fish" => "set -e http_proxy\nset -e https_proxy\nset -e all_proxy\nset -e no_proxy\nset -e HTTP_PROXY\nset -e HTTPS_PROXY\nset -e ALL_PROXY\nset -e NO_PROXY\ntrue\n".into(),
             _ => unreachable!(),
         });
     }
-    if !matches!(state(ctx)?, State::Running(_)) {
+    if !matches!(state(ctx)?, State::Running(_)) && !service::start_managed(ctx)? {
         start_inner(ctx, false)?;
     }
     let config = proxy_config(ctx)?;
+    proxy_env_script(&config, shell)
+}
+
+fn proxy_env_script(config: &ProxyConfig, shell: &str) -> Result<String> {
     let http = config
         .http_port
-        .or(config.socks_port)
         .ok_or_else(|| Error::new("error.data", "runtime config has no HTTP or mixed port"))?;
     let socks = config
         .socks_port
-        .or(config.http_port)
         .ok_or_else(|| Error::new("error.data", "runtime config has no SOCKS or mixed port"))?;
-    let http = proxy_url("http", &config, http)?;
-    let socks = proxy_url("socks5h", &config, socks)?;
+    let http = proxy_url("http", config, http)?;
+    let socks = proxy_url("socks5h", config, socks)?;
     let assignments = [
         ("http_proxy", http.as_str()),
         ("https_proxy", http.as_str()),
@@ -262,17 +386,18 @@ pub fn install(ctx: &Context, requested: &str) -> Result<()> {
     ensure_layout(ctx)?;
     let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
     recover_interrupted_files(ctx)?;
-    if matches!(state(ctx)?, State::Running(_)) {
+    if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
         return Err(Error::new(
             "error.busy",
             "stop Mihomo before replacing its executable",
         ));
     }
-    let version = if requested.is_empty() {
-        latest_release(ctx)?
+    let release = if requested.is_empty() {
+        release_metadata(ctx, "latest")?
     } else {
-        validate_version(requested)?
+        release_metadata(ctx, &validate_version(requested)?)?
     };
+    let version = validate_version(release["tag_name"].as_str().unwrap_or(""))?;
     let name = format!("mihomo-linux-{arch}-{version}.gz");
     let url = format!("https://github.com/MetaCubeX/mihomo/releases/download/{version}/{name}");
     let release = release_metadata(ctx, &version)?;
@@ -290,17 +415,25 @@ pub fn install(ctx: &Context, requested: &str) -> Result<()> {
         .as_str()
         .and_then(|value| value.strip_prefix("sha256:"))
         .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_ascii_lowercase)
         .ok_or_else(|| Error::new("error.release", format!("missing SHA-256 for {name}")))?;
     let size = asset["size"]
         .as_u64()
         .filter(|size| (1..=MAX_ARCHIVE).contains(size))
         .ok_or_else(|| Error::new("error.release", "asset size"))?;
+    if installed_release_matches(ctx, &version, &digest)? {
+        ctx.message(
+            "notice.clash_installed",
+            format!("{version} ({arch}); already verified, download skipped"),
+        );
+        return Ok(());
+    }
 
     let work = tempfile::tempdir_in(&ctx.paths.clash_data)?;
     let archive = work.path().join("mihomo.gz");
     download_release_asset(ctx, &url, &archive, size)?;
     let bytes = fs::read(&archive)?;
-    if bytes.len() as u64 != size || sha256_hex(&bytes) != digest.to_ascii_lowercase() {
+    if bytes.len() as u64 != size || sha256_hex(&bytes) != digest {
         return Err(Error::new("error.digest", name));
     }
     use flate2::read::GzDecoder;
@@ -323,13 +456,64 @@ pub fn install(ctx: &Context, requested: &str) -> Result<()> {
         ));
     }
     storage::atomic_write(&ctx.paths.clash_binary, &binary, 0o755)?;
+    let record = InstallRecord {
+        version: version.clone(),
+        asset_digest: digest,
+        binary_digest: sha256_hex(&binary),
+    };
+    storage::atomic_write(
+        &install_record_path(ctx),
+        &serde_json::to_vec(&record)?,
+        0o600,
+    )?;
     ctx.message("notice.clash_installed", format!("{version} ({arch})"));
     Ok(())
 }
 
-fn latest_release(ctx: &Context) -> Result<String> {
-    let value = release_metadata(ctx, "latest")?;
-    validate_version(value["tag_name"].as_str().unwrap_or(""))
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InstallRecord {
+    version: String,
+    asset_digest: String,
+    binary_digest: String,
+}
+
+fn install_record_path(ctx: &Context) -> PathBuf {
+    ctx.paths.clash_data.join("mihomo-install.json")
+}
+
+fn installed_release_matches(ctx: &Context, version: &str, asset_digest: &str) -> Result<bool> {
+    let record_path = install_record_path(ctx);
+    storage::check_path(&record_path, true)?;
+    if !record_path.is_file() {
+        return Ok(false);
+    }
+    if fs::metadata(&record_path)?.len() > MAX_INSTALL_RECORD {
+        return Ok(false);
+    }
+    let record: InstallRecord = match serde_json::from_slice(&fs::read(&record_path)?) {
+        Ok(record) => record,
+        Err(_) => return Ok(false),
+    };
+    if record.version != version || record.asset_digest != asset_digest {
+        return Ok(false);
+    }
+    storage::check_path(&ctx.paths.clash_binary, true)?;
+    let binary = match fs::read(&ctx.paths.clash_binary) {
+        Ok(binary) => binary,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if sha256_hex(&binary) != record.binary_digest {
+        return Ok(false);
+    }
+    let binary_path = path_string(&ctx.paths.clash_binary)?;
+    let banner = match ctx.output(&binary_path, &["-v"]) {
+        Ok(banner) => banner,
+        Err(error) if error.key == "error.cancelled" => return Err(error),
+        Err(_) => return Ok(false),
+    };
+    Ok(version_banner_matches(&banner, version))
 }
 
 fn release_metadata(ctx: &Context, version: &str) -> Result<serde_json::Value> {
@@ -442,7 +626,10 @@ pub fn subscription_add(ctx: &Context, name: &str, url: &str, use_after_add: boo
     recover_interrupted_files(ctx)?;
     let mut profiles = read_profiles(ctx)?;
     validate_new_profile(&profiles, name, url)?;
-    let file_name = profile_file_name(name);
+    if use_after_add {
+        validate_subscription_runtime(ctx, &bytes)?;
+    }
+    let file_name = unused_profile_file_name(&profiles_dir, &profiles, name)?;
     profiles.profiles.push(Profile {
         name: name.into(),
         url: url.into(),
@@ -541,6 +728,7 @@ pub fn subscription_update(ctx: &Context, name: &str) -> Result<()> {
         ),
     ];
     if profiles.current.as_deref() == Some(name) {
+        validate_subscription_runtime(ctx, &bytes)?;
         updates.push((
             ctx.paths.clash_config.clone(),
             Some(storage::Saved::new(&bytes, 0o600)),
@@ -561,7 +749,9 @@ pub fn subscription_remove(ctx: &Context, name: &str) -> Result<()> {
         .iter()
         .position(|profile| profile.name == name)
         .ok_or_else(|| Error::new("error.input", format!("unknown subscription: {name}")))?;
-    if profiles.current.as_deref() == Some(name) && matches!(state(ctx)?, State::Running(_)) {
+    if profiles.current.as_deref() == Some(name)
+        && matches!(state(ctx)?, State::Running(_) | State::Unknown)
+    {
         return Err(Error::new(
             "error.busy",
             "stop Mihomo or select another subscription before removing the current subscription",
@@ -584,22 +774,33 @@ pub fn subscription_remove(ctx: &Context, name: &str) -> Result<()> {
 }
 
 fn state(ctx: &Context) -> Result<State> {
-    if !ctx.paths.clash_binary.is_file() {
-        return Ok(State::NotInstalled);
-    }
     let pid = match fs::read_to_string(&ctx.paths.clash_pid) {
         Ok(value) => value
             .trim()
             .parse::<u32>()
             .map_err(|_| Error::new("error.data", "invalid Mihomo PID file"))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(State::Stopped),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match fs::symlink_metadata(&ctx.paths.clash_pid_start) {
+                Ok(_) => return Ok(State::Unknown),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+            }
+            return Ok(if ctx.paths.clash_binary.is_file() {
+                State::Stopped
+            } else {
+                State::NotInstalled
+            });
+        }
         Err(error) => return Err(error.into()),
     };
-    if pid_matches(ctx, pid) {
-        Ok(State::Running(pid))
-    } else {
-        Ok(State::Stopped)
-    }
+    Ok(process_state(ctx, pid))
+}
+
+fn unknown_process() -> Error {
+    Error::new(
+        "error.data",
+        "Mihomo process identity cannot be verified; PID records retained for recovery",
+    )
 }
 
 fn ensure_layout(ctx: &Context) -> Result<()> {
@@ -634,11 +835,33 @@ fn require_binary(ctx: &Context) -> Result<()> {
 }
 
 fn build_runtime_config(ctx: &Context) -> Result<Vec<u8>> {
-    storage::check_path(&ctx.paths.clash_config, true)?;
+    runtime_with_mixin(ctx, read_mixin(ctx)?)
+}
+
+fn read_mixin(ctx: &Context) -> Result<Value> {
     storage::check_path(&ctx.paths.clash_mixin, true)?;
-    let base = if ctx.paths.clash_config.is_file() {
-        serde_yaml::from_slice::<Value>(&fs::read(&ctx.paths.clash_config)?)?
+    if ctx.paths.clash_mixin.is_file() {
+        yaml(&fs::read(&ctx.paths.clash_mixin)?)
     } else {
+        Ok(Value::Mapping(Default::default()))
+    }
+}
+
+fn runtime_with_mixin(ctx: &Context, mixin: Value) -> Result<Vec<u8>> {
+    storage::check_path(&ctx.paths.clash_config, true)?;
+    let base = if ctx.paths.clash_config.is_file() {
+        yaml(&fs::read(&ctx.paths.clash_config)?)?
+    } else {
+        if read_profiles(ctx)?
+            .current
+            .as_deref()
+            .is_some_and(|name| !name.is_empty())
+        {
+            return Err(Error::new(
+                "error.data",
+                "selected subscription base configuration is missing; restore it or select a valid subscription",
+            ));
+        }
         let mut direct = serde_yaml::Mapping::new();
         direct.insert(Value::String("mode".into()), Value::String("direct".into()));
         direct.insert(
@@ -647,14 +870,90 @@ fn build_runtime_config(ctx: &Context) -> Result<Vec<u8>> {
         );
         Value::Mapping(direct)
     };
-    let mixin = if ctx.paths.clash_mixin.is_file() {
-        serde_yaml::from_slice::<Value>(&fs::read(&ctx.paths.clash_mixin)?)?
+    render_runtime(base, mixin)
+}
+
+fn render_runtime(base: Value, mixin: Value) -> Result<Vec<u8>> {
+    let runtime = merge_config(base, mixin)?;
+    controller::from_config(&runtime)?;
+    let text = serde_yaml::to_string(&runtime).map_err(|e| Error::new("error.data", e))?;
+    Ok(text.into_bytes())
+}
+
+fn validate_subscription_runtime(ctx: &Context, bytes: &[u8]) -> Result<()> {
+    let runtime = render_runtime(yaml(bytes)?, read_mixin(ctx)?)?;
+    let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+    fs::write(candidate.path(), runtime)?;
+    validate_config(ctx, candidate.path(), true)?;
+    validate_with_mihomo(ctx, candidate.path())
+}
+
+/// Persist user overrides separately from subscription data. Validation occurs
+/// before either file is published; the journal covers both files on a crash.
+fn edit_mixin(
+    ctx: &Context,
+    edit: impl FnOnce(&mut serde_yaml::Mapping) -> Result<()>,
+) -> Result<()> {
+    ctx.check()?;
+    let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+    recover_interrupted_files(ctx)?;
+    if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
+        return Err(Error::new(
+            "error.busy",
+            "stop Mihomo before changing persistent settings",
+        ));
+    }
+    ensure_layout(ctx)?;
+    storage::check_path(&ctx.paths.clash_mixin, true)?;
+    let mut mixin = if ctx.paths.clash_mixin.is_file() {
+        serde_yaml::from_slice::<Value>(&fs::read(&ctx.paths.clash_mixin)?)
+            .map_err(|_| Error::new("error.data", "invalid Mixin YAML"))?
     } else {
         Value::Mapping(Default::default())
     };
-    let runtime = merge_config(base, mixin)?;
-    let text = serde_yaml::to_string(&runtime).map_err(|e| Error::new("error.data", e))?;
-    Ok(text.into_bytes())
+    let map = mixin
+        .as_mapping_mut()
+        .ok_or_else(|| Error::new("error.data", "Mixin root must be a map"))?;
+    edit(map)?;
+    let runtime = runtime_with_mixin(ctx, mixin.clone())?;
+    let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+    fs::write(candidate.path(), &runtime)?;
+    validate_config(ctx, candidate.path(), true)?;
+    // Mihomo may echo YAML values in diagnostics, so avoid streaming secrets.
+    if ctx.paths.clash_binary.is_file() {
+        require_binary(ctx)?;
+        let output = ctx.command(
+            &path_string(&ctx.paths.clash_binary)?,
+            &[
+                "-d",
+                &path_string(&ctx.paths.clash_resources)?,
+                "-f",
+                &path_string(candidate.path())?,
+                "-t",
+            ],
+            false,
+        )?;
+        if !output.status.success() {
+            return Err(Error::new(
+                "error.verify",
+                "Mihomo rejected settings; previous configuration retained",
+            ));
+        }
+    }
+    let bytes = serde_yaml::to_string(&mixin)?.into_bytes();
+    commit_files(
+        ctx,
+        &[
+            (
+                ctx.paths.clash_mixin.clone(),
+                Some(storage::Saved::new(&bytes, 0o600)),
+            ),
+            (
+                ctx.paths.clash_runtime.clone(),
+                Some(storage::Saved::new(&runtime, 0o600)),
+            ),
+        ],
+    )
 }
 
 fn merge_config(mut base: Value, mixin: Value) -> Result<Value> {
@@ -792,7 +1091,7 @@ fn optional_sequence(map: &serde_yaml::Mapping, key: &str) -> Result<Option<Vec<
 }
 
 fn validate_config(_ctx: &Context, path: &Path, allow_direct: bool) -> Result<()> {
-    let value: Value = serde_yaml::from_slice(&fs::read(path)?)?;
+    let value = yaml(&fs::read(path)?)?;
     let map = value
         .as_mapping()
         .ok_or_else(|| Error::new("error.data", "Clash configuration root must be a map"))?;
@@ -829,7 +1128,8 @@ fn validate_config(_ctx: &Context, path: &Path, allow_direct: bool) -> Result<()
 
 fn read_profiles(ctx: &Context) -> Result<ProfilesFile> {
     match fs::read(&ctx.paths.clash_profiles) {
-        Ok(bytes) => serde_yaml::from_slice(&bytes).map_err(|e| Error::new("error.data", e)),
+        Ok(bytes) => serde_yaml::from_slice(&bytes)
+            .map_err(|_| Error::new("error.data", "invalid subscription metadata YAML")),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ProfilesFile::default()),
         Err(error) => Err(error.into()),
     }
@@ -852,6 +1152,7 @@ fn activate_profile(ctx: &Context, profiles: &mut ProfilesFile, name: &str) -> R
         .map_err(|e| Error::new("error.data", format!("{}: {e}", source.display())))?;
     validate_config(ctx, &source, false)?;
     validate_with_mihomo(ctx, &source)?;
+    validate_subscription_runtime(ctx, &bytes)?;
     profiles.current = Some(name.into());
     Ok(bytes)
 }
@@ -864,7 +1165,19 @@ fn validate_with_mihomo(ctx: &Context, path: &Path) -> Result<()> {
     let binary = path_string(&ctx.paths.clash_binary)?;
     let resources = path_string(&ctx.paths.clash_resources)?;
     let config = path_string(path)?;
-    ctx.run(&binary, &["-d", &resources, "-f", &config, "-t"])
+    let output = ctx.command(&binary, &["-d", &resources, "-f", &config, "-t"], false)?;
+    if !output.status.success() {
+        return Err(Error::new(
+            "error.verify",
+            format!("Mihomo rejected configuration: {}", path.display()),
+        ));
+    }
+    Ok(())
+}
+
+fn yaml(bytes: &[u8]) -> Result<Value> {
+    serde_yaml::from_slice(bytes)
+        .map_err(|_| Error::new("error.data", "invalid Mihomo configuration YAML"))
 }
 
 fn resolve_profile_path(ctx: &Context, relative: &str) -> Result<PathBuf> {
@@ -907,6 +1220,7 @@ fn recover_interrupted_files(ctx: &Context) -> Result<()> {
                     stem.len() == 24 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
                 });
         if path != &ctx.paths.clash_profiles
+            && path != &ctx.paths.clash_mixin
             && path != &ctx.paths.clash_config
             && path != &ctx.paths.clash_runtime
             && !profile_file
@@ -984,8 +1298,17 @@ fn download_release_asset(ctx: &Context, url: &str, target: &Path, size: u64) ->
 }
 
 fn version_banner_matches(banner: &str, version: &str) -> bool {
-    (banner.starts_with("Mihomo") || banner.starts_with("Clash Meta"))
-        && banner.split_whitespace().any(|token| token == version)
+    version_from_banner(banner).as_deref() == Some(version)
+}
+
+fn version_from_banner(banner: &str) -> Option<String> {
+    if !(banner.starts_with("Mihomo") || banner.starts_with("Clash Meta")) {
+        return None;
+    }
+    banner.split_whitespace().find_map(|token| {
+        let token = token.strip_prefix('v')?;
+        validate_version(token).ok()
+    })
 }
 
 fn validate_subscription_url(value: &str) -> Result<()> {
@@ -1005,6 +1328,33 @@ fn validate_subscription_url(value: &str) -> Result<()> {
 
 fn profile_file_name(name: &str) -> String {
     format!("{}.yaml", &sha256_hex(name.as_bytes())[..24])
+}
+
+fn unused_profile_file_name(
+    directory: &Path,
+    profiles: &ProfilesFile,
+    name: &str,
+) -> Result<String> {
+    let mut suffix = 0;
+    loop {
+        let file_name = if suffix == 0 {
+            profile_file_name(name)
+        } else {
+            profile_file_name(&format!("{name}\0{suffix}"))
+        };
+        if !profiles
+            .profiles
+            .iter()
+            .any(|profile| profile.path == file_name)
+        {
+            match fs::symlink_metadata(directory.join(&file_name)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(file_name),
+                Err(error) => return Err(error.into()),
+                Ok(_) => (),
+            }
+        }
+        suffix += 1;
+    }
 }
 
 fn shell_quote(shell: &str, value: &str) -> String {
@@ -1039,7 +1389,7 @@ fn proxy_config(ctx: &Context) -> Result<ProxyConfig> {
     } else {
         &ctx.paths.clash_config
     };
-    let value: Value = serde_yaml::from_slice(&fs::read(path)?)?;
+    let value = yaml(&fs::read(path)?)?;
     let map = value
         .as_mapping()
         .ok_or_else(|| Error::new("error.data", "Clash config root must be a map"))?;
@@ -1122,35 +1472,58 @@ fn path_string(path: &Path) -> Result<String> {
 }
 
 fn pid_matches(ctx: &Context, pid: u32) -> bool {
+    matches!(process_state(ctx, pid), State::Running(_))
+}
+
+fn process_state(ctx: &Context, pid: u32) -> State {
     if pid <= 1 {
-        return false;
+        return State::Unknown;
     }
     #[cfg(target_os = "linux")]
     {
-        let recorded_start = fs::read_to_string(&ctx.paths.clash_pid_start).ok();
-        let process_start = process_start_time(pid);
-        if recorded_start.as_deref().map(str::trim) != process_start.as_deref() {
-            return false;
+        let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return State::Stopped,
+            Err(_) => return State::Unknown,
+        };
+        let Some((_, fields)) = stat.rsplit_once(") ") else {
+            return State::Unknown;
+        };
+        if matches!(fields.split_whitespace().next(), Some("Z" | "X")) {
+            return State::Stopped;
         }
-        let command_line = fs::read(format!("/proc/{pid}/cmdline")).ok();
-        let Some(command_line) = command_line else {
-            return false;
+        let Some(process_start) = process_start_time_from_stat(&stat) else {
+            return State::Unknown;
+        };
+        let recorded_start = fs::read_to_string(&ctx.paths.clash_pid_start).ok();
+        if recorded_start.as_deref().map(str::trim) != Some(process_start.as_str()) {
+            return State::Unknown;
+        }
+        let command_line = match fs::read(format!("/proc/{pid}/cmdline")) {
+            Ok(command_line) => command_line,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return State::Stopped,
+            Err(_) => return State::Unknown,
         };
         let expected_binary = ctx.paths.clash_binary.to_string_lossy();
         let expected_runtime = ctx.paths.clash_runtime.to_string_lossy();
         let command_line = String::from_utf8_lossy(&command_line);
         let argv = command_line.split('\0').collect::<Vec<_>>();
-        argv.len() >= 5
+        if argv.len() >= 5
             && argv[0] == expected_binary
             && argv[1] == "-d"
             && argv[2] == ctx.paths.clash_resources.to_string_lossy()
             && argv[3] == "-f"
             && argv[4] == expected_runtime
+        {
+            State::Running(pid)
+        } else {
+            State::Unknown
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = ctx;
-        false
+        State::Unknown
     }
 }
 
@@ -1259,6 +1632,11 @@ mod tests {
             "v1.2.3"
         ));
         assert!(!version_banner_matches("other Mihomo v1.2.3", "v1.2.3"));
+        assert_eq!(
+            version_from_banner("Mihomo v1.2.3 linux amd64").as_deref(),
+            Some("v1.2.3")
+        );
+        assert_eq!(version_from_banner("Mihomo development build"), None);
     }
 
     #[cfg(target_os = "linux")]

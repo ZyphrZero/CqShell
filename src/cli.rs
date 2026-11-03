@@ -108,6 +108,7 @@ pub fn command(i: &I18n) -> Command {
                     .help(i.text("cli.proxy_env_shell").to_owned()),
             ),
     );
+    cmd = cmd.subcommand(crate::ops::clash::compat::command(i));
     for name in ["run", "batch"] {
         cmd = cmd.subcommand(
             Command::new(name)
@@ -155,7 +156,8 @@ pub fn parse_parameters(values: impl Iterator<Item = String>) -> Result<Paramete
 }
 
 pub fn main_entry() -> i32 {
-    let args: Vec<String> = env::args().collect();
+    let mut args: Vec<String> = env::args().collect();
+    crate::ops::clash::compat::normalize_arguments(&mut args);
     let result = (|| {
         let mut paths = Paths::from_env()?;
         let config = bootstrap(&args, "--config").map(PathBuf::from);
@@ -248,6 +250,7 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches) -> Result<()> {
         return Err(Error::new("error.cli", "--json requires list/languages"));
     }
     match args.subcommand() {
+        Some(("clashctl", matches)) => crate::ops::clash::compat::dispatch(ctx, matches),
         Some(("list", _)) => {
             let specs = actions::specs();
             if args.get_flag("json") {

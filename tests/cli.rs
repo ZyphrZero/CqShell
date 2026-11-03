@@ -45,7 +45,7 @@ fn proxy_environment_command_is_shell_specific_and_has_no_filesystem_side_effect
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "set -e http_proxy https_proxy all_proxy no_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY\n"
+        "set -e http_proxy\nset -e https_proxy\nset -e all_proxy\nset -e no_proxy\nset -e HTTP_PROXY\nset -e HTTPS_PROXY\nset -e ALL_PROXY\nset -e NO_PROXY\ntrue\n"
     );
     assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
 }
@@ -267,11 +267,24 @@ fn tui_pty(exit_key: Option<&[u8]>) {
     let temp = tempfile::tempdir().unwrap();
     let bin = temp.path().join("bin");
     fs::create_dir(&bin).unwrap();
+    if exit_key.is_some() {
+        let config = temp.path().join("config/cqs");
+        fs::create_dir_all(&config).unwrap();
+        // Target a stable category ID instead of depending on the default
+        // category order, which may place a root-only action at this offset.
+        fs::write(config.join("config.toml"), "category_order = ['ai']\n").unwrap();
+    }
     fs::write(
         bin.join("curl"),
         r#"#!/usr/bin/python3
 import os, signal, sys, time
-signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+from pathlib import Path
+root = Path(os.environ['CQS_PTY_ROOT'])
+root.joinpath('child.pid').write_text(str(os.getpid()))
+def interrupted(*_):
+    root.joinpath('child.cancelled').write_text('SIGINT')
+    sys.exit(0)
+signal.signal(signal.SIGINT, interrupted)
 try:
     fd = os.open('/dev/tty', os.O_RDONLY | os.O_NONBLOCK)
 except OSError:
@@ -291,6 +304,7 @@ sys.exit(23)
         .env("TERM", "xterm-256color")
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
         .env("CQS_STATE_DIR", temp.path().join("state"))
+        .env("CQS_PTY_ROOT", temp.path())
         .args(["--lang", "en-US"])
         .stdin(slave.try_clone().unwrap())
         .stdout(slave.try_clone().unwrap())
@@ -345,10 +359,9 @@ sys.exit(23)
                 .contains("功能分类")
         {
             if exit_key.is_some() {
-                // Focus categories, select Agent tools, and start its first action.
-                master
-                    .write_all(b"\t\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B\r\r\x1bOQ")
-                    .unwrap();
+                // The fixture starts on Agent tools; run its first user action
+                // and open the logs before requesting cancellation.
+                master.write_all(b"\r\x1bOQ").unwrap();
                 started_task = true;
             } else {
                 master.write_all(b"q").unwrap();
@@ -380,6 +393,15 @@ sys.exit(23)
         assert!(String::from_utf8_lossy(&restarted.stdout).contains("服务器工具箱"));
     }
     if exit_key.is_some() {
+        let pid = fs::read_to_string(temp.path().join("child.pid")).unwrap();
+        assert!(
+            !std::path::Path::new(&format!("/proc/{}", pid.trim())).exists(),
+            "Cancelled command was not reaped"
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("child.cancelled")).unwrap(),
+            "SIGINT"
+        );
         assert!(
             bytes.windows(11).any(|part| part == b"CQS_NO_CTTY"),
             "Captured command inherited the controlling terminal"

@@ -39,6 +39,21 @@ pub enum Kind {
     ClashSubscriptionUse,
     ClashSubscriptionUpdate,
     ClashSubscriptionRemove,
+    ClashControllerStatus,
+    ClashControllerConfigure,
+    ClashProxies,
+    ClashProxySelect,
+    ClashSecretGenerate,
+    ClashSecretSet,
+    ClashSecretClear,
+    ClashPanelStatus,
+    ClashPanelInstall,
+    ClashTunStatus,
+    ClashTunConfigure,
+    ClashLogs,
+    ClashServiceStatus,
+    ClashServiceInstall,
+    ClashServiceRemove,
     KernelList,
     KernelInstall,
     KernelBoot,
@@ -513,6 +528,153 @@ pub fn specs() -> Vec<Spec> {
         vec![field("name", "", &[], true)],
     );
     add(
+        "clash.controller.status",
+        "clash",
+        ClashControllerStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.controller.configure",
+        "clash",
+        ClashControllerConfigure,
+        false,
+        true,
+        false,
+        vec![field("controller_address", "127.0.0.1:9090", &[], true)],
+    );
+    add(
+        "clash.proxies",
+        "clash",
+        ClashProxies,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.proxy.select",
+        "clash",
+        ClashProxySelect,
+        false,
+        true,
+        false,
+        vec![
+            field("proxy_group", "", &[], true),
+            field("proxy_node", "", &[], true),
+        ],
+    );
+    add(
+        "clash.secret.generate",
+        "clash",
+        ClashSecretGenerate,
+        false,
+        true,
+        false,
+        vec![],
+    );
+    add(
+        "clash.secret.set",
+        "clash",
+        ClashSecretSet,
+        false,
+        true,
+        false,
+        vec![field("secret_file", "", &[], true)],
+    );
+    add(
+        "clash.secret.clear",
+        "clash",
+        ClashSecretClear,
+        false,
+        true,
+        false,
+        vec![],
+    );
+    add(
+        "clash.panel.status",
+        "clash",
+        ClashPanelStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.panel.install",
+        "clash",
+        ClashPanelInstall,
+        false,
+        true,
+        false,
+        vec![field("version", "", &[], false)],
+    );
+    add(
+        "clash.tun.status",
+        "clash",
+        ClashTunStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.tun.configure",
+        "clash",
+        ClashTunConfigure,
+        false,
+        true,
+        false,
+        vec![
+            field("enabled", "off", &["on", "off"], true),
+            field("tun_stack", "mixed", &["system", "gvisor", "mixed"], true),
+            field("tun_device", "cqs-tun", &[], true),
+            field("auto_route", "on", &["on", "off"], true),
+            field("dns_hijack", "on", &["on", "off"], true),
+        ],
+    );
+    add(
+        "clash.logs",
+        "clash",
+        ClashLogs,
+        false,
+        false,
+        false,
+        vec![
+            field("lines", "100", &[], true),
+            field("follow", "off", &["on", "off"], true),
+        ],
+    );
+    add(
+        "clash.service.status",
+        "clash",
+        ClashServiceStatus,
+        false,
+        false,
+        false,
+        vec![field("service_scope", "user", &["user", "system"], true)],
+    );
+    add(
+        "clash.service.install",
+        "clash",
+        ClashServiceInstall,
+        false,
+        true,
+        false,
+        vec![field("service_scope", "user", &["user", "system"], true)],
+    );
+    add(
+        "clash.service.remove",
+        "clash",
+        ClashServiceRemove,
+        false,
+        true,
+        false,
+        vec![field("service_scope", "user", &["user", "system"], true)],
+    );
+    add(
         "kernel.list",
         "kernel",
         KernelList,
@@ -807,6 +969,32 @@ pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> 
         ClashSubscriptionUse => ops::clash::subscription_use(ctx, &p["name"]),
         ClashSubscriptionUpdate => ops::clash::subscription_update(ctx, &p["name"]),
         ClashSubscriptionRemove => ops::clash::subscription_remove(ctx, &p["name"]),
+        ClashControllerStatus => ops::clash::controller::status(ctx),
+        ClashControllerConfigure => {
+            ops::clash::controller::configure(ctx, &p["controller_address"])
+        }
+        ClashProxies => ops::clash::controller::proxies(ctx),
+        ClashProxySelect => {
+            ops::clash::controller::select(ctx, &p["proxy_group"], &p["proxy_node"])
+        }
+        ClashSecretGenerate => ops::clash::controller::secret_generate(ctx),
+        ClashSecretSet => ops::clash::controller::secret_set(ctx, &p["secret_file"]),
+        ClashSecretClear => ops::clash::controller::secret_clear(ctx),
+        ClashPanelStatus => ops::clash::panel::status(ctx),
+        ClashPanelInstall => ops::clash::panel::install(ctx, &p["version"]),
+        ClashTunStatus => ops::clash::tun::status(ctx),
+        ClashTunConfigure => ops::clash::tun::configure(
+            ctx,
+            p["enabled"] == "on",
+            &p["tun_stack"],
+            &p["tun_device"],
+            p["auto_route"] == "on",
+            p["dns_hijack"] == "on",
+        ),
+        ClashLogs => ops::clash::logs(ctx, &p["lines"], p["follow"] == "on"),
+        ClashServiceStatus => ops::clash::service::status(ctx, &p["service_scope"]),
+        ClashServiceInstall => ops::clash::service::install(ctx, &p["service_scope"]),
+        ClashServiceRemove => ops::clash::service::remove(ctx, &p["service_scope"]),
         KernelList => ops::kernel::list(ctx),
         KernelInstall => ops::kernel::install(ctx, &p["profile"], &p["version"]),
         KernelBoot => ops::kernel::boot(ctx, &p["release"]),

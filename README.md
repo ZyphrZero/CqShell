@@ -141,7 +141,11 @@ eval "$(cqs proxy-env off --shell bash)"
 
 Rust 版在 **Mihomo 代理** 分类集成 Mihomo 官方二进制安装/更新、配置校验、启动/停止/状态，以及订阅添加、选择、更新和删除。默认数据目录为 `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`，可通过 `CQS_CLASH_HOME`、`CQS_CLASH_DATA_DIR`、`CQS_CLASH_BINARY` 等 `CQS_CLASH_*` 环境变量覆盖。运行 YAML、PID/进程启动时间记录和事务恢复文件保存在该目录。
 
+现已补齐控制器配置、策略组/节点切换、密钥管理、MetaCubeXD Web 控制台、日志查看/跟随、TUN 配置和 systemd 用户/系统托管，共 24 个 CLI/TUI 操作。面板可用 `cqs --yes run clash.panel.install` 安装，启动后用 `cqs run clash.panel.status` 查看地址。持久设置要求先停止 Mihomo；TUN 和 systemd 有明确的平台/权限边界，详见 [Mihomo 集成说明](docs/MIHOMO.md)。
+
 `cqs proxy-env` 输出供当前父 Shell 执行的环境变量命令。Bash/Zsh 可用 `eval "$(cqs proxy-env on)"`，Fish 可用 `source (cqs proxy-env on --shell fish | psub)`。`on` 会在 Mihomo 未运行时先启动；`off` 仅清理当前 Shell 代理变量，不停止 Mihomo。订阅 URL 必须是无凭据 HTTPS；下载内容需通过 YAML 结构检查以及已安装 Mihomo 的 `-t` 校验。订阅多文件提交使用恢复记录，失败时恢复 before-image。
+
+习惯 `nelvko/clashctl` 命令的用户，可先在 Bash 执行 `eval "$(cqs clashctl shell-init --shell bash)"`，随后直接使用 `clashctl on/off/start/stop/status`、`clashctl sub add/use/update/del/rename`、`clashctl node use`，以及 `clashon`、`clashoff` 等快捷函数。Zsh 将参数改为 `--shell zsh`；Fish 使用 `cqs clashctl shell-init --shell fish | source`。脚本中也可使用 `cqs clashctl ...`；只有 on/off 需要加载父 Shell 函数。初始化不会修改 Shell 配置或接管原项目的数据目录。兼容命令复用 Rust 后端，但不等于全功能等价，支持列表和差异见 [兼容说明](docs/MIHOMO.md#clashctl-兼容命令)。
 
 启用已有内核的 BBR / BBRv3：进入 **网络优化 → 启用当前内核的 BBR**，选择 `fq` 等队列并执行；需要调整 TCP 缓冲区时使用同页的 TCP 调优。安装 BBRv3：进入 **内核管理 → 安装 BBRv3 内核**，可选 `standard` / `max`，版本留空使用最新匹配版本，也可填写 `x.y.z`；重启进入新内核后再查看 BBR 状态及配置队列。
 
