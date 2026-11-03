@@ -12,12 +12,12 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const CANVAS: Color = Color::Rgb(9, 14, 22);
-const PANEL: Color = Color::Rgb(17, 27, 39);
-const PANEL_ALT: Color = Color::Rgb(24, 38, 53);
+const CANVAS: Color = Color::Reset;
+const PANEL: Color = Color::Reset;
+const PANEL_ALT: Color = Color::Reset;
 const BORDER: Color = Color::Rgb(61, 82, 101);
 const BORDER_ACTIVE: Color = Color::Rgb(69, 205, 182);
-const TEXT: Color = Color::Rgb(229, 237, 243);
+const TEXT: Color = Color::Reset;
 const MUTED: Color = Color::Rgb(145, 162, 176);
 const TEAL: Color = Color::Rgb(69, 205, 182);
 const BLUE: Color = Color::Rgb(112, 170, 255);
@@ -25,6 +25,7 @@ const AMBER: Color = Color::Rgb(255, 190, 94);
 const VIOLET: Color = Color::Rgb(181, 145, 255);
 const GREEN: Color = Color::Rgb(93, 216, 136);
 const RED: Color = Color::Rgb(255, 117, 133);
+const HIGHLIGHT_TEXT: Color = Color::Black;
 
 pub(super) struct Regions {
     pub header: Rect,
@@ -91,7 +92,7 @@ fn block(title: impl Into<String>, active: bool) -> Block<'static> {
                 .fg(if active { TEAL } else { TEXT })
                 .add_modifier(Modifier::BOLD),
         )
-        .style(Style::default().bg(PANEL))
+        .style(Style::default().fg(TEXT).bg(PANEL))
         .border_style(Style::default().fg(if active { BORDER_ACTIVE } else { BORDER }))
 }
 fn highlight(active: bool) -> Style {
@@ -100,7 +101,7 @@ fn highlight(active: bool) -> Style {
 fn highlight_with(active: bool, accent: Color) -> Style {
     if active {
         Style::default()
-            .fg(CANVAS)
+            .fg(HIGHLIGHT_TEXT)
             .bg(accent)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -1157,5 +1158,48 @@ mod tests {
                 assert!(screen.contains(&app.ctx.i18n.text("ui.cancel").replace(' ', "")));
             }
         }
+    }
+
+    #[test]
+    fn canvas_and_form_popup_preserve_terminal_background() {
+        let mut app = App::new(Context::new(
+            Paths::from_env().unwrap(),
+            I18n::load(Some("en-US"), None).unwrap(),
+            false,
+        ));
+        let area = Rect::new(0, 0, 120, 40);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+                .unwrap();
+
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Reset);
+        let background = terminal.backend().buffer().content.clone();
+
+        app.form = Some(
+            app.make_form(
+                crate::actions::find("clash.sub.add").unwrap(),
+                FormMode::Run,
+            )
+            .unwrap(),
+        );
+        let geometry = FormGeometry::new(area, app.form.as_ref().unwrap(), &app.ctx.i18n);
+        let popup = geometry.popup;
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(popup.x + 1, popup.y + 1)].bg,
+            Color::Reset
+        );
+        let buffer = terminal.backend().buffer();
+        let cleared_background_text = (popup.y + 1..popup.y + popup.height - 1).any(|y| {
+            (popup.x + 1..popup.x + popup.width - 1).any(|x| {
+                let index = usize::from(y) * usize::from(area.width) + usize::from(x);
+                background[index].symbol() != " " && buffer[(x, y)].symbol() == " "
+            })
+        });
+        assert!(cleared_background_text);
+        let hint_cell = &buffer[(popup.x + popup.width - 2, geometry.sections[4].y)];
+        assert_eq!(hint_cell.fg, Color::Reset);
+        assert_eq!(hint_cell.bg, Color::Reset);
     }
 }
