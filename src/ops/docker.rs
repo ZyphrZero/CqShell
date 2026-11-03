@@ -20,12 +20,12 @@ pub fn candidate(text: &str, change: Change<'_>, subnet: &str) -> Result<String>
         Change::Ipv6(on) => {
             object.insert("ipv6".into(), Value::Bool(on));
             if on {
-                if !object
+                if object
                     .get("fixed-cidr-v6")
-                    .is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()))
-                    && !object
+                    .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
+                    && object
                         .get("bip6")
-                        .is_some_and(|v| v.as_str().is_some_and(|s| !s.is_empty()))
+                        .is_none_or(|v| v.as_str().is_none_or(str::is_empty))
                 {
                     object.insert("fixed-cidr-v6".into(), Value::String(subnet.into()));
                 }

@@ -623,13 +623,13 @@ pub(crate) fn schedule_boot(
     }
 
     let result = (|| {
-        ctx.run("grub-reboot", &[&entry])?;
+        ctx.run("grub-reboot", &[entry])?;
         let environment = ctx.output("grub-editenv", &["list"])?;
         if !environment
             .lines()
             .any(|line| line == format!("next_entry={entry}"))
         {
-            return Err(Error::new("error.kernel_boot_verify", &entry));
+            return Err(Error::new("error.kernel_boot_verify", entry));
         }
         ctx.message("notice.kernel_boot", release);
         if reboot_now {

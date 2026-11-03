@@ -210,9 +210,7 @@ impl Sampler {
             cpu,
             cpu_usage,
             terminal_proxy: Reading::Value(proxy_environment_enabled(
-                PROXY_ENV_VARS
-                    .iter()
-                    .filter_map(|name| std::env::var_os(name)),
+                PROXY_ENV_VARS.iter().filter_map(std::env::var_os),
             )),
             memory: if self.system.total_memory() == 0 {
                 Reading::Unavailable("memory statistics unavailable".into())

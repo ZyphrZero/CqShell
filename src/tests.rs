@@ -323,6 +323,8 @@ fn tcp_buffer_matches_original_contract() {
     assert!(memory::tcp_buffer("1", "1", 65535).is_err());
 }
 
+// The fixture encodes Linux mountinfo and absolute POSIX cgroup paths.
+#[cfg(target_os = "linux")]
 fn proc_tree(
     root: &Path,
     kind: &str,
@@ -355,6 +357,7 @@ fn proc_tree(
     (proc, mount)
 }
 #[test]
+#[cfg(target_os = "linux")]
 fn cgroup_v2_ancestor_caps_unlimited_leaf() {
     let temp = tempfile::tempdir().unwrap();
     let (proc, mount) = proc_tree(temp.path(), "cgroup2", "/tenant/app", "/");
@@ -365,6 +368,7 @@ fn cgroup_v2_ancestor_caps_unlimited_leaf() {
     assert_eq!(memory::effective_kb(&proc).unwrap(), 262144);
 }
 #[test]
+#[cfg(target_os = "linux")]
 fn cgroup_v1_respects_mount_root_and_large_limit() {
     let temp = tempfile::tempdir().unwrap();
     let (proc, mount) = proc_tree(temp.path(), "cgroup", "/tenant/app", "/tenant");
@@ -378,6 +382,7 @@ fn cgroup_v1_respects_mount_root_and_large_limit() {
     assert_eq!(memory::effective_kb(&proc).unwrap(), 131072);
 }
 #[test]
+#[cfg(target_os = "linux")]
 fn cgroup_unknown_paths_and_bad_limits_fail() {
     for group in ["/missing", "/../outside"] {
         let temp = tempfile::tempdir().unwrap();
