@@ -2,6 +2,7 @@ use super::{App, Focus, Form, FormMode, Phase};
 use crate::{
     dashboard::{Reading, Usage},
     i18n::I18n,
+    ops::clash::State,
 };
 use ratatui::{
     Frame,
@@ -26,6 +27,7 @@ const VIOLET: Color = Color::Rgb(181, 145, 255);
 const GREEN: Color = Color::Rgb(93, 216, 136);
 const RED: Color = Color::Rgb(255, 117, 133);
 const HIGHLIGHT_TEXT: Color = Color::Black;
+const DASHBOARD_HEIGHT: u16 = 11;
 
 pub(super) struct Regions {
     pub header: Rect,
@@ -43,7 +45,7 @@ impl Regions {
             if area.height >= 34 && app.logs_open && (app.worker.is_some() || !app.logs.is_empty())
             {
                 // Share the space below the dashboard with logs, keeping 10 menu rows.
-                let content_height = area.height.saturating_sub(15);
+                let content_height = area.height.saturating_sub(DASHBOARD_HEIGHT + 5);
                 ((u32::from(content_height) * 3 / 5) as u16).min(content_height.saturating_sub(10))
             } else {
                 0
@@ -51,7 +53,7 @@ impl Regions {
         let vertical = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
-            Constraint::Length(10),
+            Constraint::Length(DASHBOARD_HEIGHT),
             Constraint::Min(6),
             Constraint::Length(log_height),
             Constraint::Length(3),
@@ -227,8 +229,32 @@ fn metric_value_color(key: &str, app: &App) -> Color {
             Reading::Value(false) => MUTED,
             _ => TEXT,
         },
+        "dash.mihomo_state" => match &app.snapshot.local.mihomo_state {
+            Reading::Value(State::Running(_)) => GREEN,
+            Reading::Value(State::Stopped | State::NotInstalled) => MUTED,
+            Reading::Value(State::Unknown) | Reading::Unavailable(_) => AMBER,
+            _ => TEXT,
+        },
+        "dash.mihomo_version"
+            if matches!(&app.snapshot.local.mihomo_version, Reading::Unavailable(_)) =>
+        {
+            AMBER
+        }
         "dash.ipv4" | "dash.ipv6" => TEAL,
         _ => TEXT,
+    }
+}
+fn mihomo_status(value: &Reading<State>, i: &I18n) -> String {
+    match value {
+        Reading::Value(State::NotInstalled) => i.text("dash.not_installed").into(),
+        Reading::Value(State::Stopped) => i.text("dash.stopped").into(),
+        Reading::Value(State::Running(pid)) => {
+            i.format("dash.mihomo_running", &[("pid", &pid.to_string())])
+        }
+        Reading::Loading => i.text("dash.loading").into(),
+        Reading::NotQueried => i.text("dash.not_queried").into(),
+        Reading::NotApplicable => i.text("dash.na").into(),
+        Reading::Value(State::Unknown) | Reading::Unavailable(_) => i.text("dash.unknown").into(),
     }
 }
 fn bbr(app: &App) -> String {
@@ -313,6 +339,10 @@ fn metric_rows(app: &App) -> Vec<(Metric, Metric)> {
                 boolean(&data.terminal_proxy, i, "status.enabled", "status.disabled"),
             ),
             ("dash.isp", text(&public.isp, i)),
+        ),
+        (
+            ("dash.mihomo_state", mihomo_status(&data.mihomo_state, i)),
+            ("dash.mihomo_version", text(&data.mihomo_version, i)),
         ),
         (
             ("dash.ipv4", text(&public.ipv4, i)),
@@ -877,6 +907,7 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         ("dash.kernel_status", &data.kernel),
         ("dash.cpu", &data.cpu),
         ("dash.timezone", &data.timezone),
+        ("dash.mihomo_version", &data.mihomo_version),
         ("dash.network", &data.congestion),
         ("dash.qdisc", &data.qdisc),
         ("dash.ipv4", &app.snapshot.public.ipv4),
@@ -886,6 +917,15 @@ fn overview_lines(app: &App) -> Vec<Line<'static>> {
         if let Reading::Unavailable(error) = value {
             errors.push(format!("{}: {error}", i.text(key)));
         }
+    }
+    match &data.mihomo_state {
+        Reading::Unavailable(error) => {
+            errors.push(format!("{}: {error}", i.text("dash.mihomo_state")));
+        }
+        Reading::Value(State::Unknown) => {
+            errors.push(i.text("dash.mihomo_unverified").into());
+        }
+        _ => (),
     }
     if !errors.is_empty() {
         lines.push(Line::default());
@@ -1063,6 +1103,8 @@ mod tests {
             assert!(text.contains("CPU:"));
             assert!(text.contains("Kernelstatus:"));
             assert!(text.contains("Terminalproxy:"));
+            assert!(text.contains("Mihomostatus:"));
+            assert!(text.contains("Mihomoversion:"));
             assert!(text.contains("IPv4:"));
             assert!(!text.contains("[x]"));
             assert!(!text.contains("[]"));
@@ -1072,6 +1114,76 @@ mod tests {
         assert!(text.contains("[]"));
         assert!(text.contains("Selected:0"));
     }
+    #[test]
+    fn proxy_and_mihomo_fields_render_independently_in_both_languages() {
+        for locale in ["zh-CN", "en-US"] {
+            let mut app = App::new(Context::new(
+                Paths::from_env().unwrap(),
+                I18n::load(Some(locale), None).unwrap(),
+                false,
+            ));
+            app.snapshot.local.mihomo_version = Reading::Value("v1.19.12".into());
+            for (state, proxy, key) in [
+                (State::Running(1234), false, "dash.mihomo_running"),
+                (State::Stopped, true, "dash.stopped"),
+                (State::NotInstalled, false, "dash.not_installed"),
+                (State::Unknown, true, "dash.unknown"),
+            ] {
+                app.snapshot.local.mihomo_state = Reading::Value(state);
+                app.snapshot.local.terminal_proxy = Reading::Value(proxy);
+                let expected_state = app.ctx.i18n.format(key, &[("pid", "1234")]);
+                let expected_proxy = app.ctx.i18n.text(if proxy {
+                    "status.enabled"
+                } else {
+                    "status.disabled"
+                });
+                for (width, height) in [(80, 24), (120, 40), (200, 55)] {
+                    let screen = render(&app, width, height);
+                    for (key, value) in [
+                        ("dash.terminal_proxy", expected_proxy),
+                        ("dash.mihomo_state", expected_state.as_str()),
+                        ("dash.mihomo_version", "v1.19.12"),
+                    ] {
+                        let field = format!("{}:{value}", app.ctx.i18n.text(key)).replace(' ', "");
+                        assert!(
+                            screen.contains(&field),
+                            "missing {field} at {width}x{height}"
+                        );
+                    }
+                    assert!(
+                        screen.contains(
+                            &format!("{}:", app.ctx.i18n.text("dash.tcp")).replace(' ', "")
+                        )
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mihomo_probe_errors_remain_visible_in_overview_diagnostics() {
+        let mut app = App::new(Context::new(
+            Paths::from_env().unwrap(),
+            I18n::load(Some("en-US"), None).unwrap(),
+            false,
+        ));
+        app.snapshot.local.mihomo_state = Reading::Unavailable("invalid PID file".into());
+        app.snapshot.local.mihomo_version = Reading::Unavailable("version probe failed".into());
+        let details = overview_lines(&app)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(details.contains("Mihomo status: invalid PID file"));
+        assert!(details.contains("Mihomo version: version probe failed"));
+        assert_eq!(metric_value_color("dash.mihomo_state", &app), AMBER);
+        app.snapshot.local.mihomo_state = Reading::Value(State::Unknown);
+        assert!(overview_lines(&app).iter().any(|line| {
+            line.to_string()
+                .contains(app.ctx.i18n.text("dash.mihomo_unverified"))
+        }));
+    }
+
     #[test]
     fn network_summary_collapses_linux_only_fields_on_other_platforms() {
         let mut app = App::new(Context::new(
@@ -1112,9 +1224,9 @@ mod tests {
         assert!(large.categories.height >= 10);
         for height in [34, 40, 50, 80] {
             let regions = Regions::new(Rect::new(0, 0, 160, height), &app);
-            assert!(regions.logs.height >= 9);
+            assert!(regions.logs.height >= 8);
             assert!(regions.categories.height >= 10);
-            assert_eq!(regions.dashboard.height, 10);
+            assert_eq!(regions.dashboard.height, DASHBOARD_HEIGHT);
             assert_eq!(regions.footer.height, 3);
         }
         assert_eq!(Regions::new(Rect::new(0, 0, 80, 24), &app).logs.height, 0);

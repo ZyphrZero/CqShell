@@ -1,7 +1,7 @@
 //! Read-only, independently refreshed dashboard data. No system-management action runs here.
 use crate::{
-    config::Paths,
     error::{Error, Result},
+    ops::clash::{self, State},
     runtime::Context,
 };
 use std::{
@@ -72,6 +72,8 @@ pub struct LocalSnapshot {
     pub cpu: Reading<String>,
     pub cpu_usage: Reading<f32>,
     pub terminal_proxy: Reading<bool>,
+    pub mihomo_state: Reading<State>,
+    pub mihomo_version: Reading<String>,
     pub memory: Reading<Usage>,
     pub swap: Reading<Usage>,
     pub disk: Reading<Usage>,
@@ -95,6 +97,8 @@ impl Default for LocalSnapshot {
             cpu: Reading::Loading,
             cpu_usage: Reading::Loading,
             terminal_proxy: Reading::Loading,
+            mihomo_state: Reading::Loading,
+            mihomo_version: Reading::Loading,
             memory: Reading::Loading,
             swap: Reading::Loading,
             disk: Reading::Loading,
@@ -152,7 +156,7 @@ impl Sampler {
             first_sample: None,
         }
     }
-    pub fn sample(&mut self, paths: &Paths) -> LocalSnapshot {
+    pub fn sample(&mut self, ctx: &Context) -> LocalSnapshot {
         self.system.refresh_cpu_all();
         self.system.refresh_memory();
         self.disks.refresh(false);
@@ -212,6 +216,8 @@ impl Sampler {
             terminal_proxy: Reading::Value(proxy_environment_enabled(
                 PROXY_ENV_VARS.iter().filter_map(std::env::var_os),
             )),
+            mihomo_state: Reading::NotApplicable,
+            mihomo_version: Reading::NotApplicable,
             memory: if self.system.total_memory() == 0 {
                 Reading::Unavailable("memory statistics unavailable".into())
             } else {
@@ -240,11 +246,21 @@ impl Sampler {
                 &mut snapshot,
                 Path::new("/proc/sys"),
                 Path::new("/sys/module/tcp_bbr/version"),
-                &paths.tcp,
+                &ctx.paths.tcp,
             );
+            fill_mihomo(&mut snapshot, ctx);
         }
         snapshot
     }
+}
+
+fn fill_mihomo(snapshot: &mut LocalSnapshot, ctx: &Context) {
+    snapshot.mihomo_state = Reading::from_result(clash::state(ctx));
+    snapshot.mihomo_version = match clash::installed_version(ctx) {
+        Ok(Some(version)) => Reading::Value(version),
+        Ok(None) => Reading::NotApplicable,
+        Err(error) => Reading::Unavailable(error.to_string()),
+    };
 }
 
 fn optional(value: Option<String>, name: &str) -> Reading<String> {
@@ -397,12 +413,14 @@ impl Monitor {
         let (public, public_receive) = mpsc::sync_channel(1);
         let local_state = state.clone();
         let local_stop = stop.clone();
-        let paths = ctx.paths.clone();
+        let mut local_probe = ctx.clone();
+        local_probe.cancel = stop.clone();
+        local_probe.events = None;
         let local = thread::spawn(move || {
             let mut sampler = Sampler::new();
             let mut warmup = true;
             while !local_stop.load(Ordering::SeqCst) {
-                let value = sampler.sample(&paths);
+                let value = sampler.sample(&local_probe);
                 let Ok(mut state) = local_state.lock() else {
                     return;
                 };
@@ -516,6 +534,126 @@ impl Drop for Monitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_mihomo_is_read_only_and_independent_of_terminal_proxy() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        let mut snapshot = LocalSnapshot {
+            terminal_proxy: Reading::Value(true),
+            ..LocalSnapshot::default()
+        };
+        fill_mihomo(&mut snapshot, &ctx);
+        assert_eq!(snapshot.mihomo_state, Reading::Value(State::NotInstalled));
+        assert_eq!(snapshot.mihomo_version, Reading::NotApplicable);
+        assert_eq!(snapshot.terminal_proxy, Reading::Value(true));
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn invalid_binary_path_is_not_reported_as_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        fs::create_dir_all(&ctx.paths.clash_binary).unwrap();
+        let mut snapshot = LocalSnapshot::default();
+        fill_mihomo(&mut snapshot, &ctx);
+        assert!(matches!(snapshot.mihomo_state, Reading::Unavailable(_)));
+        assert!(matches!(snapshot.mihomo_version, Reading::Unavailable(_)));
+    }
+
+    #[test]
+    fn invalid_and_unverified_pid_records_are_not_reported_as_stopped() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        fs::create_dir_all(&ctx.paths.clash_data).unwrap();
+        let mut snapshot = LocalSnapshot::default();
+        fs::write(&ctx.paths.clash_pid, "invalid").unwrap();
+        fill_mihomo(&mut snapshot, &ctx);
+        assert!(matches!(snapshot.mihomo_state, Reading::Unavailable(_)));
+        assert_eq!(snapshot.mihomo_version, Reading::NotApplicable);
+        assert_eq!(fs::read_to_string(&ctx.paths.clash_pid).unwrap(), "invalid");
+
+        fs::write(&ctx.paths.clash_pid, "1").unwrap();
+        fill_mihomo(&mut snapshot, &ctx);
+        assert_eq!(snapshot.mihomo_state, Reading::Value(State::Unknown));
+        assert_eq!(fs::read_to_string(&ctx.paths.clash_pid).unwrap(), "1");
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn non_linux_sampler_marks_mihomo_not_applicable() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        let snapshot = Sampler::new().sample(&ctx);
+        assert_eq!(snapshot.mihomo_state, Reading::NotApplicable);
+        assert_eq!(snapshot.mihomo_version, Reading::NotApplicable);
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn version_errors_preserve_process_state_and_time_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        fs::create_dir_all(ctx.paths.clash_binary.parent().unwrap()).unwrap();
+        let mut snapshot = LocalSnapshot::default();
+        for script in [
+            "#!/bin/sh\nexit 7\n",
+            "#!/bin/sh\nprintf 'unexpected banner'\n",
+            "#!/bin/sh\nexec sleep 30\n",
+        ] {
+            fs::write(&ctx.paths.clash_binary, script).unwrap();
+            fs::set_permissions(&ctx.paths.clash_binary, fs::Permissions::from_mode(0o700))
+                .unwrap();
+            let started = Instant::now();
+            fill_mihomo(&mut snapshot, &ctx);
+            assert!(started.elapsed() < Duration::from_secs(5));
+            assert_eq!(snapshot.mihomo_state, Reading::Value(State::Stopped));
+            assert!(matches!(snapshot.mihomo_version, Reading::Unavailable(_)));
+            assert!(!ctx.paths.clash_pid.exists());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a verified Mihomo binary in CQS_CLASH_SMOKE_BINARY"]
+    fn real_mihomo_dashboard_tracks_version_start_and_stop() {
+        use std::os::unix::fs::PermissionsExt;
+        let binary = std::env::var_os("CQS_CLASH_SMOKE_BINARY").expect("CQS_CLASH_SMOKE_BINARY");
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        fs::create_dir_all(ctx.paths.clash_binary.parent().unwrap()).unwrap();
+        fs::create_dir_all(&ctx.paths.clash_data).unwrap();
+        fs::copy(binary, &ctx.paths.clash_binary).unwrap();
+        fs::set_permissions(&ctx.paths.clash_binary, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(&ctx.paths.clash_config, "mode: direct\nmixed-port: 0\n").unwrap();
+        let mut sampler = Sampler::new();
+        let stopped = sampler.sample(&ctx);
+        assert_eq!(stopped.mihomo_state, Reading::Value(State::Stopped));
+        let Reading::Value(version) = &stopped.mihomo_version else {
+            panic!("expected a version, got {:?}", stopped.mihomo_version);
+        };
+        assert!(version.starts_with('v'));
+        struct StopOnDrop(Context);
+        impl Drop for StopOnDrop {
+            fn drop(&mut self) {
+                let _ = clash::stop(&self.0);
+            }
+        }
+        let _cleanup = StopOnDrop(ctx.clone());
+        clash::start(&ctx).unwrap();
+        let running = sampler.sample(&ctx);
+        assert!(matches!(
+            running.mihomo_state,
+            Reading::Value(State::Running(_))
+        ));
+        assert_eq!(running.mihomo_version, stopped.mihomo_version);
+        clash::stop(&ctx).unwrap();
+        let stopped_again = sampler.sample(&ctx);
+        assert_eq!(stopped_again.mihomo_state, Reading::Value(State::Stopped));
+        assert_eq!(stopped_again.mihomo_version, stopped.mihomo_version);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn local_refresh_continues_during_slow_public_query_and_startup_is_offline() {
@@ -529,11 +667,7 @@ mod tests {
         )
         .unwrap();
         fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
-        let mut ctx = Context::new(
-            Paths::from_env().unwrap(),
-            crate::i18n::I18n::load(Some("en-US"), None).unwrap(),
-            false,
-        );
+        let mut ctx = crate::tests::context(temp.path());
         ctx.environment.insert(
             "PATH".into(),
             format!("{}:/usr/bin:/bin", temp.path().display()),
@@ -573,6 +707,8 @@ mod tests {
         let snapshot = Snapshot::default();
         assert_eq!(snapshot.local.cpu_usage, Reading::Loading);
         assert_eq!(snapshot.local.terminal_proxy, Reading::Loading);
+        assert_eq!(snapshot.local.mihomo_state, Reading::Loading);
+        assert_eq!(snapshot.local.mihomo_version, Reading::Loading);
         assert_eq!(snapshot.public.ipv4, Reading::NotQueried);
         assert_eq!(snapshot.public.isp, Reading::NotQueried);
     }

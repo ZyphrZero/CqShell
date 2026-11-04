@@ -773,7 +773,7 @@ pub fn subscription_remove(ctx: &Context, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn state(ctx: &Context) -> Result<State> {
+pub(crate) fn state(ctx: &Context) -> Result<State> {
     let pid = match fs::read_to_string(&ctx.paths.clash_pid) {
         Ok(value) => value
             .trim()
@@ -785,15 +785,33 @@ fn state(ctx: &Context) -> Result<State> {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
                 Err(error) => return Err(error.into()),
             }
-            return Ok(if ctx.paths.clash_binary.is_file() {
-                State::Stopped
-            } else {
-                State::NotInstalled
-            });
+            return match fs::metadata(&ctx.paths.clash_binary) {
+                Ok(metadata) if metadata.is_file() => Ok(State::Stopped),
+                Ok(_) => Err(Error::new("error.data", "Mihomo binary path is not a file")),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(State::NotInstalled)
+                }
+                Err(error) => Err(error.into()),
+            };
         }
         Err(error) => return Err(error.into()),
     };
     Ok(process_state(ctx, pid))
+}
+
+pub(crate) fn installed_version(ctx: &Context) -> Result<Option<String>> {
+    storage::check_path(&ctx.paths.clash_binary, true)?;
+    match fs::metadata(&ctx.paths.clash_binary) {
+        Ok(_) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    require_binary(ctx)?;
+    let binary = path_string(&ctx.paths.clash_binary)?;
+    let banner = ctx.output("timeout", &["--signal=KILL", "2s", &binary, "-v"])?;
+    version_from_banner(&banner)
+        .map(Some)
+        .ok_or_else(|| Error::new("error.data", "unrecognized Mihomo version banner"))
 }
 
 fn unknown_process() -> Error {

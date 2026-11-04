@@ -75,11 +75,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let height: u16 = args.next().unwrap_or_else(|| "36".into()).parse()?;
     let locale = args.next().unwrap_or_else(|| "zh-CN".into());
     let paths = Paths::from_env()?;
+    let ctx = Context::new(paths, I18n::load(Some(&locale), None)?, false);
     let mut sampler = Sampler::new();
-    sampler.sample(&paths);
+    sampler.sample(&ctx);
     std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.max(Duration::from_millis(250)));
-    let local = sampler.sample(&paths);
-    let mut app = App::new(Context::new(paths, I18n::load(Some(&locale), None)?, false));
+    let local = sampler.sample(&ctx);
+    let mut app = App::new(ctx);
     app.snapshot.local = local;
     let mut terminal = Terminal::new(TestBackend::new(width, height))?;
     terminal.draw(|frame| app.draw(frame))?;
