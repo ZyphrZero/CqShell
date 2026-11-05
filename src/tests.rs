@@ -145,6 +145,55 @@ fn catalogs_cover_all_action_and_field_labels() {
     }
 }
 #[test]
+fn listed_fields_name_existing_items_and_dependents_follow_their_parent() {
+    for spec in actions::specs() {
+        for (index, field) in spec.fields.iter().enumerate() {
+            let Some(source) = field.source else {
+                continue;
+            };
+            assert!(
+                field.required && field.default.is_empty() && field.choices.is_empty(),
+                "{}.{}: a listed value is picked, never preset",
+                spec.id,
+                field.name
+            );
+            if let actions::Source::Children(parent) = source {
+                let at = spec.fields.iter().position(|f| f.name == parent);
+                assert!(
+                    at.is_some_and(|at| at < index && spec.fields[at].source.is_some()),
+                    "{}.{} depends on an earlier listed field",
+                    spec.id,
+                    field.name
+                );
+            }
+        }
+    }
+    // Saved optimization items reopen synchronously, without a background read.
+    for id in actions::OPTIMIZATION {
+        let spec = actions::find(id).unwrap();
+        assert!(
+            spec.fields.iter().all(|field| field.source.is_none()),
+            "{id}"
+        );
+    }
+}
+#[test]
+fn listings_drop_values_a_parameter_could_never_accept() {
+    let temp = tempfile::tempdir().unwrap();
+    let ctx = context(temp.path());
+    fs::create_dir_all(&ctx.paths.clash_data).unwrap();
+    fs::write(
+        &ctx.paths.clash_profiles,
+        "use: home\nprofiles:\n  - name: home\n    url: https://home.example/sub?token=secret\n    path: home.yaml\n  - name: \"evil\\u001b[2J\"\n    url: https://evil.example/\n    path: evil.yaml\n",
+    )
+    .unwrap();
+    let choices = actions::choices(&ctx, actions::Listing::Subscriptions).unwrap();
+    assert_eq!(choices.len(), 1, "{choices:?}");
+    assert_eq!(choices[0].value, "home");
+    assert_eq!(choices[0].detail, "home.example");
+    assert!(choices[0].current);
+}
+#[test]
 fn every_literal_translation_key_exists() {
     let i = I18n::load(Some("en-US"), None).unwrap();
     let pattern =
@@ -1314,6 +1363,61 @@ test ! -e "$CQS_TEST_ROOT/fail_packages"
                 .unwrap();
             assert!(!temp.path().join("reboot-requested").exists());
         }
+    }
+
+    #[test]
+    fn kernel_listings_offer_only_switchable_or_removable_releases() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = boundary(temp.path());
+        executable(
+            &temp.path().join("bin/uname"),
+            "#!/bin/sh\necho 6.12.86+deb13-amd64\n",
+        );
+        executable(
+            &temp.path().join("bin/dpkg-query"),
+            r"#!/bin/sh
+printf 'ii \tlinux-image-6.12.86+deb13-amd64\n'
+printf 'ii \tlinux-image-6.1.0-joeyblog-bbrv3\n'
+printf 'ii \tlinux-image-6.2.0-joeyblog-bbrv3\n'
+printf 'rc \tlinux-image-6.3.0-joeyblog-bbrv3\n'
+printf 'ii \tlinux-image-6.11.0-debian\n'
+printf 'ii \tlinux-image-amd64\n'
+",
+        );
+        fs::create_dir_all(&ctx.paths.boot).unwrap();
+        // 6.2.0 lacks its initrd, so it cannot boot but can still be removed.
+        for (release, initrd) in [
+            ("6.12.86+deb13-amd64", true),
+            ("6.1.0-joeyblog-bbrv3", true),
+            ("6.2.0-joeyblog-bbrv3", false),
+            ("6.11.0-debian", true),
+        ] {
+            fs::write(ctx.paths.boot.join(format!("vmlinuz-{release}")), "image").unwrap();
+            if initrd {
+                fs::write(
+                    ctx.paths.boot.join(format!("initrd.img-{release}")),
+                    "initrd",
+                )
+                .unwrap();
+            }
+        }
+        let values = |listing| {
+            actions::choices(&ctx, listing)
+                .unwrap()
+                .into_iter()
+                .map(|choice| choice.value)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            values(actions::Listing::BootKernels),
+            ["6.1.0-joeyblog-bbrv3", "6.11.0-debian"],
+            "not running, fully installed, complete boot files; no meta packages"
+        );
+        assert_eq!(
+            values(actions::Listing::RemovableKernels),
+            ["6.1.0-joeyblog-bbrv3", "6.2.0-joeyblog-bbrv3"],
+            "installed BBRv3 kernels other than the running one"
+        );
     }
 
     #[test]

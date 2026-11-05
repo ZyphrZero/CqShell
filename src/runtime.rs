@@ -281,6 +281,17 @@ impl Context {
         self.check()
     }
     pub fn download(&self, url: &str, target: &Path, seconds: u32) -> Result<()> {
+        self.download_as(url, target, seconds, None)
+    }
+    /// Like [`Self::download`], identifying the client to servers that pick the response
+    /// format by User-Agent. `None` keeps curl's own identity.
+    pub fn download_as(
+        &self,
+        url: &str,
+        target: &Path,
+        seconds: u32,
+        agent: Option<&str>,
+    ) -> Result<()> {
         let parsed = url::Url::parse(url).map_err(|e| Error::new("error.url", e))?;
         if parsed.scheme() != "https"
             || !parsed.username().is_empty()
@@ -288,23 +299,23 @@ impl Context {
         {
             return Err(Error::new("error.url", url));
         }
-        self.run(
-            "curl",
-            &[
-                "--proto",
-                "=https",
-                "--proto-redir",
-                "=https",
-                "-fSL",
-                "--connect-timeout",
-                "15",
-                "--max-time",
-                &seconds.to_string(),
-                "--output",
-                path(target)?,
-                url,
-            ],
-        )?;
+        let seconds = seconds.to_string();
+        let mut args = vec![
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "-fSL",
+            "--connect-timeout",
+            "15",
+            "--max-time",
+            &seconds,
+        ];
+        if let Some(agent) = agent {
+            args.extend(["--user-agent", agent]);
+        }
+        args.extend(["--output", path(target)?, url]);
+        self.run("curl", &args)?;
         if std::fs::metadata(target)?.len() == 0 {
             return Err(Error::new("error.data", url));
         }

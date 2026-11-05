@@ -590,11 +590,7 @@ pub fn subscriptions(ctx: &Context) -> Result<()> {
                 } else {
                     " "
                 };
-                let host = url::Url::parse(&profile.url)
-                    .ok()
-                    .and_then(|url| url.host_str().map(str::to_owned))
-                    .unwrap_or_else(|| "invalid-url".into());
-                format!("{marker} {} ({host})", profile.name)
+                format!("{marker} {} ({})", profile.name, url_host(&profile.url))
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -604,6 +600,29 @@ pub fn subscriptions(ctx: &Context) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// The host of a subscription URL; the full URL may carry an access token.
+fn url_host(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "invalid-url".into())
+}
+
+/// Saved subscriptions in their stored order, marking the selected one.
+pub fn subscription_choices(ctx: &Context) -> Result<Vec<crate::ops::Choice>> {
+    let file = read_profiles(ctx)?;
+    Ok(file
+        .profiles
+        .into_iter()
+        .map(|profile| crate::ops::Choice {
+            current: file.current.as_deref() == Some(profile.name.as_str()),
+            detail: url_host(&profile.url),
+            value: profile.name,
+            children: Vec::new(),
+        })
+        .collect())
 }
 
 pub fn subscription_add(ctx: &Context, name: &str, url: &str, use_after_add: bool) -> Result<()> {
@@ -618,7 +637,7 @@ pub fn subscription_add(ctx: &Context, name: &str, url: &str, use_after_add: boo
         validate_new_profile(&read_profiles(ctx)?, name, url)?;
     }
     let temporary = tempfile::NamedTempFile::new_in(&profiles_dir)?;
-    ctx.download(url, temporary.path(), 30)?;
+    download_subscription(ctx, url, temporary.path())?;
     validate_config(ctx, temporary.path(), false)?;
     validate_with_mihomo(ctx, temporary.path())?;
     let bytes = fs::read(temporary.path())?;
@@ -700,7 +719,7 @@ pub fn subscription_update(ctx: &Context, name: &str) -> Result<()> {
     };
     let profiles_dir = ctx.paths.clash_data.join("profiles");
     let temporary = tempfile::NamedTempFile::new_in(&profiles_dir)?;
-    ctx.download(&profile.url, temporary.path(), 30)?;
+    download_subscription(ctx, &profile.url, temporary.path())?;
     validate_config(ctx, temporary.path(), false)?;
     validate_with_mihomo(ctx, temporary.path())?;
     let bytes = fs::read(temporary.path())?;
@@ -896,6 +915,22 @@ fn render_runtime(base: Value, mixin: Value) -> Result<Vec<u8>> {
     controller::from_config(&runtime)?;
     let text = serde_yaml::to_string(&runtime).map_err(|e| Error::new("error.data", e))?;
     Ok(text.into_bytes())
+}
+
+/// Subscription panels choose the response format by User-Agent: without a Clash
+/// identifier many return a Base64 share-link list instead of a configuration. This
+/// identifies as the Mihomo (Clash Meta) client so the provider serves its native config.
+const SUBSCRIPTION_AGENT: &str = "clash.meta";
+
+/// Download a subscription and reject non-Clash formats with an actionable message
+/// instead of a YAML type error. No format conversion is attempted.
+fn download_subscription(ctx: &Context, url: &str, target: &Path) -> Result<()> {
+    ctx.download_as(url, target, 30, Some(SUBSCRIPTION_AGENT))?;
+    // A share-link list is valid YAML but parses as a plain string, not a map.
+    if serde_yaml::from_slice::<Value>(&fs::read(target)?).is_ok_and(|value| !value.is_mapping()) {
+        return Err(Error::new("error.subscription_format", ""));
+    }
+    Ok(())
 }
 
 fn validate_subscription_runtime(ctx: &Context, bytes: &[u8]) -> Result<()> {
@@ -1587,6 +1622,62 @@ fn now_string() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Panels pick the format by User-Agent: a Clash identifier gets the native config,
+    /// anything else gets a Base64 share-link list, as the provider in the bug report did.
+    #[cfg(unix)]
+    #[test]
+    fn subscriptions_request_the_clash_format_and_reject_share_link_lists() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let curl = bin.join("curl");
+        fs::write(
+            &curl,
+            r#"#!/bin/sh
+out= agent=none
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) shift; out=$1 ;;
+    --user-agent) shift; agent=$1 ;;
+  esac
+  shift
+done
+printf '%s\n' "$agent" >> "$CQS_TEST_AGENT_LOG"
+if [ "$agent" = clash.meta ] && [ -z "$CQS_TEST_LINKS_ONLY" ]; then
+  printf 'proxies:\n  - name: one\n    type: socks5\n    server: 127.0.0.1\n    port: 1\n' > "$out"
+else
+  printf 'dm1lc3M6Ly9leGFtcGxl\n' > "$out"
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        ctx.environment
+            .insert("PATH".into(), format!("{}:{path}", bin.display()));
+        let log = temp.path().join("agents.log");
+        ctx.environment
+            .insert("CQS_TEST_AGENT_LOG".into(), log.display().to_string());
+        let target = temp.path().join("subscription.yaml");
+        let url = "https://panel.example/api/v1/client/subscribe?token=test";
+
+        download_subscription(&ctx, url, &target).unwrap();
+        validate_config(&ctx, &target, false).unwrap();
+        ctx.download(url, &target, 5).unwrap();
+        assert_eq!(
+            fs::read_to_string(&log).unwrap(),
+            "clash.meta\nnone\n",
+            "only subscription downloads change the User-Agent"
+        );
+
+        ctx.environment
+            .insert("CQS_TEST_LINKS_ONLY".into(), "1".into());
+        let error = download_subscription(&ctx, url, &target).unwrap_err();
+        assert_eq!(error.key, "error.subscription_format");
+    }
 
     #[test]
     fn merge_mixin_lists_support_prepend_append_and_named_override() {

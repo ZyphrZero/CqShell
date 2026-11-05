@@ -60,7 +60,7 @@ Fish 使用 `cqs clashctl shell-init --shell fish | source`。初始化只在当
 | --- | --- |
 | `on` / `off [--stop]` | 父 Shell 代理启闭，on 自动启动；支持 Bash、Zsh、Fish |
 | `start` / `stop` / `status` / `ui` | 调用现有生命周期、状态和面板地址；status 同时显示 Shell 代理状态，不显示认证值 |
-| `sub add [-n NAME] [-u] [--raw] URL` | HTTPS 原生配置；省略名称时使用主机名并避开重名，不做格式转换 |
+| `sub add [-n NAME] [-u] [--raw] URL` | HTTPS 原生配置；下载时以 `User-Agent: clash.meta` 请求，按 UA 选择格式的面板据此返回 Clash 配置；仍收到 Base64 节点列表等非 Clash 格式时明确报错。省略名称时使用主机名并避开重名，不做格式转换 |
 | `sub list` / `sub ls` / 裸 `sub` | 输出订阅列表，不弹出交互选择器 |
 | `sub use NAME` / `sub del NAME` / `sub delete NAME` | 显式选择或删除；不省略名称猜测目标 |
 | `sub update [NAME] [--all] [--raw]` | 默认更新当前订阅；--all 逐项更新，任一失败返回非零，不宣称全成功 |

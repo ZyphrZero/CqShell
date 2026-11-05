@@ -478,6 +478,83 @@ pub(super) fn list_proxies(ctx: &Context, group: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Protocol and latest measured delay of a proxy, e.g. `Vmess · 87 ms`. A zero delay is a
+/// failed test, so it is left out rather than shown as instant.
+fn member_detail(entries: &serde_json::Map<String, Json>, name: &str) -> String {
+    let Some(entry) = entries.get(name) else {
+        return String::new();
+    };
+    let kind = entry.get("type").and_then(Json::as_str).unwrap_or("");
+    let delay = entry
+        .get("history")
+        .and_then(Json::as_array)
+        .and_then(|history| history.last())
+        .and_then(|sample| sample.get("delay"))
+        .and_then(Json::as_u64)
+        .filter(|delay| *delay > 0);
+    match delay {
+        Some(delay) if !kind.is_empty() => format!("{kind} · {delay} ms"),
+        Some(delay) => format!("{delay} ms"),
+        None => kind.into(),
+    }
+}
+
+/// Selector groups, the only ones `select` can switch, in configuration order, each with
+/// its members. The controller map is unordered; GLOBAL lists every group in file order.
+pub fn group_choices(ctx: &Context) -> Result<Vec<crate::ops::Choice>> {
+    let settings = settings(ctx)?;
+    let entries = proxy_map(ctx, &settings)?;
+    let order = entries
+        .get("GLOBAL")
+        .and_then(|global| global.get("all"))
+        .and_then(Json::as_array)
+        .map(|all| all.iter().filter_map(Json::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut groups = Vec::new();
+    for (name, entry) in &entries {
+        if entry.get("type").and_then(Json::as_str) != Some("Selector") {
+            continue;
+        }
+        let Some(all) = entry.get("all").and_then(Json::as_array) else {
+            continue;
+        };
+        let now = entry.get("now").and_then(Json::as_str).unwrap_or("");
+        let members = all
+            .iter()
+            .map(|value| {
+                let member = value
+                    .as_str()
+                    .ok_or_else(|| invalid("controller group contains an invalid node"))?;
+                Ok(crate::ops::Choice {
+                    value: member.into(),
+                    detail: member_detail(&entries, member),
+                    current: member == now,
+                    children: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        groups.push(crate::ops::Choice {
+            value: name.clone(),
+            detail: if now.is_empty() {
+                String::new()
+            } else {
+                format!("→ {now}")
+            },
+            current: false,
+            children: members,
+        });
+    }
+    let rank = |name: &str| order.iter().position(|item| *item == name);
+    // Groups missing from GLOBAL, including GLOBAL itself, follow in name order.
+    groups.sort_by(|a, b| match (rank(&a.value), rank(&b.value)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.value.cmp(&b.value),
+    });
+    Ok(groups)
+}
+
 fn segment(value: &str) -> String {
     // Encode every byte except RFC 3986 unreserved bytes. In particular,
     // slashes and query/fragment delimiters are part of the group name.
@@ -714,6 +791,57 @@ mod tests {
             assert_eq!(worker.join().unwrap().len(), 1);
             assert_eq!(fs::read(&ctx.paths.clash_config).unwrap(), before);
         }
+    }
+
+    #[test]
+    fn group_choices_list_selectors_in_config_order_with_member_details() {
+        let body = serde_json::json!({"proxies": {
+            "GLOBAL": {"type": "Selector", "all": ["Proxy", "Auto", "Streaming"], "now": "Proxy"},
+            "Auto": {"type": "URLTest", "all": ["HK"], "now": "HK"},
+            "Streaming": {"type": "Selector", "all": ["JP", "DIRECT"], "now": "JP"},
+            "Proxy": {"type": "Selector", "all": ["Auto", "HK", "JP"], "now": "HK"},
+            "HK": {"type": "Vmess", "history": [{"delay": 120}, {"delay": 87}]},
+            "JP": {"type": "Trojan", "history": [{"delay": 0}]},
+            "DIRECT": {"type": "Direct"}
+        }})
+        .to_string();
+        let (address, worker) = serve(vec![response(&body)]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("external-controller: {address}\n"),
+        )
+        .unwrap();
+        let groups = group_choices(&ctx).unwrap();
+        assert_eq!(
+            worker.join().unwrap().len(),
+            1,
+            "one request lists everything"
+        );
+        let names = groups.iter().map(|g| g.value.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["Proxy", "Streaming", "GLOBAL"],
+            "file order, automatic groups skipped"
+        );
+        let proxy = &groups[0];
+        assert_eq!(proxy.detail, "→ HK");
+        let members = proxy
+            .children
+            .iter()
+            .map(|m| (m.value.as_str(), m.detail.as_str(), m.current))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            members,
+            [
+                ("Auto", "URLTest", false),
+                ("HK", "Vmess · 87 ms", true),
+                ("JP", "Trojan", false),
+            ],
+            "latest delay shown; a failed test is not shown as a delay"
+        );
     }
 
     #[test]

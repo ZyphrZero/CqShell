@@ -82,6 +82,23 @@ pub enum Kind {
     Uninstall,
 }
 
+/// Live system data a parameter can name, read when its form opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Listing {
+    Subscriptions,
+    ProxyGroups,
+    BootKernels,
+    RemovableKernels,
+}
+
+/// Where a parameter's existing values come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Listing(Listing),
+    /// The children of the choice made in the named, earlier field.
+    Children(&'static str),
+}
+
 #[derive(Debug, Clone)]
 pub struct Field {
     pub name: &'static str,
@@ -89,6 +106,9 @@ pub struct Field {
     pub choices: &'static [&'static str],
     pub allow_custom: bool,
     pub required: bool,
+    /// Values that already exist on this host. The CLI still accepts free text, and the
+    /// operation validates the value either way.
+    pub source: Option<Source>,
 }
 impl Field {
     pub fn editable(&self) -> bool {
@@ -111,6 +131,14 @@ fn field(
         choices,
         allow_custom: false,
         required,
+        source: None,
+    }
+}
+/// A required parameter that names an existing item.
+fn listed(name: &'static str, source: Source) -> Field {
+    Field {
+        source: Some(source),
+        ..field(name, "", &[], true)
     }
 }
 
@@ -507,7 +535,7 @@ pub fn specs() -> Vec<Spec> {
         false,
         true,
         false,
-        vec![field("name", "", &[], true)],
+        vec![listed("name", Source::Listing(Listing::Subscriptions))],
     );
     add(
         "clash.sub.update",
@@ -516,7 +544,7 @@ pub fn specs() -> Vec<Spec> {
         false,
         true,
         false,
-        vec![field("name", "", &[], true)],
+        vec![listed("name", Source::Listing(Listing::Subscriptions))],
     );
     add(
         "clash.sub.remove",
@@ -525,7 +553,7 @@ pub fn specs() -> Vec<Spec> {
         false,
         true,
         false,
-        vec![field("name", "", &[], true)],
+        vec![listed("name", Source::Listing(Listing::Subscriptions))],
     );
     add(
         "clash.controller.status",
@@ -562,8 +590,8 @@ pub fn specs() -> Vec<Spec> {
         true,
         false,
         vec![
-            field("proxy_group", "", &[], true),
-            field("proxy_node", "", &[], true),
+            listed("proxy_group", Source::Listing(Listing::ProxyGroups)),
+            listed("proxy_node", Source::Children("proxy_group")),
         ],
     );
     add(
@@ -702,7 +730,7 @@ pub fn specs() -> Vec<Spec> {
         true,
         true,
         false,
-        vec![field("release", "", &[], true)],
+        vec![listed("release", Source::Listing(Listing::BootKernels))],
     );
     add(
         "kernel.remove",
@@ -711,7 +739,10 @@ pub fn specs() -> Vec<Spec> {
         true,
         true,
         false,
-        vec![field("release", "", &[], true)],
+        vec![listed(
+            "release",
+            Source::Listing(Listing::RemovableKernels),
+        )],
     );
     for (id, package) in [
         ("tools.curl", "curl"),
@@ -898,6 +929,27 @@ pub fn find(id: &str) -> Result<Spec> {
         .into_iter()
         .find(|s| s.id == id)
         .ok_or_else(|| Error::new("error.action", id))
+}
+
+/// The existing items a listed parameter can name. Values that `Spec::parameters` would
+/// reject, such as names containing control characters, are left out: choosing one could
+/// never succeed, and they must not reach the terminal.
+pub fn choices(ctx: &Context, listing: Listing) -> Result<Vec<ops::Choice>> {
+    let mut choices = match listing {
+        Listing::Subscriptions => ops::clash::subscription_choices(ctx)?,
+        Listing::ProxyGroups => ops::clash::controller::group_choices(ctx)?,
+        Listing::BootKernels => ops::kernel::boot_choices(ctx)?,
+        Listing::RemovableKernels => ops::kernel::removable_choices(ctx)?,
+    };
+    retain_valid(&mut choices);
+    Ok(choices)
+}
+fn retain_valid(choices: &mut Vec<ops::Choice>) {
+    choices
+        .retain(|choice| !choice.value.is_empty() && !choice.value.chars().any(char::is_control));
+    for choice in choices {
+        retain_valid(&mut choice.children);
+    }
 }
 
 pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> {

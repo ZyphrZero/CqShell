@@ -668,10 +668,7 @@ pub fn boot(ctx: &Context, release: &str) -> Result<()> {
 }
 
 pub fn remove(ctx: &Context, release: &str) -> Result<()> {
-    if !Regex::new(r"^\d+\.\d+\.\d+-joeyblog-bbrv3(-max)?$")
-        .unwrap()
-        .is_match(release)
-    {
+    if !removable_release(release) {
         return Err(Error::new("error.input", release));
     }
     let _lock = Lock::acquire(&ctx.paths.kernel_lock)?;
@@ -728,4 +725,73 @@ pub fn list(ctx: &Context) -> Result<()> {
             "linux-image-*",
         ],
     )
+}
+
+/// `(status abbreviation, release)` for every `linux-image-*` package dpkg knows about.
+/// Meta packages such as `linux-image-amd64` appear too; callers filter them out.
+fn installed_images(ctx: &Context) -> Result<Vec<(String, String)>> {
+    let output = ctx.output(
+        "dpkg-query",
+        &[
+            "-W",
+            "-f=${db:Status-Abbrev}\t${Package}\n",
+            "linux-image-*",
+        ],
+    )?;
+    Ok(output
+        .lines()
+        .filter_map(|line| {
+            let (status, package) = line.split_once('\t')?;
+            let release = package.strip_prefix("linux-image-")?;
+            Some((status.trim().to_owned(), release.to_owned()))
+        })
+        .collect())
+}
+
+fn release_choice(release: String) -> crate::ops::Choice {
+    crate::ops::Choice {
+        value: release,
+        detail: String::new(),
+        current: false,
+        children: Vec::new(),
+    }
+}
+
+/// Kernels `boot` can switch to: fully installed, not running, with both boot files present.
+/// The boot-file check also drops meta packages, whose names are not kernel releases. GRUB
+/// entries are still verified by `boot` itself.
+pub fn boot_choices(ctx: &Context) -> Result<Vec<crate::ops::Choice>> {
+    let running = ctx.output("uname", &["-r"])?;
+    Ok(installed_images(ctx)?
+        .into_iter()
+        .filter(|(status, release)| {
+            matches!(status.as_str(), "ii" | "hi")
+                && *release != running
+                && valid_kernel_release(release)
+                && nonempty(&ctx.paths.boot.join(format!("vmlinuz-{release}"))).is_ok()
+                && nonempty(&ctx.paths.boot.join(format!("initrd.img-{release}"))).is_ok()
+        })
+        .map(|(_, release)| release_choice(release))
+        .collect())
+}
+
+/// BBRv3 kernels `remove` accepts: installed in any state it purges, and not running.
+pub fn removable_choices(ctx: &Context) -> Result<Vec<crate::ops::Choice>> {
+    let running = ctx.output("uname", &["-r"])?;
+    Ok(installed_images(ctx)?
+        .into_iter()
+        .filter(|(status, release)| {
+            status.chars().nth(1).is_some_and(|c| "iUFHWt".contains(c))
+                && *release != running
+                && removable_release(release)
+        })
+        .map(|(_, release)| release_choice(release))
+        .collect())
+}
+
+/// Only kernels installed by this tool's BBRv3 action may be removed.
+fn removable_release(release: &str) -> bool {
+    Regex::new(r"^\d+\.\d+\.\d+-joeyblog-bbrv3(-max)?$")
+        .unwrap()
+        .is_match(release)
 }

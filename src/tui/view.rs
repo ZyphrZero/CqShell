@@ -1,133 +1,49 @@
-use super::{App, Focus, Form, FormMode, Phase};
-use crate::{
-    dashboard::{Reading, Usage},
-    i18n::I18n,
-    ops::clash::State,
-};
+//! Responsive drawing and mouse geometry. Layout and hierarchy live here; tokens in `theme`,
+//! the status panel in `dashboard`, modal layers in `dialogs` and task output in `logs`.
+mod dashboard;
+mod dialogs;
+mod logs;
+mod theme;
+
+use super::{App, Focus, Phase, Tone};
+use crate::actions::Spec;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Layout, Margin, Rect},
+    style::{Modifier, Style},
+    symbols::border,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Borders, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const CANVAS: Color = Color::Reset;
-const PANEL: Color = Color::Reset;
-const PANEL_ALT: Color = Color::Reset;
-const BORDER: Color = Color::Rgb(61, 82, 101);
-const BORDER_ACTIVE: Color = Color::Rgb(69, 205, 182);
-const TEXT: Color = Color::Reset;
-const MUTED: Color = Color::Rgb(145, 162, 176);
-const TEAL: Color = Color::Rgb(69, 205, 182);
-const BLUE: Color = Color::Rgb(112, 170, 255);
-const AMBER: Color = Color::Rgb(255, 190, 94);
-const VIOLET: Color = Color::Rgb(181, 145, 255);
-const GREEN: Color = Color::Rgb(93, 216, 136);
-const RED: Color = Color::Rgb(255, 117, 133);
-const HIGHLIGHT_TEXT: Color = Color::Black;
-const DASHBOARD_HEIGHT: u16 = 11;
+pub(super) use dashboard::{gauge_targets, pending};
+pub(super) use dialogs::{ConfirmationGeometry, FormGeometry, OverviewGeometry, PickerGeometry};
+pub(super) use logs::{log_body, log_row_count};
 
-pub(super) struct Regions {
-    pub header: Rect,
-    pub environment: Rect,
-    pub dashboard: Rect,
-    pub categories: Rect,
-    pub actions: Rect,
-    pub details: Rect,
-    pub logs: Rect,
-    pub footer: Rect,
-}
-impl Regions {
-    pub fn new(area: Rect, app: &App) -> Self {
-        let log_height =
-            if area.height >= 34 && app.logs_open && (app.worker.is_some() || !app.logs.is_empty())
-            {
-                // Share the space below the dashboard with logs, keeping 10 menu rows.
-                let content_height = area.height.saturating_sub(DASHBOARD_HEIGHT + 5);
-                ((u32::from(content_height) * 3 / 5) as u16).min(content_height.saturating_sub(10))
-            } else {
-                0
-            };
-        let vertical = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(DASHBOARD_HEIGHT),
-            Constraint::Min(6),
-            Constraint::Length(log_height),
-            Constraint::Length(3),
-        ])
-        .split(area);
-        let body =
-            Layout::horizontal([Constraint::Length(22), Constraint::Min(30)]).split(vertical[3]);
-        let (actions, details) = if area.width >= 112 {
-            let columns =
-                Layout::horizontal([Constraint::Length(44), Constraint::Min(25)]).split(body[1]);
-            (columns[0], columns[1])
-        } else {
-            let rows = Layout::vertical([
-                Constraint::Min(4),
-                Constraint::Length(if body[1].height >= 13 { 5 } else { 3 }),
-            ])
-            .split(body[1]);
-            (rows[0], rows[1])
-        };
-        Self {
-            header: vertical[0],
-            environment: vertical[1],
-            dashboard: vertical[2],
-            categories: body[0],
-            actions,
-            details,
-            logs: vertical[4],
-            footer: vertical[5],
-        }
-    }
-}
-fn block(title: impl Into<String>, active: bool) -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .title(title.into())
-        .title_style(
-            Style::default()
-                .fg(if active { TEAL } else { TEXT })
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().fg(TEXT).bg(PANEL))
-        .border_style(Style::default().fg(if active { BORDER_ACTIVE } else { BORDER }))
-}
-fn highlight(active: bool) -> Style {
-    highlight_with(active, TEAL)
-}
-fn highlight_with(active: bool, accent: Color) -> Style {
-    if active {
-        Style::default()
-            .fg(HIGHLIGHT_TEXT)
-            .bg(accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(TEXT).bg(PANEL_ALT)
-    }
-}
-fn phase_color(phase: Phase) -> Color {
-    match phase {
-        Phase::Completed => GREEN,
-        Phase::Failed => RED,
-        Phase::Cancelled | Phase::Cancelling => AMBER,
-        Phase::Running => BLUE,
-        Phase::Idle => MUTED,
-    }
-}
-fn metric_color(index: usize) -> Color {
-    [TEAL, BLUE, AMBER, VIOLET][index % 4]
+const MIN_WIDTH: u16 = 80;
+const MIN_HEIGHT: u16 = 24;
+const CATEGORY_WIDTH: u16 = 20;
+const ACTION_WIDTH: u16 = 44;
+/// Actions and details sit side by side from this width; below it they share one panel.
+const SIDE_BY_SIDE: u16 = 112;
+const MIN_BODY: u16 = 12;
+const MIN_LOGS: u16 = 8;
+
+pub(super) fn fits(area: Rect) -> bool {
+    area.width >= MIN_WIDTH && area.height >= MIN_HEIGHT
 }
 pub(super) fn list_offset(selected: usize, count: usize, height: usize) -> usize {
     selected
         .saturating_sub(height.saturating_sub(1))
         .min(count.saturating_sub(height))
 }
-fn clipped(text: &str, width: usize) -> String {
+/// Pad to display cells; wide glyphs count twice.
+fn pad(text: &str, width: usize) -> String {
+    format!("{text}{}", " ".repeat(width.saturating_sub(text.width())))
+}
+/// Clip to display cells with an ellipsis.
+fn clip(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.into();
     }
@@ -138,7 +54,7 @@ fn clipped(text: &str, width: usize) -> String {
     let mut used = 0;
     for c in text.chars() {
         let n = c.width().unwrap_or(0);
-        if used + n > width.saturating_sub(1) {
+        if used + n > width - 1 {
             break;
         }
         result.push(c);
@@ -147,485 +63,63 @@ fn clipped(text: &str, width: usize) -> String {
     result.push('…');
     result
 }
-fn text<T: ToString>(value: &Reading<T>, i: &I18n) -> String {
-    match value {
-        Reading::Value(v) => v.to_string(),
-        Reading::Loading => i.text("dash.loading").into(),
-        Reading::NotQueried => i.text("dash.not_queried").into(),
-        Reading::NotApplicable => i.text("dash.na").into(),
-        Reading::Unavailable(_) => i.text("dash.unknown").into(),
-    }
-}
-fn boolean(value: &Reading<bool>, i: &I18n, yes: &str, no: &str) -> String {
-    match value {
-        Reading::Value(v) => i.text(if *v { yes } else { no }).into(),
-        _ => text(value, i),
-    }
-}
-fn bytes(value: u64) -> String {
-    let gib = value as f64 / 1073741824.0;
-    if gib >= 1.0 {
-        format!("{gib:.1} GiB")
-    } else {
-        format!("{:.0} MiB", value as f64 / 1048576.0)
-    }
-}
-fn meter(percent: f64, width: usize) -> String {
-    let filled = (percent.clamp(0.0, 100.0) / 100.0 * width as f64).round() as usize;
-    format!(
-        "{}{}",
-        "█".repeat(filled),
-        "░".repeat(width.saturating_sub(filled))
-    )
-}
-fn usage(value: &Reading<Usage>, i: &I18n) -> String {
-    match value {
-        Reading::Value(v) => format!(
-            "{} {} / {} ({:.0}%)",
-            meter(v.percent(), 4),
-            bytes(v.used),
-            bytes(v.total),
-            v.percent()
-        ),
-        _ => match value {
-            Reading::Loading => i.text("dash.loading").into(),
-            Reading::NotApplicable => i.text("dash.na").into(),
-            _ => i.text("dash.unknown").into(),
-        },
-    }
-}
-fn uptime(value: &Reading<u64>, i: &I18n) -> String {
-    match value {
-        Reading::Value(seconds) => format!(
-            "{}d {:02}h {:02}m",
-            seconds / 86400,
-            seconds % 86400 / 3600,
-            seconds % 3600 / 60
-        ),
-        _ => text(value, i),
-    }
-}
-fn cpu_usage(app: &App) -> String {
-    match app.snapshot.local.cpu_usage {
-        Reading::Value(value) => format!("{} {value:.1}%", meter(value as f64, 4)),
-        _ => text(&app.snapshot.local.cpu_usage, &app.ctx.i18n),
-    }
-}
-fn kernel_status(value: &Reading<String>, i: &I18n) -> String {
-    match value {
-        Reading::Value(version) => i.format("dash.kernel_running", &[("version", version)]),
-        _ => text(value, i),
-    }
-}
-fn metric_value_color(key: &str, app: &App) -> Color {
-    match key {
-        "dash.cpu_usage" => RED,
-        "dash.memory" => VIOLET,
-        "dash.disk" => AMBER,
-        "dash.swap" => BLUE,
-        "dash.kernel_status" if matches!(&app.snapshot.local.kernel, Reading::Value(_)) => GREEN,
-        "dash.terminal_proxy" => match &app.snapshot.local.terminal_proxy {
-            Reading::Value(true) => GREEN,
-            Reading::Value(false) => MUTED,
-            _ => TEXT,
-        },
-        "dash.mihomo_state" => match &app.snapshot.local.mihomo_state {
-            Reading::Value(State::Running(_)) => GREEN,
-            Reading::Value(State::Stopped | State::NotInstalled) => MUTED,
-            Reading::Value(State::Unknown) | Reading::Unavailable(_) => AMBER,
-            _ => TEXT,
-        },
-        "dash.mihomo_version"
-            if matches!(&app.snapshot.local.mihomo_version, Reading::Unavailable(_)) =>
-        {
-            AMBER
-        }
-        "dash.ipv4" | "dash.ipv6" => TEAL,
-        _ => TEXT,
-    }
-}
-fn mihomo_status(value: &Reading<State>, i: &I18n) -> String {
-    match value {
-        Reading::Value(State::NotInstalled) => i.text("dash.not_installed").into(),
-        Reading::Value(State::Stopped) => i.text("dash.stopped").into(),
-        Reading::Value(State::Running(pid)) => {
-            i.format("dash.mihomo_running", &[("pid", &pid.to_string())])
-        }
-        Reading::Loading => i.text("dash.loading").into(),
-        Reading::NotQueried => i.text("dash.not_queried").into(),
-        Reading::NotApplicable => i.text("dash.na").into(),
-        Reading::Value(State::Unknown) | Reading::Unavailable(_) => i.text("dash.unknown").into(),
-    }
-}
-fn bbr(app: &App) -> String {
-    let i = &app.ctx.i18n;
-    let data = &app.snapshot.local;
-    let enabled = match &data.congestion {
-        Reading::Value(v) => i
-            .text(if v == "bbr" {
-                "status.enabled"
-            } else {
-                "status.disabled"
-            })
-            .into(),
-        _ => text(&data.congestion, i),
-    };
-    let available = boolean(&data.bbr_available, i, "dash.available", "dash.unavailable");
-    let version = if matches!(
-        data.bbr_available,
-        Reading::Value(false) | Reading::NotApplicable
-    ) {
-        String::new()
-    } else {
-        format!(" / {}", text(&data.bbr_version, i))
-    };
-    format!("{enabled} · {available}{version}")
-}
-fn network_summary(app: &App) -> String {
-    let i = &app.ctx.i18n;
-    let data = &app.snapshot.local;
-    let mut parts = Vec::new();
-    for value in [&data.congestion, &data.qdisc] {
-        if !matches!(value, Reading::NotApplicable) {
-            parts.push(text(value, i));
-        }
-    }
-    if !matches!(data.bbr_available, Reading::NotApplicable)
-        || !matches!(data.bbr_version, Reading::NotApplicable)
-    {
-        parts.push(bbr(app));
-    }
-    if parts.is_empty() {
-        i.text("dash.na").into()
-    } else {
-        parts.join(" / ")
-    }
-}
-type Metric = (&'static str, String);
-fn metric_rows(app: &App) -> Vec<(Metric, Metric)> {
-    let i = &app.ctx.i18n;
-    let data = &app.snapshot.local;
-    let public = &app.snapshot.public;
-    vec![
-        (
-            ("dash.host", text(&data.host, i)),
-            ("dash.os", text(&data.os, i)),
-        ),
-        (
-            ("dash.kernel_status", kernel_status(&data.kernel, i)),
-            (
-                "dash.arch",
-                format!("{} · {}", data.arch, uptime(&data.uptime, i)),
-            ),
-        ),
-        (
-            ("dash.cpu", text(&data.cpu, i)),
-            ("dash.cpu_usage", cpu_usage(app)),
-        ),
-        (
-            ("dash.memory", usage(&data.memory, i)),
-            (
-                "dash.disk",
-                format!("{} {}", data.disk_name, usage(&data.disk, i)),
-            ),
-        ),
-        (
-            ("dash.swap", usage(&data.swap, i)),
-            ("dash.timezone", text(&data.timezone, i)),
-        ),
-        (
-            (
-                "dash.terminal_proxy",
-                boolean(&data.terminal_proxy, i, "status.enabled", "status.disabled"),
-            ),
-            ("dash.isp", text(&public.isp, i)),
-        ),
-        (
-            ("dash.mihomo_state", mihomo_status(&data.mihomo_state, i)),
-            ("dash.mihomo_version", text(&data.mihomo_version, i)),
-        ),
-        (
-            ("dash.ipv4", text(&public.ipv4, i)),
-            ("dash.ipv6", text(&public.ipv6, i)),
-        ),
-        (
-            ("dash.network", network_summary(app)),
-            (
-                "dash.tcp",
-                boolean(
-                    &data.tcp_configured,
-                    i,
-                    "dash.configured",
-                    "dash.not_configured",
-                ),
-            ),
-        ),
-    ]
-}
-fn draw_dashboard(app: &App, f: &mut Frame, area: Rect) {
-    let i = &app.ctx.i18n;
-    let age = app
-        .snapshot
-        .local
-        .updated
-        .map(|at| format!("{}s", at.elapsed().as_secs()))
-        .unwrap_or_else(|| i.text("dash.loading").into());
-    let frame = block(
-        format!(
-            " {} · {} ",
-            i.text("dash.title"),
-            i.format("dash.age", &[("age", &age)])
-        ),
-        false,
-    );
-    let inside = frame.inner(area);
-    f.render_widget(frame, area);
-    let columns =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inside);
-    let rows = metric_rows(app);
-    for (column, rect) in columns.iter().enumerate() {
-        let lines = rows
-            .iter()
-            .enumerate()
-            .map(|(row_index, row)| {
-                let (key, value) = if column == 0 { &row.0 } else { &row.1 };
-                let label = format!(" {}: ", i.text(key));
-                Line::from(vec![
-                    Span::styled(
-                        label.clone(),
-                        Style::default()
-                            .fg(metric_color(row_index))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        clipped(
-                            value,
-                            (rect.width as usize).saturating_sub(label.width() + 1),
-                        ),
-                        Style::default().fg(metric_value_color(key, app)),
-                    ),
-                ])
-            })
-            .collect::<Vec<_>>();
-        f.render_widget(
-            Paragraph::new(lines).style(Style::default().bg(PANEL)),
-            *rect,
-        );
-    }
-}
-fn action_description(app: &App) -> Vec<Line<'static>> {
-    let i = &app.ctx.i18n;
-    let spec = &app.items()[app.selected()];
-    let mut lines = vec![
-        Line::styled(
-            i.text(&spec.label()).to_owned(),
-            Style::default().fg(TEAL).add_modifier(Modifier::BOLD),
-        ),
-        Line::default(),
-    ];
-    if let Err(error) = app.available(spec) {
-        lines.push(Line::styled(
-            i.text("ui.unavailable").to_owned(),
-            Style::default().fg(AMBER),
-        ));
-        lines.push(Line::from(i.error(&error)));
-        lines.push(Line::default());
-    }
-    lines.push(Line::from(i.text(&spec.description()).to_owned()));
-    lines.push(Line::default());
-    lines.push(Line::styled(
-        format!(
-            "{} · {}",
-            i.text(if spec.changes {
-                "ui.mutating"
-            } else {
-                "ui.readonly"
-            }),
-            i.text(if spec.root { "ui.root" } else { "ui.user" })
-        ),
-        Style::default().fg(MUTED),
-    ));
-    if !spec.fields.is_empty() {
-        lines.push(Line::default());
-        let parameters = app
-            .parameters
-            .get(spec.id)
-            .cloned()
-            .unwrap_or_else(|| spec.defaults());
-        for field in &spec.fields {
-            let value = &parameters[field.name];
-            lines.push(Line::from(format!(
-                "{}: {}",
-                i.text(&field.label()),
-                if value.is_empty() {
-                    i.text("ui.not_set")
-                } else {
-                    value
-                }
-            )));
-        }
-    }
-    lines.push(Line::default());
-    lines.push(Line::styled(
-        i.text(if app.optimization() {
-            "ui.optimization_details"
-        } else {
-            "ui.action_details"
-        })
-        .to_owned(),
-        Style::default().fg(TEAL),
-    ));
-    lines
-}
-fn draw_lists(app: &App, f: &mut Frame, regions: &Regions) {
-    let i = &app.ctx.i18n;
-    let items = app
-        .category_order
-        .iter()
-        .enumerate()
-        .map(|(display_index, group_index)| {
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    "● ",
-                    Style::default()
-                        .fg(metric_color(display_index))
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    i.text(&format!("group.{}", super::GROUPS[*group_index])),
-                    Style::default().fg(TEXT),
-                ),
-            ]))
-        })
-        .collect::<Vec<_>>();
-    let category_position = app.category_position();
-    let mut state = ListState::default().with_selected(Some(category_position));
-    *state.offset_mut() = list_offset(
-        category_position,
-        app.category_order.len(),
-        regions.categories.height.saturating_sub(2) as usize,
-    );
-    f.render_stateful_widget(
-        List::new(items)
-            .block(block(
-                i.text("ui.categories"),
-                app.focus == Focus::Categories,
-            ))
-            .highlight_style(highlight_with(app.focus == Focus::Categories, AMBER))
-            .highlight_symbol("› "),
-        regions.categories,
-        &mut state,
-    );
-    let specs = app.items();
-    let list = specs
-        .iter()
-        .map(|spec| {
-            let available = app.available(spec).is_ok();
-            let label = i.text(&spec.label()).to_owned();
-            if app.optimization() {
-                let marked = app.marked.contains(spec.id);
-                ListItem::new(Line::from(vec![
-                    Span::styled(
-                        if marked { "[x] " } else { "[ ] " },
-                        Style::default().fg(if marked { AMBER } else { MUTED }),
-                    ),
-                    Span::styled(
-                        label,
-                        Style::default().fg(if available { TEXT } else { MUTED }),
-                    ),
-                ]))
-            } else {
-                ListItem::new(label).style(Style::default().fg(if available {
-                    TEXT
-                } else {
-                    MUTED
-                }))
-            }
-        })
-        .collect::<Vec<_>>();
-    let mut state = ListState::default().with_selected(Some(app.selected()));
-    *state.offset_mut() = list_offset(
-        app.selected(),
-        specs.len(),
-        regions.actions.height.saturating_sub(2) as usize,
-    );
-    let title = if app.optimization() {
-        i.format(
-            "ui.optimization_title",
-            &[("count", &app.marked.len().to_string())],
-        )
-    } else {
-        format!(
-            "{}  {}/{}",
-            i.text("ui.actions"),
-            app.selected() + 1,
-            specs.len()
-        )
-    };
-    f.render_stateful_widget(
-        List::new(list)
-            .block(block(title, app.focus == Focus::Actions))
-            .highlight_style(highlight(app.focus == Focus::Actions))
-            .highlight_symbol("› "),
-        regions.actions,
-        &mut state,
-    );
-    f.render_widget(
-        Paragraph::new(action_description(app))
-            .wrap(Wrap { trim: true })
-            .block(block(i.text("ui.details"), false)),
-        regions.details,
-    );
-}
-fn draw_logs(app: &App, f: &mut Frame, area: Rect) {
-    let i = &app.ctx.i18n;
-    let height = area.height.saturating_sub(2) as usize;
-    let rows = log_rows(&app.logs, area.width.saturating_sub(2) as usize);
-    let end = rows.len().saturating_sub(app.scroll as usize);
-    let start = end.saturating_sub(height);
-    let lines = if app.logs.is_empty() {
-        vec![Line::from(i.text("ui.empty_log"))]
-    } else {
-        rows.iter()
-            .skip(start)
-            .take(end - start)
-            .map(|l| Line::from(l.as_str()))
-            .collect()
-    };
-    let title = format!(
-        "{} · {} · {}",
-        i.text("ui.logs"),
-        app.task_title(),
-        i.text(app.phase.key())
-    );
-    f.render_widget(
-        Paragraph::new(lines)
-            .style(Style::default().fg(TEXT).bg(PANEL))
-            .block(block(title, app.phase != Phase::Idle)),
-        area,
-    );
-}
-pub(super) fn log_rows(logs: &std::collections::VecDeque<String>, width: usize) -> Vec<String> {
+/// Hard wrap by display cells, keeping every character (logs and long values).
+fn wrap_cells(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return Vec::new();
     }
     let mut rows = Vec::new();
-    for line in logs {
+    let mut row = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let cells = c.width().unwrap_or(0);
+        if used + cells > width && !row.is_empty() {
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        row.push(c);
+        used += cells;
+    }
+    rows.push(row);
+    rows
+}
+/// Word wrap for prose: Latin words move whole to the next line, while text containing wide
+/// (CJK) characters may break between any two characters, as Chinese typesetting allows.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    for paragraph in text.split('\n') {
         let mut row = String::new();
-        let mut used = 0;
-        for c in line.replace('\t', "    ").chars() {
-            let cells = c.width().unwrap_or(0);
-            if used + cells > width && !row.is_empty() {
-                rows.push(std::mem::take(&mut row));
-                used = 0;
+        for word in paragraph.split(' ') {
+            let gap = usize::from(!row.is_empty());
+            if row.width() + gap + word.width() <= width {
+                if gap == 1 {
+                    row.push(' ');
+                }
+                row.push_str(word);
+                continue;
             }
-            row.push(c);
-            used += cells;
+            let breakable = word.chars().any(|c| c.width().unwrap_or(0) > 1);
+            let first = word.chars().next().map_or(0, |c| c.width().unwrap_or(0));
+            if breakable && row.width() + gap + first <= width {
+                if gap == 1 {
+                    row.push(' ');
+                }
+            } else if !row.is_empty() {
+                rows.push(std::mem::take(&mut row));
+            }
+            for c in word.chars() {
+                if row.width() + c.width().unwrap_or(0) > width && !row.is_empty() {
+                    rows.push(std::mem::take(&mut row));
+                }
+                row.push(c);
+            }
         }
         rows.push(row);
     }
     rows
 }
+/// Centered rect clamped to the area with a one-cell margin.
 fn popup(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(2));
     let height = height.min(area.height.saturating_sub(2));
@@ -636,477 +130,661 @@ fn popup(area: Rect, width: u16, height: u16) -> Rect {
         height,
     )
 }
-pub(super) struct FormGeometry {
-    pub popup: Rect,
-    pub sections: [Rect; 5],
-    pub first: usize,
-    pub visible: usize,
-    pub buttons: [Rect; 2],
+/// The full-screen log view keeps a thin margin so it still reads as a layer.
+fn popup_full(area: Rect) -> Rect {
+    popup(
+        area,
+        area.width.saturating_sub(4),
+        area.height.saturating_sub(2),
+    )
 }
-impl FormGeometry {
-    pub fn new(area: Rect, form: &Form, i: &I18n) -> Self {
-        let popup = popup(area, 92, form.values.len() as u16 * 3 + 10);
-        let inside = block("", true).inner(popup);
-        let split = Layout::vertical([
+
+/// Screen regions shared by drawing and mouse hit tests. `*_rows` are the list interiors.
+pub(super) struct Regions {
+    pub header: Rect,
+    pub dashboard: Rect,
+    pub categories: Rect,
+    pub category_rows: Rect,
+    pub actions: Rect,
+    pub action_rows: Rect,
+    pub details: Rect,
+    pub logs: Rect,
+    pub footer: Rect,
+    /// Narrow screens join actions and details into one panel split by a rule.
+    pub stacked: bool,
+}
+impl Regions {
+    pub fn new(area: Rect, app: &App) -> Self {
+        let status_height = dashboard::HEIGHT;
+        let content = area.height.saturating_sub(status_height + 2);
+        // Logs share the space under the dashboard only while navigation keeps MIN_BODY rows.
+        let wanted = app.logs_open && (app.worker.is_some() || !app.logs.is_empty());
+        let share = ((u32::from(content) * 3 / 5) as u16).min(content.saturating_sub(MIN_BODY));
+        let log_height = if wanted && share >= MIN_LOGS {
+            share
+        } else {
+            0
+        };
+        let [header, status, body, logs, footer] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Min(3),
-            Constraint::Length(2),
-            Constraint::Length(2),
-            Constraint::Length(2),
+            Constraint::Length(status_height),
+            Constraint::Min(6),
+            Constraint::Length(log_height),
+            Constraint::Length(1),
         ])
-        .split(inside);
-        let sections = [split[0], split[1], split[2], split[3], split[4]];
-        let visible = (sections[1].height as usize / 3).max(1);
-        let first = list_offset(
-            form.index.min(form.values.len() - 1),
-            form.values.len(),
-            visible,
-        );
-        let primary = i.text(if form.mode == FormMode::Optimization {
-            "ui.save_selection"
-        } else {
-            "ui.continue"
-        });
-        let buttons = button_rects(sections[3], primary, i.text("ui.cancel"));
-        Self {
-            popup,
-            sections,
-            first,
-            visible,
-            buttons,
-        }
-    }
-    pub fn field_at(&self, point: ratatui::layout::Position, count: usize) -> Option<usize> {
-        if !self.sections[1].contains(point) {
-            return None;
-        }
-        let row = point.y.saturating_sub(self.sections[1].y) as usize / 3;
-        (row < self.visible && self.first + row < count).then_some(self.first + row)
-    }
-}
-pub(super) struct ConfirmationGeometry {
-    pub popup: Rect,
-    pub sections: [Rect; 3],
-    pub buttons: [Rect; 2],
-}
-impl ConfirmationGeometry {
-    pub fn new(area: Rect, i: &I18n) -> Self {
-        let popup = popup(area, 100, area.height.saturating_sub(2));
-        let inside = block("", true).inner(popup);
-        let split = Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(3),
-            Constraint::Length(2),
-        ])
-        .split(inside);
-        let sections = [split[0], split[1], split[2]];
-        let buttons = button_rects(
-            sections[1],
-            i.text("ui.cancel"),
-            i.text("ui.confirm_execute"),
-        );
-        Self {
-            popup,
-            sections,
-            buttons,
-        }
-    }
-}
-fn button_rects(row: Rect, first: &str, second: &str) -> [Rect; 2] {
-    let width = (first.width() as u16 + 8).min(row.width);
-    [
-        Rect::new(row.x, row.y, width, 1),
-        Rect::new(
-            row.x + width,
-            row.y,
-            (second.width() as u16 + 8).min(row.width.saturating_sub(width)),
-            1,
-        ),
-    ]
-}
-fn draw_form(app: &App, f: &mut Frame) {
-    let Some(form) = &app.form else {
-        return;
-    };
-    let i = &app.ctx.i18n;
-    let geometry = FormGeometry::new(f.area(), form, i);
-    let rect = geometry.popup;
-    f.render_widget(Clear, rect);
-    let frame = block(format!(" {} ", i.text(&form.spec.label())), true);
-    f.render_widget(frame, rect);
-    let sections = geometry.sections;
-    f.render_widget(
-        Paragraph::new(i.text(if form.mode == FormMode::Optimization {
-            "ui.form_batch_title"
-        } else {
-            "ui.form_single_title"
-        }))
-        .style(Style::default().fg(MUTED)),
-        sections[0],
-    );
-    let n = form.values.len();
-    let visible = geometry.visible;
-    let first = geometry.first;
-    for index in first..(first + visible).min(n) {
-        let y = sections[1].y + (index - first) as u16 * 3;
-        let label = Rect::new(sections[1].x + 1, y, sections[1].width.saturating_sub(2), 1);
-        let input = Rect::new(label.x, y + 1, label.width, 1);
-        let field = &form.spec.fields[index];
-        let active = form.index == index;
-        f.render_widget(
-            Paragraph::new(format!(
-                "{}{}  ({}/{})",
-                if active { "› " } else { "  " },
-                i.text(&field.label()),
-                index + 1,
-                n
-            )),
-            label,
-        );
-        if field.editable() {
-            let (value, cursor) =
-                form.values[index].visible(input.width.saturating_sub(2) as usize);
-            f.render_widget(
-                Paragraph::new(format!(" {value}")).style(if active {
-                    highlight(true)
-                } else {
-                    Style::default().fg(TEXT).bg(PANEL_ALT)
-                }),
-                input,
+        .areas(area);
+        let [categories, main] =
+            Layout::horizontal([Constraint::Length(CATEGORY_WIDTH), Constraint::Min(30)])
+                .areas(body);
+        let stacked = area.width < SIDE_BY_SIDE;
+        let (actions, details, action_rows) = if stacked {
+            let rows = (main.height.saturating_sub(6) / 2).clamp(3, 8);
+            let [actions, details] =
+                Layout::vertical([Constraint::Min(3), Constraint::Length(rows + 2)]).areas(main);
+            let inner = Rect::new(
+                actions.x + 1,
+                actions.y + 1,
+                actions.width.saturating_sub(2),
+                actions.height.saturating_sub(1),
             );
-            if active {
-                f.set_cursor_position((
-                    input.x + 1 + cursor.min(input.width.saturating_sub(2)),
-                    input.y,
+            (actions, details, inner)
+        } else {
+            let [actions, details] =
+                Layout::horizontal([Constraint::Length(ACTION_WIDTH), Constraint::Min(25)])
+                    .areas(main);
+            (actions, details, actions.inner(Margin::new(1, 1)))
+        };
+        Self {
+            header,
+            dashboard: status,
+            categories,
+            category_rows: categories.inner(Margin::new(1, 1)),
+            actions,
+            action_rows,
+            details,
+            logs,
+            footer,
+            stacked,
+        }
+    }
+}
+
+/// Any layer that owns input; hover and background highlights pause while one is open.
+fn dialog_open(app: &App) -> bool {
+    app.confirmation.is_some()
+        || app.form.is_some()
+        || app.loading.is_some()
+        || app.notice.is_some()
+        || app.overview
+        || app.log_modal
+        || app.help
+}
+/// List row under the pointer, for hover feedback on clickable rows.
+fn hover_row(app: &App, rows: Rect, offset: usize, count: usize) -> Option<usize> {
+    let point = app.hover.filter(|_| !dialog_open(app))?;
+    if !rows.contains(point) {
+        return None;
+    }
+    let index = offset + usize::from(point.y - rows.y);
+    (index < count).then_some(index)
+}
+
+fn draw_header(app: &App, f: &mut Frame, area: Rect) {
+    let i = &app.ctx.i18n;
+    let (mode, banner, tone) = if app.platform_error.is_some() {
+        ("ui.mode_preview", "ui.preview_banner", Tone::Warning)
+    } else if app.root {
+        ("ui.mode_root", "ui.root_banner", Tone::Danger)
+    } else {
+        ("ui.mode_user", "ui.user_banner", Tone::Info)
+    };
+    let language = i
+        .languages()
+        .into_iter()
+        .find(|(id, _)| *id == i.locale())
+        .map_or(i.locale(), |(_, name)| name);
+    let right = format!("{language} ");
+    let mut spans = vec![
+        Span::styled(
+            " CqShell",
+            theme::fg(Tone::Accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" v{}  ", env!("CARGO_PKG_VERSION")), theme::muted()),
+        theme::badge(i.text(mode), tone),
+    ];
+    let used: usize = spans.iter().map(|span| span.content.width()).sum();
+    let banner = format!("  {}", i.text(banner));
+    // The explanation is dropped, not clipped, when it does not fit beside the language.
+    if used + banner.width() + right.width() + 2 <= area.width as usize {
+        spans.push(Span::styled(banner, theme::muted()));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    f.render_widget(
+        Paragraph::new(Line::styled(right, theme::muted()).right_aligned()),
+        area,
+    );
+}
+
+/// Focused lists show a filled bar; an unfocused list keeps its place with bold accent text.
+fn selection(focused: bool) -> Style {
+    if focused {
+        Style::default()
+            .fg(theme::ON_TONE)
+            .bg(theme::ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        theme::fg(Tone::Accent).add_modifier(Modifier::BOLD)
+    }
+}
+fn list(items: Vec<ListItem<'static>>, focused: bool) -> List<'static> {
+    List::new(items)
+        .highlight_style(selection(focused))
+        .highlight_symbol("› ")
+        .highlight_spacing(HighlightSpacing::Always)
+}
+fn draw_categories(app: &App, f: &mut Frame, regions: &Regions) {
+    let i = &app.ctx.i18n;
+    let focused = app.focus == Focus::Categories;
+    let rows = regions.category_rows;
+    let count = app.category_order.len();
+    let position = app.category_position();
+    let offset = list_offset(position, count, rows.height as usize);
+    let hover = hover_row(app, rows, offset, count);
+    let items = app
+        .category_order
+        .iter()
+        .enumerate()
+        .map(|(index, group)| {
+            let mut spans = vec![Span::raw(
+                i.text(&format!("group.{}", super::GROUPS[*group]))
+                    .to_owned(),
+            )];
+            if *group == super::OPTIMIZATION_GROUP && !app.marked.is_empty() {
+                spans.push(Span::styled(
+                    format!(" {}", app.marked.len()),
+                    theme::fg(Tone::Accent).add_modifier(Modifier::BOLD),
                 ));
             }
-        } else {
-            f.render_widget(
-                Paragraph::new(format!(" ‹ {} ›", form.values[index].text)).style(if active {
-                    highlight(true)
-                } else {
-                    Style::default().fg(BLUE)
-                }),
-                input,
-            );
-        }
-    }
-    if let Some(error) = &form.error {
-        f.render_widget(
-            Paragraph::new(error.as_str())
-                .wrap(Wrap { trim: true })
-                .style(Style::default().fg(RED)),
-            sections[2],
-        );
-    }
-    let primary = i.text(if form.mode == FormMode::Optimization {
-        "ui.save_selection"
-    } else {
-        "ui.continue"
-    });
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!("  [ {primary} ]  "),
-                if form.index == n {
-                    highlight(true)
-                } else {
-                    Style::default().fg(TEAL)
-                },
-            ),
-            Span::styled(
-                format!("  [ {} ]  ", i.text("ui.cancel")),
-                if form.index == n + 1 {
-                    highlight(true)
-                } else {
-                    Style::default()
-                },
-            ),
-        ])),
-        sections[3],
+            let style = if hover == Some(index) {
+                theme::fg(Tone::Accent)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(spans)).style(style)
+        })
+        .collect();
+    let mut state = ListState::default()
+        .with_selected(Some(position))
+        .with_offset(offset);
+    f.render_stateful_widget(
+        list(items, focused).block(theme::panel(i.text("ui.categories"), focused)),
+        regions.categories,
+        &mut state,
     );
-    f.render_widget(
-        Paragraph::new(i.text("ui.form_hint")).wrap(Wrap { trim: true }),
-        sections[4],
+    theme::scrollbar(
+        f,
+        theme::track(regions.categories, rows),
+        count,
+        rows.height as usize,
+        offset,
     );
 }
-fn draw_confirmation(app: &App, f: &mut Frame) {
-    let Some(confirm) = &app.confirmation else {
-        return;
-    };
+/// The running action spins in place; a finished single action keeps its outcome glyph.
+fn task_marker(app: &App, spec: &Spec) -> Option<Span<'static>> {
+    let runs = app.task_ids.iter().any(|id| id == spec.id);
+    let live = matches!(app.phase, Phase::Running | Phase::Cancelling);
+    let settled = matches!(
+        app.phase,
+        Phase::Completed | Phase::Failed | Phase::Cancelled
+    );
+    // A batch outcome belongs to the whole selection, so only single runs keep a glyph.
+    if !runs || !(live || (settled && app.task_ids.len() == 1)) {
+        return None;
+    }
+    Some(Span::styled(
+        format!(" {}", theme::phase_icon(app.phase, app.elapsed())),
+        theme::fg(app.phase.tone()),
+    ))
+}
+fn draw_actions(app: &App, f: &mut Frame, regions: &Regions, specs: &[Spec]) {
     let i = &app.ctx.i18n;
-    let geometry = ConfirmationGeometry::new(f.area(), i);
-    let rect = geometry.popup;
-    f.render_widget(Clear, rect);
-    let frame = block(i.text("ui.confirm"), true);
-    f.render_widget(frame, rect);
-    let sections = geometry.sections;
-    f.render_widget(
-        Paragraph::new(confirm.text.as_str())
-            .wrap(Wrap { trim: false })
-            .scroll((confirm.scroll, 0)),
-        sections[0],
-    );
-    if confirm.token == "YES" {
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(
-                    format!("  [ {} ]  ", i.text("ui.cancel")),
-                    highlight(!confirm.accept),
-                ),
-                Span::styled(
-                    format!("  [ {} ]  ", i.text("ui.confirm_execute")),
-                    highlight(confirm.accept),
-                ),
-            ])),
-            sections[1],
-        );
-        f.render_widget(
-            Paragraph::new(i.text("ui.yes_no_hint")).wrap(Wrap { trim: true }),
-            sections[2],
-        );
+    let focused = app.focus == Focus::Actions;
+    let rows = regions.action_rows;
+    let offset = list_offset(app.selected(), specs.len(), rows.height as usize);
+    let hover = hover_row(app, rows, offset, specs.len());
+    let items = specs
+        .iter()
+        .enumerate()
+        .map(|(index, spec)| {
+            let available = app.available(spec).is_ok();
+            let mut spans = Vec::new();
+            if app.optimization() {
+                let marked = app.marked.contains(spec.id);
+                spans.push(Span::styled(
+                    if marked { "[✓] " } else { "[ ] " },
+                    theme::fg(if marked { Tone::Accent } else { Tone::Muted }),
+                ));
+            }
+            let label = i.text(&spec.label()).to_owned();
+            spans.push(if available {
+                Span::raw(label)
+            } else {
+                Span::styled(label, theme::muted())
+            });
+            spans.extend(task_marker(app, spec));
+            let style = if hover == Some(index) {
+                theme::fg(Tone::Accent)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(spans)).style(style)
+        })
+        .collect();
+    let heading = if app.optimization() {
+        i.format(
+            "ui.optimization_title",
+            &[("count", &app.marked.len().to_string())],
+        )
     } else {
-        let (value, cursor) = confirm
-            .input
-            .visible(sections[1].width.saturating_sub(3) as usize);
-        f.render_widget(
-            Paragraph::new(format!(
-                "{}\n› {value}",
-                i.format("ui.type_confirm", &[("token", &confirm.token)])
-            ))
-            .wrap(Wrap { trim: true }),
-            sections[1],
-        );
-        f.set_cursor_position((sections[1].x + 2 + cursor, sections[1].y + 1));
-        f.render_widget(
-            Paragraph::new(i.text("ui.confirm_hint")).wrap(Wrap { trim: true }),
-            sections[2],
-        );
+        i.text(&format!("group.{}", super::GROUPS[app.group]))
+            .to_owned()
+    };
+    let mut block = theme::panel(heading, focused).title(
+        Line::styled(
+            format!(" {}/{} ", app.selected() + 1, specs.len()),
+            theme::muted(),
+        )
+        .right_aligned(),
+    );
+    if regions.stacked {
+        block = block.borders(Borders::TOP | Borders::LEFT | Borders::RIGHT);
     }
+    let mut state = ListState::default()
+        .with_selected(Some(app.selected()))
+        .with_offset(offset);
+    f.render_stateful_widget(
+        list(items, focused).block(block),
+        regions.actions,
+        &mut state,
+    );
+    theme::scrollbar(
+        f,
+        theme::track(regions.actions, rows),
+        specs.len(),
+        rows.height as usize,
+        offset,
+    );
 }
-fn overview_lines(app: &App) -> Vec<Line<'static>> {
+/// Impact and privilege on one line, toned by risk.
+fn meta_line(app: &App, spec: &Spec) -> Line<'static> {
+    let i = &app.ctx.i18n;
+    let (impact, impact_tone) = if spec.changes {
+        ("ui.mutating", Tone::Warning)
+    } else {
+        ("ui.readonly", Tone::Success)
+    };
+    let (access, access_tone) = if spec.root {
+        ("ui.root", Tone::Warning)
+    } else {
+        ("ui.user", Tone::Muted)
+    };
+    Line::from(vec![
+        Span::styled(format!("● {}", i.text(impact)), theme::fg(impact_tone)),
+        Span::styled(" · ", theme::muted()),
+        Span::styled(i.text(access).to_owned(), theme::fg(access_tone)),
+    ])
+}
+fn unavailable_line(app: &App, spec: &Spec) -> Option<Line<'static>> {
+    let error = app.available(spec).err()?;
+    Some(Line::styled(
+        format!("! {}", app.ctx.i18n.error(&error)),
+        theme::fg(Tone::Warning),
+    ))
+}
+/// Under the action list there is room for the essentials only: why it is unavailable,
+/// its impact, then as much description as fits.
+fn compact_details(app: &App, spec: &Spec) -> Vec<Line<'static>> {
     let i = &app.ctx.i18n;
     let mut lines = Vec::new();
-    for row in metric_rows(app) {
-        for (key, value) in [row.0, row.1] {
-            lines.push(Line::from(format!("{}: {value}", i.text(key))));
-        }
+    lines.extend(unavailable_line(app, spec));
+    lines.push(meta_line(app, spec));
+    lines.push(Line::from(i.text(&spec.description()).to_owned()));
+    lines
+}
+/// The side panel reads top-down: what it is, whether it can run, what it does, its impact,
+/// then the parameters it will use.
+fn full_details(app: &App, spec: &Spec) -> Vec<Line<'static>> {
+    let i = &app.ctx.i18n;
+    let mut lines = vec![Line::styled(
+        i.text(&spec.label()).to_owned(),
+        theme::bold(),
+    )];
+    if let Some(line) = unavailable_line(app, spec) {
+        lines.push(Line::default());
+        lines.push(line);
     }
-    if let Some(at) = app.snapshot.public.updated {
-        lines.push(Line::from(format!(
-            "{}: {}s",
-            i.text("dash.public_age"),
-            at.elapsed().as_secs()
-        )));
+    lines.push(Line::default());
+    lines.push(Line::from(i.text(&spec.description()).to_owned()));
+    lines.push(Line::default());
+    lines.push(meta_line(app, spec));
+    if spec.external {
+        lines.push(Line::styled(
+            i.text("ui.external").to_owned(),
+            theme::muted(),
+        ));
     }
-    let data = &app.snapshot.local;
-    let mut errors = Vec::new();
-    for (key, value) in [
-        ("dash.host", &data.host),
-        ("dash.os", &data.os),
-        ("dash.kernel_status", &data.kernel),
-        ("dash.cpu", &data.cpu),
-        ("dash.timezone", &data.timezone),
-        ("dash.mihomo_version", &data.mihomo_version),
-        ("dash.network", &data.congestion),
-        ("dash.qdisc", &data.qdisc),
-        ("dash.ipv4", &app.snapshot.public.ipv4),
-        ("dash.ipv6", &app.snapshot.public.ipv6),
-        ("dash.isp", &app.snapshot.public.isp),
-    ] {
-        if let Reading::Unavailable(error) = value {
-            errors.push(format!("{}: {error}", i.text(key)));
-        }
-    }
-    match &data.mihomo_state {
-        Reading::Unavailable(error) => {
-            errors.push(format!("{}: {error}", i.text("dash.mihomo_state")));
-        }
-        Reading::Value(State::Unknown) => {
-            errors.push(i.text("dash.mihomo_unverified").into());
-        }
-        _ => (),
-    }
-    if !errors.is_empty() {
+    if !spec.fields.is_empty() {
+        let parameters = app
+            .parameters
+            .get(spec.id)
+            .cloned()
+            .unwrap_or_else(|| spec.defaults());
+        let width = spec
+            .fields
+            .iter()
+            .map(|field| i.text(&field.label()).width())
+            .max()
+            .unwrap_or(0);
         lines.push(Line::default());
         lines.push(Line::styled(
-            i.text("dash.diagnostics").to_owned(),
-            Style::default().fg(AMBER),
+            i.text("ui.parameters").to_owned(),
+            theme::muted(),
         ));
-        lines.extend(errors.into_iter().map(Line::from));
+        for field in &spec.fields {
+            let value = &parameters[field.name];
+            // A listed value is picked when the form opens, so it is not missing yet.
+            let (text, tone) = if !value.is_empty() {
+                (value.clone(), Tone::Plain)
+            } else if field.source.is_some() {
+                (i.text("ui.choose_on_open").to_owned(), Tone::Muted)
+            } else if field.required {
+                (i.text("ui.not_set").to_owned(), Tone::Warning)
+            } else {
+                ("—".to_owned(), Tone::Muted)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}  ", pad(i.text(&field.label()), width)),
+                    theme::muted(),
+                ),
+                Span::styled(text, theme::fg(tone)),
+            ]));
+        }
+    }
+    if app.optimization() {
+        lines.push(Line::default());
+        lines.push(Line::styled(
+            i.text("ui.optimization_details").to_owned(),
+            theme::fg(Tone::Info),
+        ));
     }
     lines
 }
-pub(super) fn draw(app: &App, f: &mut Frame) {
+fn draw_details(app: &App, f: &mut Frame, regions: &Regions, spec: &Spec) {
+    let title = app.ctx.i18n.text("ui.details");
+    let (block, lines) = if regions.stacked {
+        // The rule continues the action panel's sides, so both read as one panel.
+        let joined = border::Set {
+            top_left: "├",
+            top_right: "┤",
+            ..border::ROUNDED
+        };
+        (
+            theme::panel(title, false)
+                .border_set(joined)
+                .padding(Padding::horizontal(1)),
+            compact_details(app, spec),
+        )
+    } else {
+        (
+            theme::panel(title, false).padding(Padding::horizontal(1)),
+            full_details(app, spec),
+        )
+    };
+    f.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(block),
+        regions.details,
+    );
+}
+
+/// Keys for the current moment, by priority; `?` keeps the full reference one key away.
+fn footer_hints(app: &App) -> (Vec<theme::Hint<'_>>, theme::Hint<'_>) {
+    let t = |key: &str| app.ctx.i18n.text(key);
+    let help = ("?", t("key.help"));
+    let back = ("Esc", t("key.back"));
+    if app.help {
+        return (Vec::new(), ("Esc", t("key.close")));
+    }
+    if app.worker.is_some() {
+        let hints = vec![
+            ("Esc", t("key.cancel_task")),
+            ("F2", t("key.full_log")),
+            ("G", t("key.logs")),
+            ("Q", t("key.quit")),
+        ];
+        return (hints, help);
+    }
+    if app.log_modal {
+        return (vec![("PgUp/PgDn", t("key.scroll"))], back);
+    }
+    if app.overview {
+        let hints = vec![("R", t("key.refresh")), ("N", t("key.public"))];
+        return (hints, back);
+    }
+    let hints = if app.optimization() {
+        vec![
+            ("Space", t("key.select")),
+            ("Enter", t("key.configure")),
+            ("F5", t("key.review")),
+            ("Tab", t("key.focus")),
+            ("Q", t("key.quit")),
+        ]
+    } else if app.focus == Focus::Categories {
+        vec![
+            ("↑↓", t("key.move")),
+            ("Enter", t("key.open")),
+            ("Alt+↑↓", t("key.reorder")),
+            ("O", t("key.optimize")),
+            ("Q", t("key.quit")),
+        ]
+    } else {
+        vec![
+            ("↑↓", t("key.move")),
+            ("Enter", t("key.open")),
+            ("Tab", t("key.focus")),
+            ("O", t("key.optimize")),
+            ("R", t("key.refresh")),
+            ("Q", t("key.quit")),
+        ]
+    };
+    (hints, help)
+}
+/// Task state for screens too short for the inline log panel: phase, task and the latest
+/// output while it runs; the outcome stays until the next task starts.
+fn footer_status(app: &App, logs_visible: bool, room: usize) -> Option<Line<'static>> {
+    if app.phase == Phase::Idle || logs_visible {
+        return None;
+    }
     let i = &app.ctx.i18n;
+    let tone = app.phase.tone();
+    let mut text = format!(
+        "{} {} · {}",
+        theme::phase_icon(app.phase, app.elapsed()),
+        i.text(app.phase.key()),
+        app.task_title()
+    );
+    let latest = app
+        .logs
+        .back()
+        .filter(|_| app.phase == Phase::Running && !app.log_modal);
+    if let Some(line) = latest {
+        text = format!("{text} · {}", line.text.trim());
+    }
+    Some(Line::styled(clip(&text, room), theme::fg(tone)).right_aligned())
+}
+fn draw_footer(app: &App, f: &mut Frame, regions: &Regions) {
+    let area = regions.footer.inner(Margin::new(1, 0));
+    let status = footer_status(app, regions.logs.height > 0, area.width as usize / 2);
+    let status_width = status.as_ref().map_or(0, Line::width) as u16;
+    let room = area
+        .width
+        .saturating_sub(status_width + u16::from(status_width > 0) * 2);
+    let (hints, pinned) = footer_hints(app);
+    f.render_widget(
+        Paragraph::new(theme::key_hints(&hints, Some(pinned), room as usize)),
+        area,
+    );
+    if let Some(status) = status {
+        f.render_widget(Paragraph::new(status), area);
+    }
+}
+
+fn draw_small(app: &App, f: &mut Frame, area: Rect) {
+    let i = &app.ctx.i18n;
+    let width = area.width.saturating_sub(4).max(1) as usize;
+    let mut lines = wrap_words(i.text("ui.small"), width)
+        .into_iter()
+        .map(|row| Line::styled(row, theme::fg(Tone::Warning)))
+        .collect::<Vec<_>>();
+    lines.push(Line::styled(
+        i.format(
+            "ui.current_size",
+            &[
+                ("width", &area.width.to_string()),
+                ("height", &area.height.to_string()),
+            ],
+        ),
+        theme::muted(),
+    ));
+    let height = (lines.len() as u16).min(area.height);
+    let rect = Rect::new(
+        area.x,
+        area.y + area.height.saturating_sub(height) / 2,
+        area.width,
+        height,
+    );
+    f.render_widget(
+        Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center),
+        rect,
+    );
+}
+
+pub(super) fn draw(app: &App, f: &mut Frame) {
     let area = f.area();
-    f.render_widget(Block::default().style(Style::default().bg(CANVAS)), area);
-    if area.width < 80 || area.height < 24 {
-        f.render_widget(
-            Paragraph::new(i.text("ui.small"))
-                .style(Style::default().fg(TEXT).bg(CANVAS))
-                .wrap(Wrap { trim: true }),
-            area,
-        );
+    if !fits(area) {
+        draw_small(app, f, area);
         return;
     }
     let regions = Regions::new(area, app);
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                format!(" CqShell {} ", env!("CARGO_PKG_VERSION")),
-                Style::default()
-                    .fg(TEAL)
-                    .bg(PANEL)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!(
-                    "  {}  /  {}",
-                    i.text(&format!("group.{}", super::GROUPS[app.group])),
-                    i.locale()
-                ),
-                Style::default().fg(MUTED).bg(PANEL),
-            ),
-        ]))
-        .style(Style::default().bg(PANEL)),
-        regions.header,
-    );
-    let environment = if app.platform_error.is_some() {
-        i.text("ui.preview_banner")
-    } else if app.root {
-        i.text("ui.root_banner")
-    } else {
-        i.text("ui.user_banner")
-    };
-    f.render_widget(
-        Paragraph::new(format!("  {}", environment)).style(
-            Style::default()
-                .fg(if app.platform_error.is_some() {
-                    AMBER
-                } else {
-                    MUTED
-                })
-                .bg(CANVAS),
-        ),
-        regions.environment,
-    );
-    draw_dashboard(app, f, regions.dashboard);
-    draw_lists(app, f, &regions);
+    let specs = app.items();
+    let spec = &specs[app.selected()];
+    draw_header(app, f, regions.header);
+    dashboard::draw(app, f, regions.dashboard);
+    draw_categories(app, f, &regions);
+    draw_actions(app, f, &regions, &specs);
+    draw_details(app, f, &regions, spec);
     if regions.logs.height > 0 {
-        draw_logs(app, f, regions.logs);
+        logs::draw(app, f, regions.logs);
     }
-    let mut lines = vec![
-        Line::from(i.text(if app.optimization() {
-            "ui.optimization_hint"
-        } else {
-            "ui.hint"
-        })),
-        Line::from(i.text("ui.status_hint")),
-    ];
-    if app.phase != Phase::Idle {
-        lines.push(Line::styled(
-            format!(
-                "{} · {}{}",
-                app.task_title(),
-                i.text(app.phase.key()),
-                if app.worker.is_some() {
-                    format!(" · {}", i.text("ui.busy_hint"))
-                } else {
-                    String::new()
-                }
-            ),
-            Style::default().fg(phase_color(app.phase)),
-        ));
-    } else {
-        lines.push(Line::styled(
-            i.text(if app.optimization() {
-                "ui.optimization_details"
-            } else {
-                "dash.refresh_hint"
-            }),
-            Style::default().fg(MUTED),
-        ));
-    }
-    f.render_widget(
-        Paragraph::new(lines).style(Style::default().fg(TEXT).bg(CANVAS)),
-        regions.footer,
-    );
-    if app.overview {
-        let rect = popup(area, 112, area.height.saturating_sub(2));
-        f.render_widget(Clear, rect);
-        let frame = block(i.text("dash.title"), true);
-        let inside = frame.inner(rect);
-        f.render_widget(frame, rect);
-        let rows = Layout::vertical([Constraint::Min(4), Constraint::Length(2)]).split(inside);
-        f.render_widget(
-            Paragraph::new(overview_lines(app))
-                .wrap(Wrap { trim: false })
-                .scroll((app.overview_scroll, 0)),
-            rows[0],
-        );
-        f.render_widget(
-            Paragraph::new(i.text("ui.overview_hint")).wrap(Wrap { trim: true }),
-            rows[1],
-        );
-    }
+    draw_footer(app, f, &regions);
+    // Feedback sits under modal layers so a dialog always reads as the top layer.
+    dialogs::draw_toast(app, f, regions.footer);
+    dialogs::draw_overview(app, f);
     if app.log_modal {
-        let rect = popup(
-            area,
-            area.width.saturating_sub(4),
-            area.height.saturating_sub(2),
-        );
-        f.render_widget(Clear, rect);
-        draw_logs(app, f, rect);
+        logs::draw(app, f, popup_full(area));
     }
-    if let Some(notice) = &app.notice {
-        let rect = popup(area, 94, 14);
-        f.render_widget(Clear, rect);
-        f.render_widget(
-            Paragraph::new(format!("{notice}\n\n{}", i.text("ui.back_hint")))
-                .wrap(Wrap { trim: true })
-                .block(block(i.text("ui.notice"), true)),
-            rect,
-        );
-    }
-    draw_form(app, f);
-    draw_confirmation(app, f);
+    dialogs::draw_help(app, f);
+    dialogs::draw_notice(app, f);
+    dialogs::draw_loading(app, f);
+    dialogs::draw_form(app, f);
+    dialogs::draw_picker(app, f);
+    dialogs::draw_confirmation(app, f);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{config::Paths, runtime::Context};
-    fn render(app: &App, width: u16, height: u16) -> String {
+    use crate::{
+        config::Paths,
+        dashboard::Reading,
+        i18n::I18n,
+        ops::{Choice, clash::State},
+        runtime::Context,
+        tui::{Confirmation, FormMode, InputBuffer, Loading},
+    };
+    use ratatui::style::Color;
+
+    fn app(locale: &str) -> App {
+        App::new(Context::new(
+            Paths::from_env().unwrap(),
+            I18n::load(Some(locale), None).unwrap(),
+            false,
+        ))
+    }
+    fn terminal(
+        app: &App,
+        width: u16,
+        height: u16,
+    ) -> ratatui::Terminal<ratatui::backend::TestBackend> {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| app.draw(f)).unwrap();
         terminal
+    }
+    /// Screen rows with spaces removed; TestBackend leaves a blank after each wide glyph.
+    fn rows(app: &App, width: u16, height: u16) -> Vec<String> {
+        let terminal = terminal(app, width, height);
+        terminal
             .backend()
             .buffer()
             .content
-            .iter()
-            .map(|c| c.symbol())
-            .collect::<String>()
-            .replace(' ', "")
+            .chunks(width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|c| c.symbol())
+                    .collect::<String>()
+                    .replace(' ', "")
+            })
+            .collect()
     }
+    fn render(app: &App, width: u16, height: u16) -> String {
+        rows(app, width, height).concat()
+    }
+    /// A fact renders as its label followed by its value (after an optional state dot).
+    fn shows(rows: &[String], label: &str, value: &str) -> bool {
+        let label = label.replace(' ', "");
+        let value = value.replace(' ', "");
+        rows.iter().any(|row| {
+            row.match_indices(&label).any(|(at, _)| {
+                row[at + label.len()..]
+                    .trim_start_matches(['●', '○'])
+                    .starts_with(&value)
+            })
+        })
+    }
+
     #[test]
     fn dashboard_is_permanent_and_checkboxes_belong_only_to_optimization() {
-        let mut app = App::new(Context::new(
-            Paths::from_env().unwrap(),
-            I18n::load(Some("en-US"), None).unwrap(),
-            false,
-        ));
+        let mut app = app("en-US");
         for (width, height) in [(80, 24), (120, 40), (200, 55)] {
             let text = render(&app, width, height);
-            assert!(text.contains("Host:"));
-            assert!(text.contains("CPU:"));
-            assert!(text.contains("Kernelstatus:"));
-            assert!(text.contains("Terminalproxy:"));
-            assert!(text.contains("Mihomostatus:"));
-            assert!(text.contains("Mihomoversion:"));
-            assert!(text.contains("IPv4:"));
-            assert!(!text.contains("[x]"));
+            for label in [
+                "Host",
+                "CPU",
+                "Kernelstatus",
+                "Terminalproxy",
+                "Mihomostatus",
+                "Mihomoversion",
+                "IPv4",
+                "TCPconfig",
+                "Memory",
+                "Swap",
+            ] {
+                assert!(text.contains(label), "{label} at {width}x{height}");
+            }
+            assert!(!text.contains("[✓]"));
             assert!(!text.contains("[]"));
         }
         app.group = super::super::OPTIMIZATION_GROUP;
@@ -1117,11 +795,7 @@ mod tests {
     #[test]
     fn proxy_and_mihomo_fields_render_independently_in_both_languages() {
         for locale in ["zh-CN", "en-US"] {
-            let mut app = App::new(Context::new(
-                Paths::from_env().unwrap(),
-                I18n::load(Some(locale), None).unwrap(),
-                false,
-            ));
+            let mut app = app(locale);
             app.snapshot.local.mihomo_version = Reading::Value("v1.19.12".into());
             for (state, proxy, key) in [
                 (State::Running(1234), false, "dash.mihomo_running"),
@@ -1131,123 +805,180 @@ mod tests {
             ] {
                 app.snapshot.local.mihomo_state = Reading::Value(state);
                 app.snapshot.local.terminal_proxy = Reading::Value(proxy);
-                let expected_state = app.ctx.i18n.format(key, &[("pid", "1234")]);
-                let expected_proxy = app.ctx.i18n.text(if proxy {
+                let i = &app.ctx.i18n;
+                let expected_state = i.format(key, &[("pid", "1234")]);
+                let expected_proxy = i.text(if proxy {
                     "status.enabled"
                 } else {
                     "status.disabled"
                 });
                 for (width, height) in [(80, 24), (120, 40), (200, 55)] {
-                    let screen = render(&app, width, height);
-                    for (key, value) in [
+                    let screen = rows(&app, width, height);
+                    for (label, value) in [
                         ("dash.terminal_proxy", expected_proxy),
                         ("dash.mihomo_state", expected_state.as_str()),
                         ("dash.mihomo_version", "v1.19.12"),
                     ] {
-                        let field = format!("{}:{value}", app.ctx.i18n.text(key)).replace(' ', "");
                         assert!(
-                            screen.contains(&field),
-                            "missing {field} at {width}x{height}"
+                            shows(&screen, app.ctx.i18n.text(label), value),
+                            "missing {label}={value} at {width}x{height} ({locale})"
                         );
                     }
-                    assert!(
-                        screen.contains(
-                            &format!("{}:", app.ctx.i18n.text("dash.tcp")).replace(' ', "")
-                        )
-                    );
                 }
             }
         }
     }
 
     #[test]
+    fn network_and_proxy_status_has_its_own_panel() {
+        let app = app("en-US");
+        for width in [80, 120, 200] {
+            let height = 40;
+            let terminal = terminal(&app, width, height);
+            let buffer = terminal.backend().buffer();
+            let dashboard = Regions::new(Rect::new(0, 0, width, height), &app).dashboard;
+            let split = width / 2;
+            // Column of `label` inside the status rows; en-US cells are all single width.
+            let column = |label: &str| {
+                (dashboard.y..dashboard.bottom()).find_map(|y| {
+                    let row = (0..width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>();
+                    row.find(label).map(|at| row[..at].chars().count() as u16)
+                })
+            };
+            for label in ["System & resources", "Host", "Kernel status", "Timezone"] {
+                let x = column(label).unwrap_or_else(|| panic!("{label} missing at {width}"));
+                assert!(x < split, "{label} belongs to the system panel at {width}");
+            }
+            for label in [
+                "Network & proxy",
+                "Congestion / queue",
+                "TCP config",
+                "IPv4",
+                "ISP",
+                "Terminal proxy",
+                "Mihomo status",
+                "Mihomo version",
+            ] {
+                let x = column(label).unwrap_or_else(|| panic!("{label} missing at {width}"));
+                assert!(
+                    x >= split,
+                    "{label} belongs to the network panel at {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mihomo_probe_errors_remain_visible_in_overview_diagnostics() {
-        let mut app = App::new(Context::new(
-            Paths::from_env().unwrap(),
-            I18n::load(Some("en-US"), None).unwrap(),
-            false,
-        ));
+        let mut app = app("en-US");
         app.snapshot.local.mihomo_state = Reading::Unavailable("invalid PID file".into());
         app.snapshot.local.mihomo_version = Reading::Unavailable("version probe failed".into());
-        let details = overview_lines(&app)
+        let details = dashboard::overview(&app, 96)
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("\n");
         assert!(details.contains("Mihomo status: invalid PID file"));
         assert!(details.contains("Mihomo version: version probe failed"));
-        assert_eq!(metric_value_color("dash.mihomo_state", &app), AMBER);
+        let tone = |app: &App| {
+            dashboard::facts(app)
+                .into_iter()
+                .find(|fact| fact.key == "dash.mihomo_state")
+                .unwrap()
+                .tone
+        };
+        assert_eq!(tone(&app), Tone::Warning);
         app.snapshot.local.mihomo_state = Reading::Value(State::Unknown);
-        assert!(overview_lines(&app).iter().any(|line| {
-            line.to_string()
-                .contains(app.ctx.i18n.text("dash.mihomo_unverified"))
-        }));
+        assert_eq!(tone(&app), Tone::Warning);
+        let unverified = app.ctx.i18n.text("dash.mihomo_unverified");
+        assert!(
+            dashboard::overview(&app, 96)
+                .iter()
+                .any(|line| line.to_string().contains(unverified))
+        );
     }
 
     #[test]
     fn network_summary_collapses_linux_only_fields_on_other_platforms() {
-        let mut app = App::new(Context::new(
-            Paths::from_env().unwrap(),
-            I18n::load(Some("en-US"), None).unwrap(),
-            false,
-        ));
+        let mut app = app("en-US");
         app.snapshot.local.congestion = Reading::NotApplicable;
         app.snapshot.local.qdisc = Reading::NotApplicable;
         app.snapshot.local.bbr_available = Reading::NotApplicable;
         app.snapshot.local.bbr_version = Reading::NotApplicable;
-
-        let summary = metric_rows(&app)
+        let fact = dashboard::facts(&app)
             .into_iter()
-            .flat_map(|row| [row.0, row.1])
-            .find_map(|(key, value)| (key == "dash.network").then_some(value))
+            .find(|fact| fact.key == "dash.network")
             .unwrap();
-        assert_eq!(summary, app.ctx.i18n.text("dash.na"));
+        assert_eq!(fact.value, app.ctx.i18n.text("dash.na"));
+        assert_eq!(fact.tone, Tone::Muted);
 
         app.snapshot.local.congestion = Reading::Value("bbr".into());
         app.snapshot.local.qdisc = Reading::Value("fq".into());
         app.snapshot.local.bbr_available = Reading::Value(true);
         app.snapshot.local.bbr_version = Reading::Value("v3".into());
-        assert_eq!(network_summary(&app), "bbr / fq / Enabled · available / v3");
+        assert_eq!(
+            dashboard::network_summary(&app),
+            "bbr / fq / Enabled · available / v3"
+        );
     }
     #[test]
     fn logs_expand_with_the_terminal_without_crowding_navigation() {
-        let mut app = App::new(Context::new(
-            Paths::from_env().unwrap(),
-            I18n::load(Some("en-US"), None).unwrap(),
-            false,
-        ));
+        let mut app = app("en-US");
         assert_eq!(Regions::new(Rect::new(0, 0, 160, 50), &app).logs.height, 0);
         app.logs_open = true;
         app.log("working");
         let large = Regions::new(Rect::new(0, 0, 160, 50), &app);
         assert!(large.logs.height >= 20);
-        assert!(large.categories.height >= 10);
+        assert!(large.category_rows.height >= 10);
         for height in [34, 40, 50, 80] {
             let regions = Regions::new(Rect::new(0, 0, 160, height), &app);
-            assert!(regions.logs.height >= 8);
-            assert!(regions.categories.height >= 10);
-            assert_eq!(regions.dashboard.height, DASHBOARD_HEIGHT);
-            assert_eq!(regions.footer.height, 3);
+            assert!(regions.logs.height >= MIN_LOGS, "{height}");
+            assert!(regions.category_rows.height >= 10, "{height}");
+            assert_eq!(regions.dashboard.height, dashboard::HEIGHT);
+            assert_eq!(regions.footer.height, 1);
         }
         assert_eq!(Regions::new(Rect::new(0, 0, 80, 24), &app).logs.height, 0);
         app.logs_open = false;
         assert_eq!(Regions::new(Rect::new(0, 0, 160, 50), &app).logs.height, 0);
     }
     #[test]
-    fn long_logs_wrap_without_losing_unicode_or_tail_content() {
+    fn compact_terminals_keep_navigation_and_details_readable() {
+        let app = app("zh-CN");
+        let compact = Regions::new(Rect::new(0, 0, 80, 24), &app);
+        assert!(compact.stacked);
+        assert!(compact.action_rows.height >= 6, "{:?}", compact.action_rows);
+        assert!(compact.details.height >= 5, "{:?}", compact.details);
+        assert!(compact.category_rows.height >= 10);
+        let wide = Regions::new(Rect::new(0, 0, 120, 36), &app);
+        assert!(!wide.stacked);
+        assert_eq!(wide.actions.width, ACTION_WIDTH);
+    }
+    #[test]
+    fn text_wrapping_keeps_unicode_and_breaks_prose_at_spaces() {
         let original = "路径/very/long/path/错误诊断";
-        let rows = log_rows(&std::collections::VecDeque::from([original.into()]), 8);
+        let rows = wrap_cells(original, 8);
         assert_eq!(rows.concat(), original);
         assert!(rows.iter().all(|row| row.width() <= 8));
+        assert_eq!(wrap_words("hello wide world", 10), ["hello wide", "world"]);
+        assert_eq!(wrap_words("a\nb", 10), ["a", "b"]);
+        assert_eq!(
+            wrap_words("断开 SSH 连接。选择取消", 12),
+            ["断开 SSH 连", "接。选择取消"],
+            "CJK text fills the line instead of leaving a gap"
+        );
+        assert!(
+            wrap_words("终端过小请调整", 6)
+                .iter()
+                .all(|row| row.width() <= 6)
+        );
+        assert_eq!(clip("abcdef", 4), "abc…");
     }
     #[test]
     fn all_parameter_forms_keep_submit_and_cancel_visible_at_minimum_size() {
         for locale in ["zh-CN", "en-US"] {
-            let mut app = App::new(Context::new(
-                Paths::from_env().unwrap(),
-                I18n::load(Some(locale), None).unwrap(),
-                false,
-            ));
+            let mut app = app(locale);
             for spec in crate::actions::specs()
                 .into_iter()
                 .filter(|s| !s.fields.is_empty())
@@ -1255,10 +986,12 @@ mod tests {
                 let values = spec
                     .fields
                     .iter()
-                    .map(|f| super::super::InputBuffer::new(f.default.into()))
+                    .map(|f| InputBuffer::new(f.default.into()))
                     .collect::<Vec<_>>();
                 let index = values.len();
                 app.form = Some(super::super::Form {
+                    options: vec![Vec::new(); values.len()],
+                    picker: None,
                     spec,
                     values,
                     index,
@@ -1271,19 +1004,13 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn canvas_and_form_popup_preserve_terminal_background() {
-        let mut app = App::new(Context::new(
-            Paths::from_env().unwrap(),
-            I18n::load(Some("en-US"), None).unwrap(),
-            false,
-        ));
+        let mut app = app("en-US");
         let area = Rect::new(0, 0, 120, 40);
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
                 .unwrap();
-
         terminal.draw(|frame| app.draw(frame)).unwrap();
         assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Reset);
         let background = terminal.backend().buffer().content.clone();
@@ -1298,11 +1025,8 @@ mod tests {
         let geometry = FormGeometry::new(area, app.form.as_ref().unwrap(), &app.ctx.i18n);
         let popup = geometry.popup;
         terminal.draw(|frame| app.draw(frame)).unwrap();
-        assert_eq!(
-            terminal.backend().buffer()[(popup.x + 1, popup.y + 1)].bg,
-            Color::Reset
-        );
         let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(popup.x + 1, popup.y + 1)].bg, Color::Reset);
         let cleared_background_text = (popup.y + 1..popup.y + popup.height - 1).any(|y| {
             (popup.x + 1..popup.x + popup.width - 1).any(|x| {
                 let index = usize::from(y) * usize::from(area.width) + usize::from(x);
@@ -1313,5 +1037,204 @@ mod tests {
         let hint_cell = &buffer[(popup.x + popup.width - 2, geometry.sections[4].y)];
         assert_eq!(hint_cell.fg, Color::Reset);
         assert_eq!(hint_cell.bg, Color::Reset);
+        // The scrim recedes the screen behind the dialog without painting its background.
+        assert_eq!(buffer[(0, area.height - 1)].bg, Color::Reset);
+        assert_eq!(buffer[(1, 0)].fg, theme::BORDER);
+    }
+    #[test]
+    fn overlays_render_in_both_languages_at_minimum_size() {
+        for locale in ["zh-CN", "en-US"] {
+            let mut app = app(locale);
+            let screen = render(&app, 80, 24);
+            let help = format!("?{}", app.ctx.i18n.text("key.help")).replace(' ', "");
+            assert!(screen.contains(&help), "the footer always offers help");
+            app.help = true;
+            let screen = render(&app, 80, 24);
+            assert!(screen.contains(&app.ctx.i18n.text("help.title").replace(' ', "")));
+            assert!(screen.contains("F5") && screen.contains("Ctrl+C"));
+            app.help = false;
+            app.overview = true;
+            let screen = render(&app, 80, 24);
+            assert!(screen.contains(&app.ctx.i18n.text("dash.section_system").replace(' ', "")));
+            app.overview = false;
+            app.notify(
+                app.ctx.i18n.text("toast.order_saved").to_owned(),
+                Tone::Success,
+            );
+            let screen = render(&app, 80, 24);
+            assert!(screen.contains(&app.ctx.i18n.text("toast.order_saved").replace(' ', "")));
+            let small = render(&app, 40, 10);
+            assert!(
+                small.contains("80×24") && small.contains("40×10"),
+                "{small}"
+            );
+        }
+    }
+    /// Text inside `rect` only, so a check cannot match the screen behind an overlay.
+    fn region(app: &App, width: u16, height: u16, rect: Rect) -> String {
+        let terminal = terminal(app, width, height);
+        let buffer = terminal.backend().buffer();
+        (rect.y..rect.bottom())
+            .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
+            .map(|point| buffer[point].symbol().to_owned())
+            .collect::<String>()
+            .replace(' ', "")
+    }
+    #[test]
+    fn picker_lists_items_with_context_at_minimum_size() {
+        for locale in ["zh-CN", "en-US"] {
+            let mut app = app(locale);
+            let spec = crate::actions::find("clash.sub.use").unwrap();
+            let mut form = app.make_form(spec, FormMode::Run).unwrap();
+            let choices = (0..30)
+                .map(|n| Choice {
+                    value: format!("订阅-{n}"),
+                    detail: format!("host{n}.example"),
+                    current: n == 20,
+                    children: Vec::new(),
+                })
+                .collect();
+            form.attach(vec![choices]);
+            form.open_picker(String::new(), true);
+            let cursor = form.picker.as_ref().unwrap().cursor;
+            assert_eq!(cursor, 20, "the list opens on the current item");
+            app.form = Some(form);
+            let area = Rect::new(0, 0, 80, 24);
+            let geometry = PickerGeometry::new(area, 30, cursor, 30);
+            let text = region(&app, area.width, area.height, geometry.popup);
+            let i = &app.ctx.i18n;
+            let title = format!(
+                "{}·{}",
+                i.text("action.clash.sub.use"),
+                i.text("field.name")
+            );
+            for expected in [
+                title.as_str(),
+                "订阅-20",
+                "host20.example",
+                i.text("ui.current"),
+                i.text("ui.filter_hint"),
+                i.text("key.pick"),
+                "30/30",
+            ] {
+                assert!(
+                    text.contains(&expected.replace(' ', "")),
+                    "{expected} in {text}"
+                );
+            }
+            assert!(!text.contains("host0."), "earlier rows scroll out: {text}");
+            let rows = geometry.sections[1];
+            assert_eq!(
+                terminal(&app, area.width, area.height).backend().buffer()[(rows.x, rows.y + 11)]
+                    .bg,
+                theme::ACCENT,
+                "the current item is highlighted"
+            );
+
+            app.form.as_mut().unwrap().picker.as_mut().unwrap().filter =
+                InputBuffer::new("zzz".into());
+            let geometry = PickerGeometry::new(area, 30, cursor, 0);
+            let text = region(&app, area.width, area.height, geometry.popup);
+            assert!(text.contains(&app.ctx.i18n.text("ui.no_match").replace(' ', "")));
+            assert!(text.contains("0/30"), "{text}");
+
+            // Once the list closes, the field shows the chosen item, its place and its context.
+            app.form.as_mut().unwrap().picker = None;
+            let geometry = FormGeometry::new(area, app.form.as_ref().unwrap(), &app.ctx.i18n);
+            let text = region(&app, area.width, area.height, geometry.popup);
+            assert!(text.contains("‹订阅-20›21/30host20.example"), "{text}");
+            let hint = format!("Enter{}", app.ctx.i18n.text("key.list")).replace(' ', "");
+            assert!(text.contains(&hint), "{text}");
+        }
+    }
+    #[test]
+    fn an_open_list_replaces_its_form() {
+        let mut app = app("zh-CN");
+        let spec = crate::actions::find("clash.sub.use").unwrap();
+        let mut form = app.make_form(spec, FormMode::Run).unwrap();
+        let choice = |value: &str| Choice {
+            value: value.into(),
+            detail: String::new(),
+            current: false,
+            children: Vec::new(),
+        };
+        form.attach(vec![vec![choice("home"), choice("work")]]);
+        let area = Rect::new(0, 0, 80, 24);
+        let behind = FormGeometry::new(area, &form, &app.ctx.i18n).popup;
+        form.open_picker(String::new(), true);
+        app.form = Some(form);
+        // A short list is lower than its form, so a form drawn behind it would show its
+        // titled border above the list.
+        let top = Rect::new(behind.x, behind.y, behind.width, 1);
+        let title = app.ctx.i18n.text("action.clash.sub.use").replace(' ', "");
+        let text = region(&app, area.width, area.height, top);
+        assert!(!text.contains(&title), "{text}");
+    }
+    #[test]
+    fn slow_listings_show_a_cancellable_loading_dialog_after_a_delay() {
+        let mut app = app("zh-CN");
+        let (_tx, receiver) = std::sync::mpsc::channel();
+        let started = std::time::Instant::now();
+        app.loading = Some(Loading {
+            spec: crate::actions::find("clash.proxy.select").unwrap(),
+            mode: FormMode::Run,
+            receiver,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            started,
+        });
+        let loading = app.ctx.i18n.text("ui.loading_choices").replace(' ', "");
+        app.now = started;
+        assert!(
+            !render(&app, 80, 24).contains(&loading),
+            "quick reads never flash a dialog"
+        );
+        app.now = started + std::time::Duration::from_secs(1);
+        let screen = render(&app, 80, 24);
+        assert!(screen.contains(&loading), "{screen}");
+        let title = app
+            .ctx
+            .i18n
+            .text("action.clash.proxy.select")
+            .replace(' ', "");
+        assert!(screen.contains(&title));
+    }
+    #[test]
+    fn hovering_a_row_highlights_it_without_changing_the_selection() {
+        let mut app = app("en-US");
+        let area = Rect::new(0, 0, 120, 36);
+        let regions = Regions::new(area, &app);
+        let point = (regions.action_rows.x + 4, regions.action_rows.y + 1);
+        app.hover = Some(point.into());
+        let hovered = terminal(&app, area.width, area.height);
+        assert_eq!(hovered.backend().buffer()[point].fg, theme::ACCENT);
+        assert_eq!(app.selected(), 0);
+        app.help = true;
+        let covered = terminal(&app, area.width, area.height);
+        assert_ne!(covered.backend().buffer()[point].fg, theme::ACCENT);
+    }
+    #[test]
+    fn confirmations_size_to_their_text_and_scroll_when_long() {
+        let app = app("en-US");
+        let area = Rect::new(0, 0, 80, 24);
+        let confirmation = |text: String| Confirmation {
+            text,
+            token: "YES".into(),
+            input: InputBuffer::default(),
+            reply: std::sync::mpsc::channel().0,
+            scroll: 0,
+            accept: false,
+        };
+        let short =
+            ConfirmationGeometry::new(area, &confirmation("Proceed?".into()), &app.ctx.i18n);
+        assert!(short.popup.height <= 8, "{:?}", short.popup);
+        assert_eq!(short.max_scroll(), 0);
+        let long = (0..40)
+            .map(|n| format!("item {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let long = ConfirmationGeometry::new(area, &confirmation(long), &app.ctx.i18n);
+        assert_eq!(long.popup.height, area.height - 2);
+        assert!(long.max_scroll() > 0);
+        assert!(long.buttons[0].right() < long.buttons[1].x);
     }
 }
