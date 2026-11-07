@@ -1,0 +1,132 @@
+# case classic_stage2_batch_confirm_120x36_en-US
+# size 120x36
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  Optimization · 0                        Use sudo cqs for system changes · vps-sg-01 · ● USER · English 
+╭ System & resources ────────────────────── updated 2s ago ╮╭ Network & proxy ────────────────────── looked up 12s ago ╮
+│ CPU  ▅▄▃▂▃▁▁▂▂▁  12% 2-core  Memory ━━━━──  63% 1.2/1.9G ││ BBR   ○ Disabled · available / v3 · cubic                │
+│ Disk ━━╸───  41% 16.4/40.0G  Swap   ╸─────  10% 0.2/2.0G ││ TCP   ○ not configured · fq_codel                        │
+│ Host   vps-sg-01 · Debian GNU/Linux 12 (bookworm)        ││ IPv4  203.0.113.24 · AS64500 Example Net                 │
+│ Kernel 6.12.8-joeyblog-bbrv3 · x86_64                    ││ IPv6  2001:db8:3c4d:15::1a2f                             │
+│ Uptime 3d 04h 00m · Asia/Shanghai                        ││ Proxy Mihomo ● Running · v1.19.2 · Terminal ● Enabled    │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+╭ Categories ──────╮╭ Optimization · Selected: 0 ──────── 1/11 ╮╭ Execution plan ──────────────────────────────────────╮
+│› 0 Optimization  ││› [ ] Update packages                     ││ Space selects actions; A uses the recommended set.   │
+│  ────────────────││  [ ] Clean system…               standard││                                                      │
+│  1 System       ╭ ! Confirm operation ─────────────────────────────────────────────────────────────╮                 │
+│  2 Kernel       │                                                                                  │                 │
+│  3 Network      │  Run this selection in order? Individual operations may have further             │                 │
+│  4 SSH          │  confirmations.                                                                  │                 │
+│  5 Docker       │                                                                                  │                 │
+│  6 Mihomo proxy │  1. Update packages                                                              │                 │
+│  7 Tools        │  2. Clean system (scope=standard)                                                │                 │
+│  8 Agent tools  │  3. Tune TCP buffers (bandwidth=1000, rtt=50)                                    │                 │
+│  9 Prompt       │  4. Enable BBR in the running kernel (qdisc=fq)                                  │                 │
+│    Tests        │                                                                                  │                 │
+│    CqShell      │  [ Cancel ]  [ Confirm execution ]                                               │                 │
+│                 │                                                                                  │                 │
+│                 │  ←→ switch  Enter confirm  Y run  Esc Cancel                                     │                 │
+│                 ╰──────────────────────────────────────────────────────────────────────────────────╯                 │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││ X review and run  A use recommended                  │
+╰──────────────────╯╰──────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
+ Enter confirm  Esc back                                                                                                
+---
+0 0 120 #3d5265 reset -
+1 0 120 #3d5265 reset -
+2 0 120 #3d5265 reset -
+3 0 120 #3d5265 reset -
+4 0 120 #3d5265 reset -
+5 0 120 #3d5265 reset -
+6 0 120 #3d5265 reset -
+7 0 120 #3d5265 reset -
+8 0 120 #3d5265 reset -
+9 0 120 #3d5265 reset -
+10 0 120 #3d5265 reset -
+11 0 18 #3d5265 reset -
+11 18 1 #ffbe5e reset -
+11 19 21 #ffbe5e reset bold
+11 40 62 #ffbe5e reset -
+11 102 18 #3d5265 reset -
+12 0 18 #3d5265 reset -
+12 18 1 #ffbe5e reset -
+12 101 1 #ffbe5e reset -
+12 102 18 #3d5265 reset -
+13 0 18 #3d5265 reset -
+13 18 1 #ffbe5e reset -
+13 21 67 reset reset bold
+13 101 1 #ffbe5e reset -
+13 102 18 #3d5265 reset -
+14 0 18 #3d5265 reset -
+14 18 1 #ffbe5e reset -
+14 21 14 reset reset bold
+14 101 1 #ffbe5e reset -
+14 102 18 #3d5265 reset -
+15 0 18 #3d5265 reset -
+15 18 1 #ffbe5e reset -
+15 101 1 #ffbe5e reset -
+15 102 18 #3d5265 reset -
+16 0 18 #3d5265 reset -
+16 18 1 #ffbe5e reset -
+16 101 1 #ffbe5e reset -
+16 102 18 #3d5265 reset -
+17 0 18 #3d5265 reset -
+17 18 1 #ffbe5e reset -
+17 101 1 #ffbe5e reset -
+17 102 18 #3d5265 reset -
+18 0 18 #3d5265 reset -
+18 18 1 #ffbe5e reset -
+18 101 1 #ffbe5e reset -
+18 102 18 #3d5265 reset -
+19 0 18 #3d5265 reset -
+19 18 1 #ffbe5e reset -
+19 101 1 #ffbe5e reset -
+19 102 18 #3d5265 reset -
+20 0 18 #3d5265 reset -
+20 18 1 #ffbe5e reset -
+20 101 1 #ffbe5e reset -
+20 102 18 #3d5265 reset -
+21 0 18 #3d5265 reset -
+21 18 1 #ffbe5e reset -
+21 21 10 black #45cdb6 bold
+21 33 21 #ffbe5e reset -
+21 101 1 #ffbe5e reset -
+21 102 18 #3d5265 reset -
+22 0 18 #3d5265 reset -
+22 18 1 #ffbe5e reset -
+22 101 1 #ffbe5e reset -
+22 102 18 #3d5265 reset -
+23 0 18 #3d5265 reset -
+23 18 1 #ffbe5e reset -
+23 21 2 #45cdb6 reset bold
+23 23 7 #91a2b0 reset -
+23 32 5 #45cdb6 reset bold
+23 37 8 #91a2b0 reset -
+23 47 1 #45cdb6 reset bold
+23 48 4 #91a2b0 reset -
+23 54 3 #45cdb6 reset bold
+23 57 7 #91a2b0 reset -
+23 101 1 #ffbe5e reset -
+23 102 18 #3d5265 reset -
+24 0 18 #3d5265 reset -
+24 18 84 #ffbe5e reset -
+24 102 18 #3d5265 reset -
+25 0 120 #3d5265 reset -
+26 0 120 #3d5265 reset -
+27 0 120 #3d5265 reset -
+28 0 120 #3d5265 reset -
+29 0 120 #3d5265 reset -
+30 0 120 #3d5265 reset -
+31 0 120 #3d5265 reset -
+32 0 120 #3d5265 reset -
+33 0 120 #3d5265 reset -
+34 0 120 #3d5265 reset -
+35 0 120 #3d5265 reset -

@@ -7,6 +7,7 @@ pub mod i18n;
 pub mod ops;
 pub mod runtime;
 pub mod storage;
+pub mod theme;
 pub mod tui;
 
 #[cfg(test)]

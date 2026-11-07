@@ -1,0 +1,69 @@
+# case final_main_plain_80x24_zh-CN
+# size 80x24
+# theme plain
+# background unavailable
+# locale zh-CN
+ CqShell v0.1.4  系统管理 > 系统概览          vps-sg-01 | * 普通用户 | 简体中文 
++ 系统与资源 ---------- 本机 2s 前更新 ++ 网络与代理 --------- 公网 12s 前查询 +
+| CPU  :-..::.  12%  内存 #####--  63% || BBR  o 未启用 | 可用 / v3 | cubic    |
+| 磁盘 ###----  41%  交换 #------  10% || TCP  o 未配置 | fq_codel             |
+| 主机 vps-sg-01                       || IPv4 203.0.113.24                    |
+| 内核 6.12.8-joeyblog-bbrv3 | x86_64  || IPv6 2001:db8:3c4d:15::1a2f          |
+| 运行 3d 04h 00m | Asia/Shanghai      || 代理 Mihomo * 运行中 | v1.19.2       |
++--------------------------------------++--------------------------------------+
++ 功能分类 --------++ 系统管理 ------------------------------------------ 1/12 +
+|  0 一键优化      ||  概览                                                    #
+|  ----------------||> 系统概览                                                #
+|> 1 系统管理      ||  查询公网 IP / ISP                                 12s 前#
+|  2 内核管理      ||  软件包与软件源                                          #
+|  3 网络调优      ||  更新系统软件包                                          |
+|  4 SSH           ||  系统软件源测速                                          |
+|  5 Docker        ||  更换系统软件源 · LinuxMirrors...                        |
+|  6 Mihomo 代理 * ||  恢复上次系统软件源                                      |
+|  7 常用工具      |+ 说明 ----------------------------------------------------+
+|  8 Agent 工具    || 系统概览                                                 |
+|  9 终端美化      || 只读 | 当前用户                                          |
+|    服务器测试    || 读取主机、CPU、内存、磁盘、IP 及 BBR 状态。              |
+|    CqShell       || cqs run system.info                                      |
++------------------++----------------------------------------------------------+
+ [UP/DN] 移动  [ENTER] 打开  [/] 搜索操作  [LT/RT] 切换分类  [?] 帮助           
+---
+0 1 7 reset reset bold
+0 25 3 reset reset dim
+0 55 16 reset reset dim
+1 1 12 reset reset bold
+1 41 12 reset reset bold
+2 55 3 reset reset dim
+2 67 3 reset reset dim
+3 55 3 reset reset dim
+5 28 3 reset reset dim
+6 17 3 reset reset dim
+6 62 3 reset reset dim
+8 1 10 reset reset bold
+8 21 10 reset reset bold
+9 3 2 reset reset dim
+9 23 56 reset reset bold
+10 21 58 reset reset bold
+11 1 2 reset reset bold
+11 3 2 reset reset bold+dim
+11 5 14 reset reset bold
+12 3 2 reset reset dim
+12 23 56 reset reset bold
+13 3 2 reset reset dim
+14 3 2 reset reset dim
+15 3 2 reset reset dim
+16 3 2 reset reset dim
+16 16 2 green reset -
+17 3 2 reset reset dim
+17 21 6 reset reset bold
+18 3 2 reset reset dim
+18 22 8 reset reset bold
+19 3 2 reset reset dim
+19 26 3 reset reset dim
+20 3 2 reset reset dim
+21 3 2 reset reset dim
+23 1 7 reset reset bold
+23 15 7 reset reset bold
+23 29 3 reset reset bold
+23 43 7 reset reset bold
+23 61 3 reset reset bold

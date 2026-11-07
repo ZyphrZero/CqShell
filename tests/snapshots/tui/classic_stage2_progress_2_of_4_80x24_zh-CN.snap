@@ -1,0 +1,181 @@
+# case classic_stage2_progress_2_of_4_80x24_zh-CN
+# size 80x24
+# theme classic
+# background unavailable
+# locale zh-CN
+ CqShell v0.1.4  一键优化 · 4                 vps-sg-01 · ● 普通用户 · 简体中文 
+╭ 系统与资源 ────────── 本机 2s 前更新 ╮╭ 网络与代理 ───────── 公网 12s 前查询 ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  内存 ━━━━╸──  63% ││ BBR  ○ 未启用 · 可用 / v3 · cubic    │
+│ 磁盘 ━━━────  41%  交换 ╸──────  10% ││ TCP  ○ 未配置 · fq_codel             │
+│ 主机 vps-sg-01                       ││ IPv4 203.0.113.24                    │
+│ 内核 6.12.8-joeyblog-bbrv3 · x86_64  ││ IPv6 2001:db8:3c4d:15::1a2f          │
+│ 运行 3d 04h 00m · Asia/Shanghai      ││ 代理 Mihomo ● 运行中 · v1.19.2       │
+╰──────────────────────────────────────╯╰──────────────────────────────────────╯
+╭ 功能分类 ────────╮╭ 一键优化 · 已选：4 ──────────────────────────────── 1/11 ╮
+│› 0 一键优化 4    ││› [✓] 更新系统软件包                                      ┃
+│  ────────────────││  [✓] 清理系统… ⠋                                 standard┃
+│  1 系统管理      ││  [✓] TCP 缓冲区调优…                  1000 Mbit/s · 50 ms│
+│  2 内核管理      ││  [✓] 启用当前内核的 BBR…                               fq│
+│  3 网络调优      ││  [ ] 设置时区…                       Asia/Shanghai = 当前│
+│  4 SSH           │├ 执行进度 ────────────────────────────────────────────────┤
+│  5 Docker        ││更新系统软件包                                            │
+│  6 Mihomo 代理 ● ││会修改系统或用户文件 · 需要 root                          │
+│  7 常用工具      ││✓ 1 更新系统软件包                                   00:18│
+│  8 Agent 工具    ││⠋ 2 清理系统                                         00:07│
+│  9 终端美化      ││○ 3 TCP 缓冲区调优                                        │
+│    服务器测试    ││○ 4 启用当前内核的 BBR                                    │
+│    CqShell       ││━━━━━━━━━━━━━ ━━━━━━━━━━━━━━ ━━━━━━━━━━━━━━ ━━━━━━━━━━━━━━│
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ Esc 取消任务  F2 完整日志  ? 帮助      ⠋ 执行中 · 一键优化（4 项） · 正在执行… 
+---
+0 1 7 #45cdb6 reset bold
+0 9 6 #91a2b0 reset -
+0 17 11 #91a2b0 reset -
+0 28 1 #45cdb6 reset bold
+0 55 24 #91a2b0 reset -
+1 0 1 #3d5265 reset -
+1 1 12 reset reset bold
+1 13 10 #3d5265 reset -
+1 23 16 #91a2b0 reset -
+1 39 2 #3d5265 reset -
+1 41 12 reset reset bold
+1 53 9 #3d5265 reset -
+1 62 17 #91a2b0 reset -
+1 79 1 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 2 5 #91a2b0 reset -
+2 7 12 #5dd888 reset -
+2 21 5 #91a2b0 reset -
+2 26 5 #5dd888 reset -
+2 31 2 #3d5265 reset -
+2 33 5 #5dd888 reset -
+2 39 2 #3d5265 reset -
+2 42 16 #91a2b0 reset -
+2 67 3 #91a2b0 reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 2 5 #91a2b0 reset -
+3 7 3 #5dd888 reset -
+3 10 4 #3d5265 reset -
+3 14 5 #5dd888 reset -
+3 21 5 #91a2b0 reset -
+3 26 1 #5dd888 reset -
+3 27 6 #3d5265 reset -
+3 33 5 #5dd888 reset -
+3 39 2 #3d5265 reset -
+3 42 16 #91a2b0 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 2 5 #91a2b0 reset -
+4 39 2 #3d5265 reset -
+4 42 5 #91a2b0 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 2 5 #91a2b0 reset -
+5 28 3 #91a2b0 reset -
+5 39 2 #3d5265 reset -
+5 42 5 #91a2b0 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 2 5 #91a2b0 reset -
+6 17 3 #91a2b0 reset -
+6 39 2 #3d5265 reset -
+6 42 5 #91a2b0 reset -
+6 47 15 #5dd888 reset -
+6 62 3 #91a2b0 reset -
+6 79 1 #3d5265 reset -
+7 0 80 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 10 reset reset bold
+8 11 10 #3d5265 reset -
+8 21 20 reset reset bold
+8 41 32 #3d5265 reset -
+8 73 6 #91a2b0 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 18 black #45cdb6 bold
+9 19 2 #3d5265 reset -
+9 21 58 black #45cdb6 bold
+9 79 1 #45cdb6 reset -
+10 0 1 #3d5265 reset -
+10 3 18 #3d5265 reset -
+10 23 4 #45cdb6 reset -
+10 27 9 #91a2b0 reset -
+10 36 2 #70aaff reset -
+10 71 8 #91a2b0 reset -
+10 79 1 #45cdb6 reset -
+11 0 1 #3d5265 reset -
+11 3 2 #91a2b0 reset -
+11 19 2 #3d5265 reset -
+11 23 4 #45cdb6 reset -
+11 27 15 #91a2b0 reset -
+11 60 19 #91a2b0 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 3 2 #91a2b0 reset -
+12 19 2 #3d5265 reset -
+12 23 4 #45cdb6 reset -
+12 27 19 #91a2b0 reset -
+12 77 2 #91a2b0 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 3 2 #91a2b0 reset -
+13 19 2 #3d5265 reset -
+13 23 13 #91a2b0 reset -
+13 59 20 #91a2b0 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 3 2 #91a2b0 reset -
+14 19 2 #3d5265 reset -
+14 21 10 reset reset bold
+14 31 49 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 3 2 #91a2b0 reset -
+15 19 2 #3d5265 reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 3 2 #91a2b0 reset -
+16 16 2 #5dd888 reset -
+16 19 2 #3d5265 reset -
+16 21 20 #ffbe5e reset -
+16 41 3 #91a2b0 reset -
+16 44 9 #ffbe5e reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 3 2 #91a2b0 reset -
+17 19 2 #3d5265 reset -
+17 21 4 #5dd888 reset -
+17 74 5 #5dd888 reset -
+17 79 1 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 3 2 #91a2b0 reset -
+18 19 2 #3d5265 reset -
+18 21 4 #70aaff reset -
+18 74 5 #70aaff reset -
+18 79 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 3 2 #91a2b0 reset -
+19 19 2 #3d5265 reset -
+19 21 4 #91a2b0 reset -
+19 79 1 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 3 2 #91a2b0 reset -
+20 19 2 #3d5265 reset -
+20 21 4 #91a2b0 reset -
+20 79 1 #3d5265 reset -
+21 0 1 #3d5265 reset -
+21 3 2 #91a2b0 reset -
+21 19 2 #3d5265 reset -
+21 21 13 #5dd888 reset -
+21 35 14 #70aaff reset -
+21 50 14 #91a2b0 reset -
+21 65 14 #91a2b0 reset -
+21 79 1 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 1 3 #45cdb6 reset bold
+23 4 9 #91a2b0 reset -
+23 15 2 #45cdb6 reset bold
+23 17 9 #91a2b0 reset -
+23 28 1 #45cdb6 reset bold
+23 29 5 #91a2b0 reset -
+23 40 39 #70aaff reset -

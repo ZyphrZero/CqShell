@@ -1,0 +1,138 @@
+=== no_yes en-US
+$ cqs --lang en-US batch tcp.tune terminal.status
+exit: 1
+--- stdout
+--- stderr
+Explicit confirmation is required. Use an interactive terminal or specify --yes after reviewing the operation.
+=== yes_mixed en-US
+$ cqs --lang en-US --yes batch tcp.tune terminal.status terminal.apply system.update --set tcp.tune.rtt=80
+exit: 1
+--- stdout
+Run this selection in order? Individual operations may have further confirmations.
+Tune TCP buffers
+Prompt status
+Configure prompt
+Update packages
+Running 1/4 Tune TCP buffers
+This action requires root privileges: sudo cqs
+Running 2/4 Prompt status
+Disabled
+shell = "bash"
+style = "full"
+color = "cyan"
+time = "off"
+git = "on"
+
+Recovery material: <HOME>/state/cqs/terminal/original.json
+Completed: Prompt status
+Running 3/4 Configure prompt
+Review this operation before continuing:
+Configure prompt
+Update only managed shell initialization blocks and a dedicated Starship TOML file. Preserve a first-use baseline.
+color=cyan
+git=on
+shell=bash
+style=full
+time=off
+Missing required command or package: starship
+--- stderr
+Missing required command or package: starship
+=== yes_restore en-US
+$ cqs --lang en-US --yes batch tcp.tune terminal.restore
+exit: 1
+--- stdout
+Run this selection in order? Individual operations may have further confirmations.
+Tune TCP buffers
+Restore original prompt files
+Running 1/2 Tune TCP buffers
+This action requires root privileges: sudo cqs
+Running 2/2 Restore original prompt files
+Review this operation before continuing:
+Restore original prompt files
+Restore files byte-for-byte from the first-use baseline. This overwrites later manual edits to managed files.
+
+Recovery baseline is missing, incomplete or inconsistent: <HOME>/state/cqs/terminal
+--- stderr
+Recovery baseline is missing, incomplete or inconsistent: <HOME>/state/cqs/terminal
+=== yes_continue en-US
+$ cqs --lang en-US --yes batch bbr.enable tcp.tune --set bbr.enable.qdisc=fq_codel
+exit: 1
+--- stdout
+Run this selection in order? Individual operations may have further confirmations.
+Enable BBR in the running kernel
+Tune TCP buffers
+Running 1/2 Enable BBR in the running kernel
+This action requires root privileges: sudo cqs
+Running 2/2 Tune TCP buffers
+This action requires root privileges: sudo cqs
+--- stderr
+One or more actions failed: bbr.enable, tcp.tune
+=== no_yes zh-CN
+$ cqs --lang zh-CN batch tcp.tune terminal.status
+exit: 1
+--- stdout
+--- stderr
+此操作需要明确确认。请使用交互终端，或核对操作后指定 --yes。
+=== yes_mixed zh-CN
+$ cqs --lang zh-CN --yes batch tcp.tune terminal.status terminal.apply system.update --set tcp.tune.rtt=80
+exit: 1
+--- stdout
+按顺序执行以下清单？具体操作可能仍需进一步确认。
+TCP 缓冲区调优
+查看提示符配置
+配置终端提示符
+更新系统软件包
+正在执行 1/4 TCP 缓冲区调优
+此操作需要 root 权限：sudo cqs
+正在执行 2/4 查看提示符配置
+未启用
+shell = "bash"
+style = "full"
+color = "cyan"
+time = "off"
+git = "on"
+
+恢复材料：<HOME>/state/cqs/terminal/original.json
+已完成：查看提示符配置
+正在执行 3/4 配置终端提示符
+执行前请核对本次操作：
+配置终端提示符
+仅更新受管理的 Shell 初始化区块及独立 Starship TOML 文件，保留首次启用前的基线。
+color=cyan
+git=on
+shell=bash
+style=full
+time=off
+缺少必需命令或软件包：starship
+--- stderr
+缺少必需命令或软件包：starship
+=== yes_restore zh-CN
+$ cqs --lang zh-CN --yes batch tcp.tune terminal.restore
+exit: 1
+--- stdout
+按顺序执行以下清单？具体操作可能仍需进一步确认。
+TCP 缓冲区调优
+还原原始提示符文件
+正在执行 1/2 TCP 缓冲区调优
+此操作需要 root 权限：sudo cqs
+正在执行 2/2 还原原始提示符文件
+执行前请核对本次操作：
+还原原始提示符文件
+从首次基线逐字节恢复文件；会覆盖后来对受管理文件的手工修改。
+
+恢复基线缺失、不完整或不一致：<HOME>/state/cqs/terminal
+--- stderr
+恢复基线缺失、不完整或不一致：<HOME>/state/cqs/terminal
+=== yes_continue zh-CN
+$ cqs --lang zh-CN --yes batch bbr.enable tcp.tune --set bbr.enable.qdisc=fq_codel
+exit: 1
+--- stdout
+按顺序执行以下清单？具体操作可能仍需进一步确认。
+启用当前内核的 BBR
+TCP 缓冲区调优
+正在执行 1/2 启用当前内核的 BBR
+此操作需要 root 权限：sudo cqs
+正在执行 2/2 TCP 缓冲区调优
+此操作需要 root 权限：sudo cqs
+--- stderr
+部分操作失败：bbr.enable, tcp.tune

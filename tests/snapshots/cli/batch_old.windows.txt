@@ -1,0 +1,94 @@
+=== no_yes en-US
+$ cqs --lang en-US batch tcp.tune terminal.status
+exit: 1
+--- stdout
+--- stderr
+Explicit confirmation is required. Use an interactive terminal or specify --yes after reviewing the operation.
+=== yes_mixed en-US
+$ cqs --lang en-US --yes batch tcp.tune terminal.status terminal.apply system.update --set tcp.tune.rtt=80
+exit: 1
+--- stdout
+Run this selection in order? Individual operations may have further confirmations.
+Tune TCP buffers
+Prompt status
+Configure prompt
+Update packages
+Running 1/4 Tune TCP buffers
+System operations support Debian / Ubuntu Linux only: windows
+Running 2/4 Prompt status
+System operations support Debian / Ubuntu Linux only: windows
+--- stderr
+System operations support Debian / Ubuntu Linux only: windows
+=== yes_restore en-US
+$ cqs --lang en-US --yes batch tcp.tune terminal.restore
+exit: 1
+--- stdout
+Run this selection in order? Individual operations may have further confirmations.
+Tune TCP buffers
+Restore original prompt files
+Running 1/2 Tune TCP buffers
+System operations support Debian / Ubuntu Linux only: windows
+Running 2/2 Restore original prompt files
+System operations support Debian / Ubuntu Linux only: windows
+--- stderr
+System operations support Debian / Ubuntu Linux only: windows
+=== yes_continue en-US
+$ cqs --lang en-US --yes batch bbr.enable tcp.tune --set bbr.enable.qdisc=fq_codel
+exit: 1
+--- stdout
+Run this selection in order? Individual operations may have further confirmations.
+Enable BBR in the running kernel
+Tune TCP buffers
+Running 1/2 Enable BBR in the running kernel
+System operations support Debian / Ubuntu Linux only: windows
+Running 2/2 Tune TCP buffers
+System operations support Debian / Ubuntu Linux only: windows
+--- stderr
+One or more actions failed: bbr.enable, tcp.tune
+=== no_yes zh-CN
+$ cqs --lang zh-CN batch tcp.tune terminal.status
+exit: 1
+--- stdout
+--- stderr
+此操作需要明确确认。请使用交互终端，或核对操作后指定 --yes。
+=== yes_mixed zh-CN
+$ cqs --lang zh-CN --yes batch tcp.tune terminal.status terminal.apply system.update --set tcp.tune.rtt=80
+exit: 1
+--- stdout
+按顺序执行以下清单？具体操作可能仍需进一步确认。
+TCP 缓冲区调优
+查看提示符配置
+配置终端提示符
+更新系统软件包
+正在执行 1/4 TCP 缓冲区调优
+系统操作仅支持 Debian / Ubuntu Linux：windows
+正在执行 2/4 查看提示符配置
+系统操作仅支持 Debian / Ubuntu Linux：windows
+--- stderr
+系统操作仅支持 Debian / Ubuntu Linux：windows
+=== yes_restore zh-CN
+$ cqs --lang zh-CN --yes batch tcp.tune terminal.restore
+exit: 1
+--- stdout
+按顺序执行以下清单？具体操作可能仍需进一步确认。
+TCP 缓冲区调优
+还原原始提示符文件
+正在执行 1/2 TCP 缓冲区调优
+系统操作仅支持 Debian / Ubuntu Linux：windows
+正在执行 2/2 还原原始提示符文件
+系统操作仅支持 Debian / Ubuntu Linux：windows
+--- stderr
+系统操作仅支持 Debian / Ubuntu Linux：windows
+=== yes_continue zh-CN
+$ cqs --lang zh-CN --yes batch bbr.enable tcp.tune --set bbr.enable.qdisc=fq_codel
+exit: 1
+--- stdout
+按顺序执行以下清单？具体操作可能仍需进一步确认。
+启用当前内核的 BBR
+TCP 缓冲区调优
+正在执行 1/2 启用当前内核的 BBR
+系统操作仅支持 Debian / Ubuntu Linux：windows
+正在执行 2/2 TCP 缓冲区调优
+系统操作仅支持 Debian / Ubuntu Linux：windows
+--- stderr
+部分操作失败：bbr.enable, tcp.tune

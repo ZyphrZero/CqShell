@@ -1,10 +1,12 @@
-//! Live status, split into two side-by-side panels: system and resources (gauges over host
-//! facts) and network and proxy. Values reflect real readings only; placeholders are muted
-//! and never shown as measurements.
-use super::{clip, pad, theme, wrap_cells};
+//! The Status_Area: a system panel (CPU and memory, disk and swap, then host facts) beside
+//! a network panel (BBR, TCP tuning, public addresses and proxy), seven rows in all. Fact
+//! rows are Segment lists shortened from their end; values reflect real readings only and
+//! placeholders never pass for measurements. The overview dialog lists every fact in full.
+use super::{Segment, pad, theme, wrap_cells};
 use crate::{
     dashboard::{Reading, Snapshot, Usage},
     ops::clash::State,
+    theme::{Level, Role},
     tui::{App, Tone},
 };
 use ratatui::{
@@ -16,45 +18,31 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-const LABEL_CAP: usize = 14;
 const GAUGE_GAP: u16 = 2;
-const MIN_BAR: usize = 8;
+/// The shortest sparkline or bar that still reads as a level. The used/total amounts and
+/// the CPU count appear only while every gauge keeps at least this much (Requirements 4.3,
+/// 4.12).
+const MIN_GRAPH: usize = 6;
 /// `{:>4.0}%` renders up to `100%` in five cells.
 const PERCENT_WIDTH: usize = 5;
+/// Gauge labels in `gauge_targets` order: CPU and memory on the first row, disk and swap on
+/// the second.
 const GAUGES: [&str; 4] = ["dash.cpu", "dash.memory", "dash.disk", "dash.swap"];
-/// Gauges sit in a 2×2 grid above the host facts.
-const GAUGE_ROWS: usize = 2;
-/// Host facts under the gauges in the system panel.
-const SYSTEM_FACTS: [&str; 6] = [
-    "dash.host",
-    "dash.os",
-    "dash.kernel_status",
-    "dash.arch",
-    "dash.cpu",
-    "dash.timezone",
-];
-/// Everything about connectivity in one panel: kernel network stack, public identity, proxy.
-const NETWORK_FACTS: [&str; 8] = [
-    "dash.network",
-    "dash.tcp",
+/// Content rows between each panel's borders.
+const ROWS: usize = 5;
+/// The Status_Area's fixed height (Requirement 4.1): a border above and below the content.
+pub(super) const HEIGHT: u16 = ROWS as u16 + 2;
+/// Labels of the system panel's fact rows, under its two gauge rows.
+const SYSTEM_ROWS: [&str; 3] = ["dash.host", "dash.row_kernel", "dash.row_uptime"];
+const NETWORK_ROWS: [&str; ROWS] = [
+    "dash.row_bbr",
+    "dash.row_tcp",
     "dash.ipv4",
     "dash.ipv6",
-    "dash.isp",
-    "dash.terminal_proxy",
-    "dash.mihomo_state",
-    "dash.mihomo_version",
+    "dash.row_proxy",
 ];
-const FACT_COUNT: usize = SYSTEM_FACTS.len() + NETWORK_FACTS.len();
-const fn panel_rows() -> usize {
-    let system = GAUGE_ROWS + SYSTEM_FACTS.len();
-    if system > NETWORK_FACTS.len() {
-        system
-    } else {
-        NETWORK_FACTS.len()
-    }
-}
-/// Both panels share one height: borders plus the taller panel's rows.
-pub(super) const HEIGHT: u16 = 2 + panel_rows() as u16;
+/// A product name, shown as is in every language.
+const MIHOMO: &str = "Mihomo";
 
 pub(super) struct Fact {
     pub key: &'static str,
@@ -87,27 +75,47 @@ fn reading<T>(app: &App, value: &Reading<T>, show: impl FnOnce(&T) -> String) ->
 }
 /// On/off facts lead with a filled or hollow dot, so state is readable without color.
 fn switch(app: &App, value: &Reading<bool>, on: &str, off: &str) -> (String, Tone) {
-    let i = &app.ctx.i18n;
     match value {
-        Reading::Value(true) => (format!("● {}", i.text(on)), Tone::Success),
-        Reading::Value(false) => (format!("○ {}", i.text(off)), Tone::Muted),
+        Reading::Value(state) => dot(app, *state, on, off),
         other => placeholder(app, other),
     }
+}
+fn dot(app: &App, state: bool, on: &str, off: &str) -> (String, Tone) {
+    if state { lit(app, on) } else { unlit(app, off) }
+}
+fn lit(app: &App, key: &str) -> (String, Tone) {
+    (
+        format!(
+            "{} {}",
+            theme::glyph(&app.theme.active, theme::Glyph::On),
+            app.ctx.i18n.text(key)
+        ),
+        Tone::Success,
+    )
+}
+fn unlit(app: &App, key: &str) -> (String, Tone) {
+    (
+        format!(
+            "{} {}",
+            theme::glyph(&app.theme.active, theme::Glyph::Off),
+            app.ctx.i18n.text(key)
+        ),
+        Tone::Muted,
+    )
 }
 fn mihomo(app: &App) -> (String, Tone) {
     let i = &app.ctx.i18n;
     match &app.snapshot.local.mihomo_state {
         Reading::Value(State::Running(pid)) => (
             format!(
-                "● {}",
+                "{} {}",
+                theme::glyph(&app.theme.active, theme::Glyph::On),
                 i.format("dash.mihomo_running", &[("pid", &pid.to_string())])
             ),
             Tone::Success,
         ),
-        Reading::Value(State::Stopped) => (format!("○ {}", i.text("dash.stopped")), Tone::Muted),
-        Reading::Value(State::NotInstalled) => {
-            (format!("○ {}", i.text("dash.not_installed")), Tone::Muted)
-        }
+        Reading::Value(State::Stopped) => unlit(app, "dash.stopped"),
+        Reading::Value(State::NotInstalled) => unlit(app, "dash.not_installed"),
         Reading::Value(State::Unknown) => (i.text("dash.unknown").into(), Tone::Warning),
         other => placeholder(app, other),
     }
@@ -147,7 +155,10 @@ fn bbr(app: &App) -> String {
         Reading::Value(false) | Reading::NotApplicable => String::new(),
         _ => format!(" / {}", reading(app, &data.bbr_version, String::clone).0),
     };
-    format!("{enabled} · {available}{version}")
+    format!(
+        "{enabled} {} {available}{version}",
+        theme::glyph(&app.theme.active, theme::Glyph::Separator)
+    )
 }
 /// Congestion control, queue and BBR collapse into one fact; Linux-only parts drop out
 /// elsewhere instead of repeating "N/A".
@@ -183,13 +194,13 @@ fn network(app: &App) -> (String, Tone) {
     (summary, tone)
 }
 
-/// Every dashboard fact, keyed by its label; panels and the overview select by key.
+/// Every dashboard fact, keyed by its label, for the overview dialog.
 pub(super) fn facts(app: &App) -> Vec<Fact> {
     let i = &app.ctx.i18n;
     let data = &app.snapshot.local;
     let public = &app.snapshot.public;
     let text = |value: &Reading<String>| reading(app, value, String::clone);
-    let rows: [(&'static str, (String, Tone)); FACT_COUNT] = [
+    let rows = [
         ("dash.host", text(&data.host)),
         ("dash.os", text(&data.os)),
         (
@@ -239,6 +250,139 @@ pub(super) fn facts(app: &App) -> Vec<Fact> {
         .collect()
 }
 
+/// What one reading adds to a Status_Area row: `show` for a Value, otherwise its
+/// placeholder. A Linux-only reading that does not apply adds nothing (Requirement 4.11).
+fn part<T>(
+    app: &App,
+    value: &Reading<T>,
+    linux_only: bool,
+    show: impl FnOnce(&T) -> (String, Tone),
+) -> Option<(String, Tone)> {
+    match value {
+        Reading::Value(v) => Some(show(v)),
+        Reading::NotApplicable if linux_only => None,
+        other => Some(placeholder(app, other)),
+    }
+}
+fn text_part(app: &App, value: &Reading<String>, linux_only: bool) -> Option<(String, Tone)> {
+    part(app, value, linux_only, |text| (text.clone(), Tone::Plain))
+}
+/// A row's Segments in order. A Segment equal to the one before it adds nothing, so a row
+/// waiting on one probe shows its placeholder once. A row left without any Segment reads
+/// `dash.na` (Requirement 4.11).
+fn row(app: &App, parts: impl IntoIterator<Item = Option<(String, Tone)>>) -> Vec<Segment> {
+    let t = &app.theme.active;
+    let mut segments: Vec<Segment> = Vec::new();
+    for (text, tone) in parts.into_iter().flatten() {
+        let segment = Segment::new(text, theme::tone(t, tone));
+        if segments.last() != Some(&segment) {
+            segments.push(segment);
+        }
+    }
+    if segments.is_empty() {
+        segments.push(Segment::new(
+            app.ctx.i18n.text("dash.na"),
+            theme::tone(t, Tone::Muted),
+        ));
+    }
+    segments
+}
+/// The system panel's fact rows: host · OS; kernel · architecture · CPU model; uptime ·
+/// time zone (Requirement 4.4).
+fn system_rows(app: &App) -> [Vec<Segment>; 3] {
+    let data = &app.snapshot.local;
+    let text = |value| text_part(app, value, false);
+    [
+        row(app, [text(&data.host), text(&data.os)]),
+        row(
+            app,
+            [
+                text(&data.kernel),
+                Some((data.arch.clone(), Tone::Plain)),
+                text(&data.cpu),
+            ],
+        ),
+        row(
+            app,
+            [
+                part(app, &data.uptime, false, |seconds| {
+                    (uptime(*seconds), Tone::Plain)
+                }),
+                text(&data.timezone),
+            ],
+        ),
+    ]
+}
+/// The network panel's rows (Requirement 4.5): BBR state · availability / version ·
+/// congestion control; TCP tuning · default queue; IPv4 · ISP; IPv6; Mihomo state ·
+/// version · terminal proxy. The congestion control and the Mihomo version follow a state
+/// that was read, so a probe still pending shows a single placeholder.
+fn network_rows(app: &App) -> [Vec<Segment>; ROWS] {
+    let i = &app.ctx.i18n;
+    let data = &app.snapshot.local;
+    let public = &app.snapshot.public;
+    let bbr = part(app, &data.congestion, true, |algorithm| {
+        dot(app, algorithm == "bbr", "status.enabled", "status.disabled")
+    });
+    let support = part(app, &data.bbr_available, true, |available| {
+        if !available {
+            return (i.text("dash.unavailable").into(), Tone::Plain);
+        }
+        let version = match &data.bbr_version {
+            Reading::Value(version) => format!(" / {version}"),
+            Reading::NotApplicable => String::new(),
+            other => format!(" / {}", placeholder(app, other).0),
+        };
+        (
+            format!("{}{version}", i.text("dash.available")),
+            Tone::Plain,
+        )
+    });
+    let congestion = match &data.congestion {
+        Reading::Value(algorithm) => Some((algorithm.clone(), Tone::Plain)),
+        _ => None,
+    };
+    let tuning = part(app, &data.tcp_configured, true, |configured| {
+        dot(app, *configured, "dash.configured", "dash.not_configured")
+    });
+    let state = part(app, &data.mihomo_state, true, |state| match state {
+        State::Running(_) => lit(app, "dash.running"),
+        State::Stopped => unlit(app, "dash.stopped"),
+        State::NotInstalled => unlit(app, "dash.not_installed"),
+        State::Unknown => (i.text("dash.unknown").into(), Tone::Warning),
+    });
+    let version = match &data.mihomo_state {
+        Reading::Value(_) => text_part(app, &data.mihomo_version, true),
+        _ => None,
+    };
+    let terminal = part(app, &data.terminal_proxy, false, |enabled| {
+        dot(app, *enabled, "status.enabled", "status.disabled")
+    });
+    let labeled = |label: &str, part: Option<(String, Tone)>| {
+        part.map(|(text, tone)| (format!("{label} {text}"), tone))
+    };
+    [
+        row(app, [bbr, support, congestion]),
+        row(app, [tuning, text_part(app, &data.qdisc, true)]),
+        row(
+            app,
+            [
+                text_part(app, &public.ipv4, false),
+                text_part(app, &public.isp, false),
+            ],
+        ),
+        row(app, [text_part(app, &public.ipv6, false)]),
+        row(
+            app,
+            [
+                labeled(MIHOMO, state),
+                version,
+                labeled(i.text("dash.terminal"), terminal),
+            ],
+        ),
+    ]
+}
+
 fn usage_percent(value: &Reading<Usage>) -> Option<f64> {
     match value {
         Reading::Value(usage) if usage.total > 0 => Some(usage.percent()),
@@ -270,14 +414,8 @@ pub(in crate::tui) fn pending(snapshot: &Snapshot) -> bool {
 /// What a gauge shows instead of a level. A zero-sized swap is disabled, not unknown.
 fn gauge_status(app: &App, index: usize) -> (String, Tone) {
     let data = &app.snapshot.local;
-    let disabled = || {
-        (
-            format!("○ {}", app.ctx.i18n.text("status.disabled")),
-            Tone::Muted,
-        )
-    };
     let usage = |value: &Reading<Usage>| match value {
-        Reading::Value(_) => disabled(),
+        Reading::Value(_) => unlit(app, "status.disabled"),
         other => placeholder(app, other),
     };
     match index {
@@ -312,9 +450,25 @@ fn amounts(usage: &Usage) -> String {
     }
 }
 
-/// Right-aligned freshness indicator; a refresh in flight spins until new data lands. It
-/// shortens to the bare age or spinner when `room` is tight and is omitted rather than
-/// overwriting the panel title.
+/// Right-aligned freshness text, shortened to `compact` when `room` is tight and omitted
+/// rather than overwriting the panel title.
+fn fresh(
+    app: &App,
+    full: String,
+    compact: String,
+    tone: Tone,
+    room: usize,
+) -> Option<Line<'static>> {
+    [full, compact]
+        .into_iter()
+        .map(|text| format!(" {text} "))
+        .find(|text| text.width() <= room)
+        .map(|text| {
+            Line::from(Span::styled(text, theme::tone(&app.theme.active, tone))).right_aligned()
+        })
+}
+/// Freshness of the local data (Requirement 4.8): a refresh in flight spins until new data
+/// lands; otherwise the age of the last sample.
 pub(super) fn freshness(app: &App, room: usize) -> Option<Line<'static>> {
     let i = &app.ctx.i18n;
     let (full, compact, tone) = if app.refreshing.is_some() {
@@ -335,135 +489,213 @@ pub(super) fn freshness(app: &App, room: usize) -> Option<Line<'static>> {
             Tone::Info,
         )
     };
-    [full, compact]
-        .into_iter()
-        .map(|text| format!(" {text} "))
-        .find(|text| text.width() <= room)
-        .map(|text| Line::from(Span::styled(text, theme::fg(tone))).right_aligned())
+    fresh(app, full, compact, tone, room)
+}
+/// Freshness of the public data (Requirement 4.9): not looked up yet, a lookup in flight,
+/// or the age of the last lookup.
+fn public_freshness(app: &App, room: usize) -> Option<Line<'static>> {
+    let i = &app.ctx.i18n;
+    let public = &app.snapshot.public;
+    let (full, compact, tone) = if [&public.ipv4, &public.ipv6, &public.isp]
+        .iter()
+        .any(|value| matches!(value, Reading::Loading))
+    {
+        let spin = app.spin();
+        (
+            format!("{spin} {}", i.text("dash.querying")),
+            spin.to_owned(),
+            Tone::Info,
+        )
+    } else if let Some(at) = public.updated {
+        let age = format!("{}s", app.now.saturating_duration_since(at).as_secs());
+        (
+            i.format("dash.public_updated", &[("age", &age)]),
+            age,
+            Tone::Muted,
+        )
+    } else {
+        let text = i.text("dash.public_not_queried").to_owned();
+        (text.clone(), text, Tone::Muted)
+    };
+    fresh(app, full, compact, tone, room)
 }
 /// Cells left of a block's top border for a right title: borders, the left title and a gap.
 pub(super) fn title_room(width: u16, title: &Line<'_>) -> usize {
     (width as usize).saturating_sub(2 + title.width() + 1)
 }
-pub(super) fn draw(app: &App, f: &mut Frame, area: Rect) {
-    let i = &app.ctx.i18n;
-    let facts = facts(app);
-    let pick = |keys: &[&str]| {
-        keys.iter()
-            .map(|key| {
-                facts
-                    .iter()
-                    .find(|fact| fact.key == *key)
-                    .expect("panel keys are dashboard facts")
-            })
-            .collect::<Vec<_>>()
-    };
-    let [system, network] =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
 
-    let heading = i.text("dash.panel_system");
-    let mut block = theme::panel(heading, false).padding(Padding::horizontal(1));
+pub(super) fn draw(app: &App, f: &mut Frame, area: Rect) {
+    let [mut system, network] =
+        Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
+    if theme::unframed(&app.theme.active) {
+        system.width = system.width.saturating_sub(1);
+    }
+    let rows = draw_panel(app, f, system, "dash.panel_system", freshness);
+    draw_gauges(app, f, [rows[0], rows[1]]);
+    draw_rows(app, f, &rows[2..], &SYSTEM_ROWS, &system_rows(app));
+    let rows = draw_panel(app, f, network, "dash.panel_network", public_freshness);
+    draw_rows(app, f, &rows, &NETWORK_ROWS, &network_rows(app));
+    if app.theme.active.patterns.border == crate::theme::BorderStyle::Card {
+        for row in area.top()..area.bottom().saturating_sub(1) {
+            f.buffer_mut()[(system.right(), row)]
+                .set_symbol("│")
+                .set_style(theme::fg(&app.theme.active, Role::Rule));
+        }
+    }
+}
+/// A bordered panel: the title and the freshness of its data on the top border, then its
+/// content rows.
+fn draw_panel(
+    app: &App,
+    f: &mut Frame,
+    area: Rect,
+    heading: &str,
+    freshness: fn(&App, usize) -> Option<Line<'static>>,
+) -> [Rect; ROWS] {
+    let t = &app.theme.active;
+    let heading = app.ctx.i18n.text(heading);
+    let mut block = theme::panel(t, heading, false).padding(if theme::unframed(t) {
+        let padding = theme::padding(t, area.width);
+        Padding::new(padding, padding, 0, 1)
+    } else {
+        Padding::horizontal(1)
+    });
     if let Some(line) = freshness(
         app,
-        title_room(system.width, &theme::title(heading, Tone::Plain)),
+        title_room(area.width, &theme::title(t, heading, Role::Text1)),
     ) {
         block = block.title(line);
     }
-    let inside = block.inner(system);
-    f.render_widget(block, system);
-    let [gauge_area, fact_area] =
-        Layout::vertical([Constraint::Length(GAUGE_ROWS as u16), Constraint::Min(0)]).areas(inside);
-    draw_gauges(app, f, gauge_area);
-    draw_facts(app, f, fact_area, &pick(&SYSTEM_FACTS));
-
-    let block = theme::panel(i.text("dash.panel_network"), false).padding(Padding::horizontal(1));
-    let inside = block.inner(network);
-    f.render_widget(block, network);
-    draw_facts(app, f, inside, &pick(&NETWORK_FACTS));
+    let inside = block.inner(area);
+    f.render_widget(block, area);
+    Layout::vertical([Constraint::Length(1); ROWS]).areas(inside)
 }
-fn draw_gauges(app: &App, f: &mut Frame, area: Rect) {
+/// Two one-row gauges per row, CPU beside memory over disk beside swap. CPU draws its
+/// history as a sparkline, the others a bar; each shows its percentage. The used/total
+/// amounts and the CPU count show on every gauge or on none, so the rows read as one scale
+/// (Requirements 4.2, 4.3, 4.12).
+fn draw_gauges(app: &App, f: &mut Frame, rows: [Rect; 2]) {
     let i = &app.ctx.i18n;
+    let t = &app.theme.active;
+    let halves = |row: Rect| -> [Rect; 2] {
+        Layout::horizontal([Constraint::Fill(1); 2])
+            .spacing(GAUGE_GAP)
+            .areas(row)
+    };
+    let ([cpu, memory], [disk, swap]) = (halves(rows[0]), halves(rows[1]));
+    let cells = [cpu, memory, disk, swap];
     let labels = GAUGES.map(|key| i.text(key));
-    let label_width = labels.iter().map(|label| label.width()).max().unwrap_or(0);
-    let targets = gauge_targets(&app.snapshot);
-    // CPU and memory on the first row, disk and swap on the second.
-    let cells = Layout::vertical([Constraint::Length(1); GAUGE_ROWS])
-        .split(area)
-        .iter()
-        .flat_map(|row| {
-            Layout::horizontal([Constraint::Fill(1); 2])
-                .spacing(GAUGE_GAP)
-                .split(*row)
-                .to_vec()
-        })
-        .collect::<Vec<_>>();
-    let room_of = |index: usize| (cells[index].width as usize).saturating_sub(label_width + 1);
-    // Used/total for each gauge that draws a bar; CPU has none.
-    let extras: [Option<String>; 4] = std::array::from_fn(|index| {
-        gauge_usage(app, index)
-            .filter(|_| targets[index].is_some())
-            .map(|usage| format!(" {}", amounts(usage)))
+    // Each column aligns its own labels: CPU over disk, memory over swap.
+    let label_widths: [usize; 4] =
+        std::array::from_fn(|index| labels[index % 2].width().max(labels[index % 2 + 2].width()));
+    let rooms: [usize; 4] = std::array::from_fn(|index| {
+        (cells[index].width as usize).saturating_sub(label_widths[index] + 1)
     });
-    // Amounts appear on every bar or on none, so the row reads as one scale.
-    let show_amounts = extras.iter().enumerate().all(|(index, extra)| {
+    let targets = gauge_targets(&app.snapshot);
+    let extras: [Option<String>; 4] = std::array::from_fn(|index| {
+        targets[index]?;
+        if index > 0 {
+            return gauge_usage(app, index).map(|usage| format!(" {}", amounts(usage)));
+        }
+        match app.snapshot.local.cpu_count {
+            Reading::Value(count) => Some(format!(
+                " {}",
+                i.format("dash.cores", &[("count", &count.to_string())])
+            )),
+            _ => None,
+        }
+    });
+    let show_extras = extras.iter().zip(rooms).all(|(extra, room)| {
         extra
             .as_ref()
-            .is_none_or(|text| room_of(index) >= PERCENT_WIDTH + MIN_BAR + text.width())
+            .is_none_or(|text| room >= PERCENT_WIDTH + MIN_GRAPH + text.width())
     });
-    for (index, label) in labels.iter().enumerate() {
-        let cell = cells[index];
-        let mut spans = vec![Span::styled(pad(label, label_width + 1), theme::muted())];
-        let room = room_of(index);
+    for (index, cell) in cells.into_iter().enumerate() {
+        let room = rooms[index];
+        let mut spans = vec![Span::styled(
+            pad(labels[index], label_widths[index] + 1),
+            theme::muted(t),
+        )];
         match targets[index] {
             Some(target) => {
-                let shown = app.gauges[index].map_or(target, |tween| tween.value(app.now));
-                let tone = theme::load_tone(target);
+                // The measured level picks the color; a bar glides toward it.
+                let role = theme::gauge(target);
                 let percent = format!("{target:>4.0}%");
-                let extra = extras[index].clone().filter(|_| show_amounts);
-                let bar_width = room.saturating_sub(
+                let extra = extras[index].clone().filter(|_| show_extras);
+                let graph = room.saturating_sub(
                     percent.width() + extra.as_ref().map_or(0, |text| text.width()),
                 );
-                spans.extend(theme::bar(shown, bar_width, tone));
-                spans.push(Span::styled(percent, theme::fg(tone)));
+                if index == 0 {
+                    let history = theme::sparkline(t, &app.snapshot.cpu_history, graph);
+                    spans.push(Span::styled(history, theme::fg(t, role)));
+                } else {
+                    let shown = app.gauges[index].map_or(target, |tween| tween.value(app.now));
+                    spans.extend(theme::bar(t, shown, graph, role));
+                }
+                if theme::unframed(t) {
+                    spans.push(Span::styled(
+                        format!("{target:>4.0}"),
+                        theme::text(t, Level::Primary).add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled("%", theme::text(t, Level::Secondary)));
+                } else {
+                    spans.push(Span::styled(percent, theme::fg(t, role)));
+                }
                 if let Some(text) = extra {
-                    spans.push(Span::styled(text, theme::muted()));
+                    if theme::unframed(t) {
+                        spans.extend(text.chars().map(|character| {
+                            Span::styled(
+                                character.to_string(),
+                                theme::text(
+                                    t,
+                                    if character.is_alphabetic() {
+                                        Level::Tertiary
+                                    } else {
+                                        Level::Secondary
+                                    },
+                                ),
+                            )
+                        }));
+                    } else {
+                        spans.push(Span::styled(text, theme::muted(t)));
+                    }
                 }
             }
             None => {
                 let (text, tone) = gauge_status(app, index);
-                spans.push(Span::styled(clip(&text, room), theme::fg(tone)));
+                spans.push(Span::styled(
+                    super::clip_with(&text, room, super::ellipsis(t)),
+                    theme::tone(t, tone),
+                ));
             }
         }
         f.render_widget(Paragraph::new(Line::from(spans)), cell);
     }
 }
-/// One aligned label/value column. The label column fits the longest label up to a cap, so
-/// one long translation shifts only its own row.
-fn draw_facts(app: &App, f: &mut Frame, area: Rect, group: &[&Fact]) {
+/// Labeled rows: a label column as wide as the panel's longest label, then as many whole
+/// Segments as fit (Requirements 4.6, 4.7).
+fn draw_rows(app: &App, f: &mut Frame, areas: &[Rect], labels: &[&str], rows: &[Vec<Segment>]) {
     let i = &app.ctx.i18n;
-    let label_width = group
+    let t = &app.theme.active;
+    let label_width = labels
         .iter()
-        .map(|fact| i.text(fact.key).width())
+        .map(|key| i.text(key).width())
         .max()
-        .unwrap_or(0)
-        .min(LABEL_CAP);
-    let lines = group
-        .iter()
-        .map(|fact| {
-            let label = i.text(fact.key);
-            let label = if label.width() > label_width {
-                label.to_owned()
-            } else {
-                pad(label, label_width)
-            };
-            let room = (area.width as usize).saturating_sub(label.width() + 1);
-            Line::from(vec![
-                Span::styled(format!("{label} "), theme::muted()),
-                Span::styled(clip(&fact.value, room), theme::fg(fact.tone)),
-            ])
-        })
-        .collect::<Vec<_>>();
-    f.render_widget(Paragraph::new(lines), area);
+        .unwrap_or(0);
+    for ((area, key), segments) in areas.iter().zip(labels).zip(rows) {
+        let room = (area.width as usize).saturating_sub(label_width + 1);
+        let mut spans = vec![Span::styled(
+            pad(i.text(key), label_width + 1),
+            theme::muted(t),
+        )];
+        spans.extend(super::themed_segment_spans(
+            t,
+            segments,
+            room,
+            theme::text(t, Level::Tertiary),
+        ));
+        f.render_widget(Paragraph::new(Line::from(spans)), *area);
+    }
 }
 
 fn gib(value: u64) -> String {
@@ -491,6 +723,7 @@ fn resource(app: &App, index: usize) -> (String, Tone) {
 /// under their label, then probe diagnostics.
 pub(super) fn overview(app: &App, width: usize) -> Vec<Line<'static>> {
     let i = &app.ctx.i18n;
+    let t = &app.theme.active;
     let facts = facts(app);
     let fact = |key: &str| {
         let fact = facts
@@ -559,14 +792,14 @@ pub(super) fn overview(app: &App, width: usize) -> Vec<Line<'static>> {
         }
         lines.push(Line::styled(
             i.text(heading).to_owned(),
-            theme::fg(Tone::Accent).add_modifier(Modifier::BOLD),
+            theme::fg(t, Role::Accent).add_modifier(Modifier::BOLD),
         ));
         for (key, (value, tone)) in rows {
             for (index, part) in wrap_cells(&value, value_width).into_iter().enumerate() {
                 let label = if index == 0 { i.text(key) } else { "" };
                 lines.push(Line::from(vec![
-                    Span::styled(format!("{}  ", pad(label, label_width)), theme::muted()),
-                    Span::styled(part, theme::fg(tone)),
+                    Span::styled(format!("{}  ", pad(label, label_width)), theme::muted(t)),
+                    Span::styled(part, theme::tone(t, tone)),
                 ]));
             }
         }
@@ -576,7 +809,7 @@ pub(super) fn overview(app: &App, width: usize) -> Vec<Line<'static>> {
         lines.push(Line::default());
         lines.push(Line::styled(
             i.text("dash.diagnostics").to_owned(),
-            theme::fg(Tone::Warning).add_modifier(Modifier::BOLD),
+            theme::fg(t, Role::Warning).add_modifier(Modifier::BOLD),
         ));
         for error in errors {
             for part in wrap_cells(&error, width.max(1)) {
@@ -617,4 +850,194 @@ fn diagnostics(app: &App) -> Vec<String> {
         _ => (),
     }
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::snapshot::{fixture_app, render};
+
+    fn texts(row: &[Segment]) -> Vec<&str> {
+        row.iter().map(|segment| segment.text.as_str()).collect()
+    }
+    /// The seven Status_Area rows of `app` drawn `width` cells wide; en-US cells are all
+    /// single width.
+    fn status(app: &App, width: u16) -> Vec<String> {
+        let buffer = render(app, width, 36);
+        (1..=HEIGHT)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn fixture_rows_follow_the_panel_layout() {
+        let app = fixture_app("en-US");
+        let t = &app.theme.active;
+        let [host, kernel, uptime] = system_rows(&app);
+        assert_eq!(
+            texts(&host),
+            ["vps-sg-01", "Debian GNU/Linux 12 (bookworm)"]
+        );
+        assert_eq!(
+            texts(&kernel),
+            ["6.12.8-joeyblog-bbrv3", "x86_64", "AMD EPYC 7B13 × 2"]
+        );
+        assert_eq!(texts(&uptime), ["3d 04h 00m", "Asia/Shanghai"]);
+        let network = network_rows(&app);
+        assert_eq!(
+            network.iter().map(|row| texts(row)).collect::<Vec<_>>(),
+            [
+                vec!["○ Disabled", "available / v3", "cubic"],
+                vec!["○ not configured", "fq_codel"],
+                vec!["203.0.113.24", "AS64500 Example Net"],
+                vec!["2001:db8:3c4d:15::1a2f"],
+                vec!["Mihomo ● Running", "v1.19.2", "Terminal ● Enabled"],
+            ]
+        );
+        assert_eq!(network[4][0].style, theme::tone(t, Tone::Success));
+        assert_eq!(network[1][0].style, theme::tone(t, Tone::Muted));
+        let zh = fixture_app("zh-CN");
+        assert_eq!(
+            texts(&network_rows(&zh)[4]),
+            ["Mihomo ● 运行中", "v1.19.2", "终端 ● 已启用"]
+        );
+
+        // Gauges: the CPU history and count, then bars with percentages and amounts.
+        // A top border with both titles, five content rows and a bottom border.
+        let wide = status(&app, 120);
+        assert!(wide[0].contains("updated 2s ago") && wide[0].contains("looked up 12s ago"));
+        assert!(wide[1].contains("│ CPU  ▅▄▃▂▃▁▁▂▂▁  12% 2-core  Memory ━━━━──  63% 1.2/1.9G │"));
+        assert!(wide[2].contains("│ Disk ━━╸───  41% 16.4/40.0G  Swap   ╸─────  10% 0.2/2.0G │"));
+        assert!(wide[3].contains("│ Host   vps-sg-01 · Debian GNU/Linux 12 (bookworm)  "));
+        assert!(wide[3].contains("│ IPv4  203.0.113.24 · AS64500 Example Net  "));
+        assert!(wide[4].contains("│ Kernel 6.12.8-joeyblog-bbrv3 · x86_64  "));
+        assert!(wide[4].contains("│ IPv6  2001:db8:3c4d:15::1a2f  "));
+        assert!(wide[5].contains("│ Uptime 3d 04h 00m · Asia/Shanghai  "));
+        assert!(wide[5].contains("│ Proxy Mihomo ● Running · v1.19.2 · Terminal ● Enabled  "));
+        assert!(wide[6].starts_with('╰'));
+        // At 80 columns the amounts and the CPU count go as one group, and rows lose whole
+        // Segments from their end.
+        let narrow = status(&app, 80);
+        assert!(narrow[1].contains("│ CPU  ▂▃▁▁▂▂▁  12%  Memory ━━━──  63% │"));
+        assert!(
+            narrow[1..3]
+                .iter()
+                .all(|row| !row.chars().take(40).any(|c| c == '/')),
+            "no used/total amounts in the system panel"
+        );
+        assert!(narrow[3].contains("│ Host   vps-sg-01     "));
+        assert!(narrow[3].contains("│ IPv4  203.0.113.24     "));
+        assert!(narrow[4].contains("│ Kernel 6.12.8-joeyblog-bbrv3     "));
+        assert!(narrow[5].contains("│ Proxy Mihomo ● Running · v1.19.2     │"));
+    }
+
+    /// Every reading state other than Value, in the order of `placeholders`.
+    fn states<T>() -> [Reading<T>; 4] {
+        [
+            Reading::Loading,
+            Reading::NotQueried,
+            Reading::Unavailable("probe failed".into()),
+            Reading::NotApplicable,
+        ]
+    }
+    #[test]
+    fn readings_other_than_values_show_their_placeholder() {
+        let mut app = fixture_app("en-US");
+        let i = &app.ctx.i18n;
+        let placeholders = [
+            (
+                format!("{} {}", app.spin(), i.text("dash.loading")),
+                Tone::Info,
+            ),
+            (i.text("dash.not_queried").into(), Tone::Muted),
+            (i.text("dash.unknown").into(), Tone::Warning),
+            (i.text("dash.na").into(), Tone::Muted),
+        ]
+        .map(|(text, tone)| Segment::new(text, theme::tone(&app.theme.active, tone)));
+        let terminal = i.text("dash.terminal").to_owned();
+        let cases = placeholders
+            .into_iter()
+            .zip(states::<String>())
+            .zip(states::<bool>());
+        for ((expected, text), switch) in cases {
+            app.snapshot.local.host = text.clone();
+            app.snapshot.local.terminal_proxy = switch;
+            app.snapshot.public.ipv4 = text.clone();
+            app.snapshot.public.isp = text.clone();
+            app.snapshot.public.ipv6 = text;
+            let [host, ..] = system_rows(&app);
+            assert_eq!(host[0], expected, "the host");
+            assert_eq!(host[1].text, "Debian GNU/Linux 12 (bookworm)");
+            let network = network_rows(&app);
+            // Equal placeholders side by side show once.
+            assert_eq!(network[2], std::slice::from_ref(&expected), "IPv4 and ISP");
+            assert_eq!(network[3], std::slice::from_ref(&expected), "IPv6");
+            assert_eq!(network[4][2].text, format!("{terminal} {}", expected.text));
+            assert_eq!(network[4][2].style, expected.style);
+        }
+    }
+
+    #[test]
+    fn linux_only_readings_that_do_not_apply_leave_out_their_segments() {
+        let mut app = fixture_app("en-US");
+        let na = || {
+            Segment::new(
+                app.ctx.i18n.text("dash.na"),
+                theme::muted(&app.theme.active),
+            )
+        };
+        app.snapshot.local.bbr_version = Reading::NotApplicable;
+        app.snapshot.local.qdisc = Reading::NotApplicable;
+        let network = network_rows(&app);
+        assert_eq!(texts(&network[0]), ["○ Disabled", "available", "cubic"]);
+        assert_eq!(texts(&network[1]), ["○ not configured"]);
+
+        // What a non-Linux sample holds: every Linux-only reading is NotApplicable.
+        let data = &mut app.snapshot.local;
+        data.congestion = Reading::NotApplicable;
+        data.bbr_available = Reading::NotApplicable;
+        data.tcp_configured = Reading::NotApplicable;
+        data.mihomo_state = Reading::NotApplicable;
+        data.mihomo_version = Reading::NotApplicable;
+        let network = network_rows(&app);
+        assert_eq!(network[0], [na()], "a row with nothing left reads N/A");
+        assert_eq!(network[1], [na()]);
+        assert_eq!(texts(&network[4]), ["Terminal ● Enabled"]);
+        // A reading other platforms provide keeps its placeholder instead.
+        app.snapshot.local.timezone = Reading::NotApplicable;
+        assert_eq!(system_rows(&app)[2][1], na());
+    }
+
+    #[test]
+    fn each_panel_title_shows_the_freshness_of_its_own_data() {
+        let mut app = fixture_app("en-US");
+        let split = 60;
+        let title = |app: &App| status(app, 120).remove(0);
+        let at = |line: &str, text: &str| line.find(text).map(|byte| line[..byte].chars().count());
+        let line = title(&app);
+        assert!(
+            at(&line, "updated 2s ago").is_some_and(|x| x < split),
+            "{line}"
+        );
+        assert!(
+            at(&line, "looked up 12s ago").is_some_and(|x| x >= split),
+            "{line}"
+        );
+
+        app.refreshing = Some(app.now);
+        app.snapshot.public = Default::default();
+        let line = title(&app);
+        assert!(
+            at(&line, "Refreshing…").is_some_and(|x| x < split),
+            "{line}"
+        );
+        assert!(
+            at(&line, "not looked up").is_some_and(|x| x >= split),
+            "{line}"
+        );
+
+        app.snapshot.public.ipv4 = Reading::Loading;
+        let looking = format!("{} Looking up…", app.spin());
+        assert!(at(&title(&app), &looking).is_some_and(|x| x >= split));
+    }
 }

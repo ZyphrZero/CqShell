@@ -1,0 +1,169 @@
+# case final_main_classic-light_80x24_en-US
+# size 80x24
+# theme classic
+# background #ffffff
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭ System & resources ── updated 2s ago ╮╭ Network & proxy ── looked up 12s ago ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  Memory ━━━──  63% ││ BBR   ○ Disabled · available / v3    │
+│ Disk ━━━────  41%  Swap   ╸────  10% ││ TCP   ○ not configured · fq_codel    │
+│ Host   vps-sg-01                     ││ IPv4  203.0.113.24                   │
+│ Kernel 6.12.8-joeyblog-bbrv3         ││ IPv6  2001:db8:3c4d:15::1a2f         │
+│ Uptime 3d 04h 00m · Asia/Shanghai    ││ Proxy Mihomo ● Running · v1.19.2     │
+╰──────────────────────────────────────╯╰──────────────────────────────────────╯
+╭ Categories ──────╮╭ System ──────────────────────────────────────────── 1/12 ╮
+│  0 Optimization  ││  Overview                                                ┃
+│  ────────────────││› System overview                                         ┃
+│› 1 System        ││  Public IP / ISP lookup                           12s ago┃
+│  2 Kernel        ││  Packages & mirrors                                      ┃
+│  3 Network       ││  Update packages                                         │
+│  4 SSH           ││  Benchmark system mirrors                                │
+│  5 Docker        ││  Change system mirror · LinuxMirrors…                    │
+│  6 Mihomo proxy ●││  Restore previous system sources                         │
+│  7 Tools         │├ Details ─────────────────────────────────────────────────┤
+│  8 Agent tools   ││ System overview                                          │
+│  9 Prompt        ││ Read only · Current user                                 │
+│    Tests         ││ Read host, CPU, memory, disk, IP and BBR status.         │
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ ↑↓ move  Enter open  / search actions  ←→ switch category  O optimize  ? help  
+---
+0 1 7 #0a7d70 reset bold
+0 9 6 #57606a reset -
+0 17 9 #57606a reset -
+0 60 19 #57606a reset -
+1 0 1 #8c959f reset -
+1 1 20 reset reset bold
+1 21 2 #8c959f reset -
+1 23 16 #57606a reset -
+1 39 2 #8c959f reset -
+1 41 17 reset reset bold
+1 58 2 #8c959f reset -
+1 60 19 #57606a reset -
+1 79 1 #8c959f reset -
+2 0 1 #8c959f reset -
+2 2 5 #57606a reset -
+2 7 12 #1a7f37 reset -
+2 21 7 #57606a reset -
+2 28 3 #1a7f37 reset -
+2 31 2 #d0d7de reset -
+2 33 5 #1a7f37 reset -
+2 39 2 #8c959f reset -
+2 42 19 #57606a reset -
+2 79 1 #8c959f reset -
+3 0 1 #8c959f reset -
+3 2 5 #57606a reset -
+3 7 3 #1a7f37 reset -
+3 10 4 #d0d7de reset -
+3 14 5 #1a7f37 reset -
+3 21 7 #57606a reset -
+3 28 1 #1a7f37 reset -
+3 29 4 #d0d7de reset -
+3 33 5 #1a7f37 reset -
+3 39 2 #8c959f reset -
+3 42 25 #57606a reset -
+3 79 1 #8c959f reset -
+4 0 1 #8c959f reset -
+4 2 7 #57606a reset -
+4 39 2 #8c959f reset -
+4 42 6 #57606a reset -
+4 79 1 #8c959f reset -
+5 0 1 #8c959f reset -
+5 2 7 #57606a reset -
+5 39 2 #8c959f reset -
+5 42 6 #57606a reset -
+5 79 1 #8c959f reset -
+6 0 1 #8c959f reset -
+6 2 7 #57606a reset -
+6 19 3 #57606a reset -
+6 39 2 #8c959f reset -
+6 42 6 #57606a reset -
+6 48 16 #1a7f37 reset -
+6 64 3 #57606a reset -
+6 79 1 #8c959f reset -
+7 0 80 #8c959f reset -
+8 0 1 #8c959f reset -
+8 1 12 reset reset bold
+8 13 8 #8c959f reset -
+8 21 8 reset reset bold
+8 29 44 #8c959f reset -
+8 73 6 #57606a reset -
+8 79 1 #8c959f reset -
+9 0 1 #8c959f reset -
+9 3 2 #57606a reset -
+9 19 2 #8c959f reset -
+9 23 56 #57606a reset bold
+9 79 1 #0a7d70 reset -
+10 0 1 #8c959f reset -
+10 3 16 #d0d7de reset -
+10 19 2 #8c959f reset -
+10 21 58 #ffffff #0a7d70 bold
+10 79 1 #0a7d70 reset -
+11 0 1 #8c959f reset -
+11 1 18 #ffffff #0a7d70 bold
+11 19 2 #8c959f reset -
+11 72 7 #57606a reset -
+11 79 1 #0a7d70 reset -
+12 0 1 #8c959f reset -
+12 3 2 #57606a reset -
+12 19 2 #8c959f reset -
+12 23 56 #57606a reset bold
+12 79 1 #0a7d70 reset -
+13 0 1 #8c959f reset -
+13 3 2 #57606a reset -
+13 19 2 #8c959f reset -
+13 23 15 #57606a reset -
+13 79 1 #8c959f reset -
+14 0 1 #8c959f reset -
+14 3 2 #57606a reset -
+14 19 2 #8c959f reset -
+14 79 1 #8c959f reset -
+15 0 1 #8c959f reset -
+15 3 2 #57606a reset -
+15 19 2 #8c959f reset -
+15 23 36 #57606a reset -
+15 79 1 #8c959f reset -
+16 0 1 #8c959f reset -
+16 3 2 #57606a reset -
+16 17 2 #1a7f37 reset -
+16 19 2 #8c959f reset -
+16 23 31 #57606a reset -
+16 79 1 #8c959f reset -
+17 0 1 #8c959f reset -
+17 3 2 #57606a reset -
+17 19 2 #8c959f reset -
+17 21 9 reset reset bold
+17 30 50 #8c959f reset -
+18 0 1 #8c959f reset -
+18 3 2 #57606a reset -
+18 19 2 #8c959f reset -
+18 22 15 reset reset bold
+18 79 1 #8c959f reset -
+19 0 1 #8c959f reset -
+19 3 2 #57606a reset -
+19 19 2 #8c959f reset -
+19 22 9 #1a7f37 reset -
+19 31 15 #57606a reset -
+19 79 1 #8c959f reset -
+20 0 1 #8c959f reset -
+20 3 2 #57606a reset -
+20 19 2 #8c959f reset -
+20 79 1 #8c959f reset -
+21 0 1 #8c959f reset -
+21 3 2 #57606a reset -
+21 19 2 #8c959f reset -
+21 22 19 #0a7d70 reset -
+21 79 1 #8c959f reset -
+22 0 80 #8c959f reset -
+23 1 2 #0a7d70 reset bold
+23 3 5 #57606a reset -
+23 10 5 #0a7d70 reset bold
+23 15 5 #57606a reset -
+23 22 1 #0a7d70 reset bold
+23 23 15 #57606a reset -
+23 40 2 #0a7d70 reset bold
+23 42 16 #57606a reset -
+23 60 1 #0a7d70 reset bold
+23 61 9 #57606a reset -
+23 72 1 #0a7d70 reset bold
+23 73 5 #57606a reset -

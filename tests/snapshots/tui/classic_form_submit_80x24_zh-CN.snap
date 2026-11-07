@@ -1,0 +1,129 @@
+# case classic_form_submit_80x24_zh-CN
+# size 80x24
+# theme classic
+# background unavailable
+# locale zh-CN
+ CqShell v0.1.4  系统管理 › 系统概览          vps-sg-01 · ● 普通用户 · 简体中文 
+╭ 系统与资源 ────────── 本机 2s 前更新 ╮╭ 网络与代理 ───────── 公网 12s 前查询 ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  内存 ━━━━╸──  63% ││ BBR  ○ 未启用 · 可用 / v3 · cubic    │
+│╭ TCP 缓冲区调优 ────────────────────────────────────────────────────────────╮│
+││                                                                            ││
+││  提交后直接执行，专门确认仍会询问。                                        ││
+││  TCP 调优  ○ 未调优                                                        ││
+╰│  会修改系统或用户文件 · 需要 root                                          │╯
+╭│                                                                            │╮
+││    带宽（Mbit/s） *  1/2                                                   │┃
+││    1000                                                                    │┃
+││                                                                            │┃
+││    RTT（毫秒） *  2/2                                                      │┃
+││    50                                                                      ││
+││                                                                            ││
+││  sudo cqs run tcp.tune --set bandwidth=1000 --set rtt=50                   ││
+││                                                                            ││
+││  [ 确认执行 ]  [ 取消 ]                                                    │┤
+││  Tab/↑↓ 字段  ←→ 选项 / 光标  Ctrl+Enter 提交  Esc 取消                    ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│    服务器测试    ││ 读取主机、CPU、内存、磁盘、IP 及 BBR 状态。              │
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ ↑↓ 移动  Enter 打开  ←→ 切换分类  O 一键优化  R 刷新  Q 退出  ? 帮助           
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 80 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 1 1 #45cdb6 reset -
+3 2 16 #45cdb6 reset bold
+3 18 61 #45cdb6 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 78 1 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 4 34 #91a2b0 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 4 20 #ffbe5e reset -
+7 24 3 #91a2b0 reset -
+7 27 9 #ffbe5e reset -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 4 2 #45cdb6 reset -
+9 6 14 reset reset bold
+9 20 2 #ff7585 reset -
+9 22 5 #91a2b0 reset -
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 6 69 reset reset underlined
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 4 2 #45cdb6 reset -
+12 6 11 reset reset bold
+12 17 2 #ff7585 reset -
+12 19 5 #91a2b0 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 6 69 reset reset underlined
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 78 1 #45cdb6 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 4 55 #45cdb6 reset -
+15 78 1 #45cdb6 reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 78 1 #45cdb6 reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 4 12 black #45cdb6 bold
+17 78 1 #45cdb6 reset -
+17 79 1 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 1 #45cdb6 reset -
+18 4 6 #45cdb6 reset bold
+18 10 5 #91a2b0 reset -
+18 17 2 #45cdb6 reset bold
+18 19 12 #91a2b0 reset -
+18 33 10 #45cdb6 reset bold
+18 43 5 #91a2b0 reset -
+18 50 3 #45cdb6 reset bold
+18 53 5 #91a2b0 reset -
+18 78 1 #45cdb6 reset -
+18 79 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 1 78 #45cdb6 reset -
+19 79 1 #3d5265 reset -
+20 0 80 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

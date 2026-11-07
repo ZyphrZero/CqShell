@@ -19,6 +19,7 @@ pub(crate) fn context(root: &Path) -> Context {
         home: root.into(),
         state: root.join("state"),
         preferences: root.join("config.toml"),
+        themes: root.join("themes"),
         terminal: root.join("starship.toml"),
         bashrc: root.join(".bashrc"),
         zshrc: root.join(".zshrc"),
@@ -1327,6 +1328,7 @@ test ! -e "$CQS_TEST_ROOT/fail_packages"
                             reply.send(accept).unwrap();
                         }
                         Event::Log(text) => logs.push(text),
+                        Event::Step(_) => panic!("unexpected batch step event"),
                         Event::Finished(_) => panic!("unexpected completion event"),
                     }
                 }

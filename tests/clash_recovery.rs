@@ -22,6 +22,7 @@ fn context(root: &Path) -> Context {
         home: root.into(),
         state: root.join("state"),
         preferences: root.join("preferences.toml"),
+        themes: root.join("themes"),
         terminal: root.join("starship.toml"),
         bashrc: root.join(".bashrc"),
         zshrc: root.join(".zshrc"),

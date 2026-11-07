@@ -69,13 +69,46 @@ Windows locks running executables. If rebuilding the same output reports access 
 
 The persistent dashboard has two side-by-side panels. System & resources shows CPU/memory/disk/swap gauges with host/OS/kernel, uptime and timezone; Network & proxy shows Linux BBR/TCP state, public IPv4/IPv6/ISP, terminal proxy and Mihomo status/version. Local measurements refresh in the background every three seconds or manually with R. Terminal proxy reflects the nonempty `http_proxy` / `https_proxy` / `all_proxy` variables (including uppercase variants) inherited when CqShell starts; it does not indicate Mihomo process state or connectivity. Mihomo independently reports not installed, stopped, running (PID), or unknown for the current CqShell data directory. The installed binary's `-v` output supplies its version, with a two-second coreutils `timeout` limit and no network request. Probe failures remain unknown with diagnostics rather than being reported as stopped or missing. N explicitly queries public IPv4/IPv6 and ISP, then retains the results across pages; startup does not contact public IP services. Windows shows real local resources and marks Linux-only fields, including Mihomo, and actions unavailable.
 
-Ordinary pages are single-action menus. Tab switches focus between categories and actions; arrows navigate, Enter opens an action, and Esc returns. O opens Optimization, the only page with checkboxes: Space selects, Enter configures and saves an item, and F5 reviews/runs the selected plan. R refreshes local metrics; G toggles the task log, F2 opens the full log, L switches language, and Q quits while idle. ? or F1 opens the full key reference; the footer shows only the keys that apply now. Mouse clicks select categories/items, toggle optimization checkboxes, and operate form fields/buttons.
+## TUI controls
 
-Forms have explicit Continue / Save to selection / Cancel buttons. Tab moves focus, arrows edit choices/cursor, Enter advances and submits from the last field, and Ctrl+Enter submits. Parameters that name an existing item (subscriptions, proxy groups and nodes, kernels to boot or remove) are never typed: the form reads the current items first and opens on a list where arrows move, typing filters, and Enter chooses; choosing the last one goes straight to confirmation. Left/Right also cycle through the items. A slow read shows a waiting dialog that Esc cancels, and when nothing is available a notice says why instead of opening an empty form. Ordinary confirmations default to Cancel; sensitive confirmation tokens still require exact input. Esc cancels a running task after closing any modal view. Q / Ctrl+C requests cancellation and exits after cleanup, including from the full task log. Interactive third-party tools temporarily take over the terminal. Logs expand when needed, and cancelled operations are distinguished from failures. When the terminal is too short for the log panel, the footer shows the task state and latest output, and a brief notice reports the outcome; language switches, category reordering and saved optimization items get the same notice. Resource gauges are colored by load (green below 70%, amber from 70%, red from 90%), and the screen recedes behind dialogs. Layouts support 80×24 or larger terminals.
+Navigation has no category/action focus. Section headings are not selectable; each category remembers its selected action. Only Optimization has checkboxes. Mouse clicks select categories/items, exact checkbox clicks toggle selection, and the wheel operates the region beneath it. Overlays and the style panel own input and ignore background clicks.
+
+| Key | Action |
+| --- | --- |
+| Up/Down, j/k, Home/End | Move through actions or to the first/last action |
+| Left/Right, Tab/Shift+Tab | Switch category |
+| 1–9, O/0 | Jump to numbered categories or pinned Optimization |
+| Alt+Up/Down | Reorder ordinary categories while idle; save immediately |
+| Enter | Open/configure/run an action; in Optimization configure or toggle selection |
+| Space, X/F5, A | Optimization only: select, review/run the plan, or apply the recommended set |
+| / | Search; typing edits, Up/Down/PgUp/PgDn select, Enter activates, Tab jumps, Esc closes |
+| T | Style panel; Up/Down/j/k/Home/End or mouse previews, Enter saves, Esc restores |
+| R / N | Refresh local metrics / query public IP |
+| G / F2, PgUp/PgDn | Toggle inline / full log; scroll logs |
+| L | Switch and save language |
+| ? / F1 | Complete contextual key reference |
+| Esc | Close the current layer or cancel a running task; no action while idle |
+| Q / Ctrl+C | Quit, or cancel and quit after cleanup |
+
+The plan shows current readings, expected changes and the equivalent CLI command. Batch progress retains each step's result and elapsed time until the checklist changes or a new task starts. The recommended set is package updates, standard cleanup, TCP tuning and BBR.
+
+Forms have explicit Continue / Save to selection / Cancel buttons. Tab moves focus, arrows edit choices/cursor, Enter advances and submits from the last field, and Ctrl+Enter submits. Parameters that name an existing item (subscriptions, proxy groups and nodes, kernels to boot or remove) are never typed: the form reads the current items first and opens on a list where arrows move, typing filters, and Enter chooses; choosing the last one goes straight to confirmation. Left/Right also cycle through the items. A slow read shows a waiting dialog that Esc cancels, and when nothing is available a notice says why instead of opening an empty form. Ordinary confirmations default to Cancel; sensitive confirmation tokens still require exact input. Esc cancels a running task after closing any modal view. Q / Ctrl+C requests cancellation and exits after cleanup, including from the full task log. Interactive third-party tools temporarily take over the terminal. Logs expand when needed, and cancelled operations are distinguished from failures. When the terminal is too short for the log panel, the footer shows the task state and latest output, and a brief notice reports the outcome; language switches, category reordering and saved optimization items get the same notice. Resource gauges use the active theme's meter, warning and danger roles at the 70% and 90% thresholds, and the screen recedes behind dialogs. Layouts support 80×24 or larger terminals.
 
 Version 0.1.1 fixes package upgrades hanging on hidden debconf/ucf dialogs. Built-in apt operations run noninteractively, retain locally edited configuration and disable dpkg's private PTY. needrestart lists restart requirements. Captured commands cannot read the TUI's controlling terminal, and complete ANSI control sequences are removed from logs. After interrupting an older version's upgrade, wait for apt/dpkg to exit and inspect `dpkg --audit` from a separate SSH session before completing pending configuration. Do not delete lock files.
 
+Reversible Run-mode forms use Confirm execution and skip the generic prompt after review; irreversible forms Continue to that prompt. Specific confirmations still apply. 80×24 keeps all categories, the selected action, impact and primary hints visible. Meters use the theme's normal color below 70%, warning from 70%, and danger from 90%.
+
+## Themes
+
+Default `aurora` derives colors from the detected terminal background; unavailable detection uses classic dark colors and patterns. `cqs themes` and `cqs themes --json` list the eight built-ins and custom files.
+Precedence is `--theme` > `CQS_THEME` > config.toml `theme` > aurora. The flag only affects the TUI. T previews immediately; Enter saves without changing other preferences, Esc restores, and a failed save restores the prior theme and reports the error. Flag/environment overrides apply again next launch.
+Set `detect_background = false` to disable the query. Custom TOML files live in `$XDG_CONFIG_HOME/cqs/themes`, default `$HOME/.config/cqs/themes`; `--config` does not relocate them. See [theme format and validation](docs/THEMES.md).
+Ambiguous-width Unicode can misalign on some terminals; use `--theme plain --lang en-US` for IPMI or serial consoles. Older releases reject `theme` and `detect_background`; remove both keys before downgrading.
+Export JSON/HTML with `cargo run --release --example tui_snapshot -- target/previews/status.json 120 36 en-US aurora '#0b1119'`; backgrounds also accept `unavailable` and `disabled`.
+
 ## CLI
+
+`cqs batch` asks for one generic confirmation before the batch. Interactive operation-specific confirmations remain per operation; existing `--yes` behavior is unchanged. Skipped steps are not reported as successes.
 
 ```bash
 cqs list

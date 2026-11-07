@@ -1,0 +1,119 @@
+# case baseline_form_submit_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭ System & resources ── updated 2s ago ╮╭ Network & proxy ── looked up 12s ago ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  Memory ━━━──  63% ││ BBR   ○ Disabled · available / v3    │
+│ Disk ━━━────  41%  Swap   ╸────  10% ││ TCP   ○ not configured · fq_codel    │
+│╭ Tune TCP buffers ──────────────────────────────────────────────────────────╮│
+││                                                                            ││
+││  Set parameters, then Continue to review and execute.                      ││
+╰│                                                                            │╯
+╭│    Bandwidth (Mbit/s) *  1/2                                               │╮
+││    1000                                                                    │┃
+││                                                                            │┃
+││    RTT (ms) *  2/2                                                         │┃
+││    50                                                                      │┃
+││                                                                            ││
+││                                                                            ││
+││  [ Continue ]  [ Cancel ]                                                  ││
+││                                                                            ││
+││  Tab/↑↓ field  ←→ choice / cursor  Ctrl+Enter submit  Esc Cancel           │┤
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│  9 Prompt        ││ Read only · Current user                                 │
+│    Tests         ││ Read host, CPU, memory, disk, IP and BBR status.         │
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ ↑↓ move  Enter open  ←→ switch category  O optimize  R refresh  Q quit  ? help 
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 80 #3d5265 reset -
+3 0 80 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 2 18 #45cdb6 reset bold
+4 20 59 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 4 72 #91a2b0 reset -
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 4 2 #45cdb6 reset -
+8 6 18 reset reset bold
+8 24 2 #ff7585 reset -
+8 26 5 #91a2b0 reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 6 69 reset reset underlined
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 4 2 #45cdb6 reset -
+11 6 8 reset reset bold
+11 14 2 #ff7585 reset -
+11 16 5 #91a2b0 reset -
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 6 69 reset reset underlined
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 78 1 #45cdb6 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 4 12 black #45cdb6 bold
+15 78 1 #45cdb6 reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 78 1 #45cdb6 reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 4 6 #45cdb6 reset bold
+17 10 6 #91a2b0 reset -
+17 18 2 #45cdb6 reset bold
+17 20 16 #91a2b0 reset -
+17 38 10 #45cdb6 reset bold
+17 48 7 #91a2b0 reset -
+17 57 3 #45cdb6 reset bold
+17 60 7 #91a2b0 reset -
+17 78 1 #45cdb6 reset -
+17 79 1 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 78 #45cdb6 reset -
+18 79 1 #3d5265 reset -
+19 0 80 #3d5265 reset -
+20 0 80 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

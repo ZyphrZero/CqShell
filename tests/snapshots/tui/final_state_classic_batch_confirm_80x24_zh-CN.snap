@@ -1,0 +1,104 @@
+# case final_state_classic_batch_confirm_80x24_zh-CN
+# size 80x24
+# theme classic
+# background #0b1119
+# locale zh-CN
+ CqShell v0.1.4  一键优化 · 4                 vps-sg-01 · ● 普通用户 · 简体中文 
+╭ 系统与资源 ────────── 本机 2s 前更新 ╮╭ 网络与代理 ───────── 公网 12s 前查询 ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  内存 ━━━━╸──  63% ││ BBR  ○ 未启用 · 可用 / v3 · cubic    │
+│ 磁盘 ━━━────  41%  交换 ╸──────  10% ││ TCP  ○ 未配置 · fq_codel             │
+│ 主机 vps-sg-01                       ││ IPv4 203.0.113.24                    │
+│╭ ! 确认操作 ────────────────────────────────────────────────────────────────╮│
+││                                                                            ││
+╰│  按顺序执行以下清单？具体操作可能仍需进一步确认。                          │╯
+╭│                                                                            │╮
+││  1. 更新系统软件包                                                         │┃
+││  2. 清理系统 (scope=standard)                                              │┃
+││  3. TCP 缓冲区调优 (bandwidth=1000, rtt=50)                                │┃
+││  4. 启用当前内核的 BBR (qdisc=fq)                                          │┃
+││                                                                            │┃
+││  [ 取消 ]  [ 确认执行 ]                                                    ││
+││                                                                            ││
+││  ←→ 切换  Enter 确认  Y 执行  Esc 取消                                     ││
+│╰────────────────────────────────────────────────────────────────────────────╯┤
+│  8 Agent 工具    ││更新系统软件包                                            │
+│  9 终端美化      ││会修改系统或用户文件 · 需要 root                          │
+│    服务器测试    ││1. 更新系统软件包                                         │
+│    CqShell       ││X 核对并执行  A 套用推荐组合                              │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ Enter 确认  Esc 返回                                                           
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 80 #3d5265 reset -
+3 0 80 #3d5265 reset -
+4 0 80 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #ffbe5e reset -
+5 2 12 #ffbe5e reset bold
+5 14 65 #ffbe5e reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #ffbe5e reset -
+6 78 1 #ffbe5e reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #ffbe5e reset -
+7 4 48 reset reset bold
+7 78 1 #ffbe5e reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #ffbe5e reset -
+8 78 1 #ffbe5e reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #ffbe5e reset -
+9 78 1 #ffbe5e reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #ffbe5e reset -
+10 78 1 #ffbe5e reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #ffbe5e reset -
+11 78 1 #ffbe5e reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #ffbe5e reset -
+12 78 1 #ffbe5e reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #ffbe5e reset -
+13 78 1 #ffbe5e reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #ffbe5e reset -
+14 4 8 black #45cdb6 bold
+14 14 12 #ffbe5e reset -
+14 78 1 #ffbe5e reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #ffbe5e reset -
+15 78 1 #ffbe5e reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #ffbe5e reset -
+16 4 2 #45cdb6 reset bold
+16 6 5 #91a2b0 reset -
+16 13 5 #45cdb6 reset bold
+16 18 5 #91a2b0 reset -
+16 25 1 #45cdb6 reset bold
+16 26 5 #91a2b0 reset -
+16 33 3 #45cdb6 reset bold
+16 36 5 #91a2b0 reset -
+16 78 1 #ffbe5e reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 78 #ffbe5e reset -
+17 79 1 #3d5265 reset -
+18 0 80 #3d5265 reset -
+19 0 80 #3d5265 reset -
+20 0 80 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

@@ -1,0 +1,208 @@
+system.info            System overview
+  Read host, CPU, memory, disk, IP and BBR status.
+system.public_ip       Public IP / ISP lookup
+  Query IPv4, IPv6 and ISP over HTTPS. Contacts ip.sb and ipinfo.io only when selected.
+system.update          Update packages
+  Update apt metadata and upgrade packages under the shared kernel lock. Use noninteractive mode and preserve locally edited configuration. List services needing restart for later maintenance.
+system.mirror.test     Benchmark system mirrors
+  Download a 1 MiB repository index sample from each of four HTTPS mirrors on this server, at most 8 seconds per mirror. Rank measured transfer speed, including connection time; report failed samples. Does not change sources. Results are a short sample, not a sustained bandwidth guarantee.
+system.mirror.apply    Change system mirror · LinuxMirrors
+  Use pinned, SHA-256 verified LinuxMirrors Lite. Choose official, Tsinghua, USTC, Aliyun, or auto to benchmark then confirm the fastest successful sample. Rebuild standard APT sources with upstream component/source-package defaults; keep separate third-party files. Use official security repositories. Back up and restore configuration on failure; never upgrade packages.
+  mirror_site=auto ["auto", "official", "tuna", "ustc", "aliyun"]
+system.mirror.restore  Restore previous system sources
+  Recover an interrupted mirror operation, or undo the last successful change. Refuse to overwrite later manual edits. Restore configuration before refreshing APT; an index refresh failure keeps the restored configuration.
+system.clean           Clean system
+  Standard: apt cache and journals older than 7 days. Full also deletes logs, temporary files, user caches and unused Docker data. All kernels are retained.
+  scope=standard ["standard", "full"]
+system.timezone        Set timezone
+  Choose common timezones in China, Singapore, Japan, the US (Eastern/Central/Mountain/Pacific), the UK, Germany, France and other regions, or enter another IANA timezone name. Apply using timedatectl.
+  timezone=Asia/Shanghai ["Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei", "Asia/Singapore", "Asia/Tokyo", "Asia/Seoul", "Asia/Bangkok", "Asia/Kolkata", "Asia/Dubai", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Toronto", "Europe/London", "Europe/Berlin", "Europe/Paris", "Europe/Amsterdam", "Europe/Helsinki", "Europe/Moscow", "Australia/Sydney", "Australia/Perth", "Pacific/Auckland", "UTC"]
+swap.create            Create swap
+  Create /swapfile and register it in fstab; refuse an existing file.
+  size_mb=2048 []
+swap.auto              Rebuild swap automatically
+  Compute swap size from physical memory and rebuild /swapfile. Preserve the previous file until the operation succeeds.
+swap.remove            Remove swap
+  Disable and delete only /swapfile and its exact fstab entry.
+system.fail2ban        Install fail2ban
+  Install fail2ban and a managed sshd jail using the actual SSH ports and systemd journal.
+ssh.port               Change SSH port
+  Validate the candidate and actual listener; roll back on failure. External firewall reachability must be checked separately.
+  port=55520 []
+ssh.key                Configure key-only SSH login
+  Import a public key for the current HOME, test a new connection, then disable global password and keyboard-interactive authentication. Never print private keys.
+  public_key= []
+bbr.status             BBR and queue status
+  Inspect the running implementation, congestion control and real interface queues.
+bbr.enable             Enable BBR in the running kernel
+  Enable the BBR implementation supplied by the running kernel, including BBRv3 when provided. Set the default queue and preserve the original settings for restoration.
+  qdisc=fq ["fq", "fq_codel", "fq_pie", "cake"]
+bbr.restore            Restore BBR settings
+  Restore the recorded runtime values and original persistent configuration.
+tcp.tune               Tune TCP buffers
+  Calculate a buffer ceiling from bandwidth, RTT and cgroup memory limits; apply, verify and persist with recovery.
+  bandwidth=1000 []
+  rtt=50 []
+tcp.restore            Restore TCP settings
+  Restore the first recorded TCP runtime values and configuration.
+clash.install          Install / update Mihomo
+  Download the official Mihomo Linux binary for this architecture, verify its release metadata, SHA-256, ELF architecture and reported version, then atomically install it for the current user.
+  version= []
+clash.status           Mihomo status
+  Read the Mihomo process, PID and configured HTTP/SOCKS proxy endpoints without starting or changing it.
+clash.start            Start Mihomo
+  Validate the base and Mixin YAML, publish a runtime configuration atomically, then start Mihomo with an ownership-checked PID record.
+clash.stop             Stop Mihomo
+  Send SIGTERM to the CqShell-owned Mihomo process and wait for it to exit.
+clash.sub.list         List subscriptions
+  Show saved subscriptions and the selected profile without downloading or changing the running process.
+clash.sub.add          Add subscription
+  Download an HTTPS subscription, validate its YAML and proxy sources, save it atomically, and optionally select it.
+  name= []
+  url= []
+  use=off ["on", "off"]
+clash.sub.use          Select subscription
+  Atomically copy a saved subscription into the base configuration; restart Mihomo separately to apply it.
+  name= []
+clash.sub.update       Update subscription
+  Download a saved subscription again, validate it, and atomically replace its profile; refresh the base configuration when it is selected.
+  name= []
+clash.sub.remove       Remove subscription
+  Delete a saved subscription and its selected base configuration when applicable.
+  name= []
+clash.controller.status Controller configuration
+  Show the configured controller endpoint and whether authentication is set; never display the secret.
+clash.controller.configure Configure controller
+  While stopped, configure an IP or localhost and port, validate it, and transactionally save the Mixin.
+  controller_address=127.0.0.1:9090 []
+clash.proxies          List proxy groups and nodes
+  Query the configured controller for proxy groups, members and current selections.
+clash.proxy.select     Select proxy node
+  Validate the group and its member, then select it through the controller.
+  proxy_group= []
+  proxy_node= []
+clash.secret.generate  Generate controller secret
+  While stopped, generate a random controller secret and save it in the private Mixin without displaying it.
+clash.secret.set       Set secret from private file
+  While stopped, read the secret from a private file to keep plaintext out of command arguments; use mode 0600 on Linux.
+  secret_file= []
+clash.secret.clear     Clear controller secret
+  While stopped, clear authentication; only a loopback controller may be used without a secret.
+clash.panel.status     Web dashboard status and URL
+  Check dashboard resources and show its URL without a secret. Loopback endpoints require local access or an SSH tunnel.
+clash.panel.install    Install / update Web dashboard
+  Download official stable MetaCubeXD assets, verify SHA-256 and safely extract them, then validate external-ui while Mihomo is stopped.
+  version= []
+clash.tun.status       TUN configuration and ownership
+  Read TUN settings, link state and process ownership.
+clash.tun.configure    Configure TUN mode
+  Configure TUN while stopped. Enabling requires native Linux, root, NET_ADMIN and an available device; WSL and containers are rejected.
+  enabled=off ["on", "off"]
+  tun_stack=mixed ["system", "gvisor", "mixed"]
+  tun_device=cqs-tun []
+  auto_route=on ["on", "off"]
+  dns_hijack=on ["on", "off"]
+clash.logs             View / follow Mihomo logs
+  Read a bounded log tail and redact secrets, proxy credentials and subscription queries; following can be cancelled.
+  lines=100 []
+  follow=off ["on", "off"]
+clash.service.status   systemd service status
+  Show the CqShell Mihomo service state in the selected scope.
+  service_scope=user ["user", "system"]
+clash.service.install  Install systemd autostart service
+  Install and enable systemd management for these data paths; system scope requires root. Start it separately after installation.
+  service_scope=user ["user", "system"]
+clash.service.remove   Remove systemd service
+  Stop and disable the CqShell-managed service, retaining its binary and configuration.
+  service_scope=user ["user", "system"]
+kernel.list            List kernels
+  Show installed kernel packages and the currently running release.
+kernel.install         Install BBRv3 kernel
+  Install a Standard or Max BBRv3 kernel from byJoey/Actions-bbr-v3, using the latest matching release or a specified version. Verify packages, back up GRUB and update boot configuration. After booting the new kernel, configure BBR and its queue under Network.
+  profile=standard ["standard", "max"]
+  version= []
+kernel.boot            Switch boot kernel
+  Select an installed Debian/Ubuntu kernel for the next boot. Interactive sessions separately confirm a reboot; non-interactive --yes only sets the target. The TUI lists installed kernels; on the CLI, pass a release shown by List kernels. Only a unique normal GRUB entry with complete boot files is accepted.
+  release= []
+kernel.remove          Remove a non-running BBRv3 kernel
+  Simulate removal and refuse extra package removals; preserve the running kernel and boot backup.
+  release= []
+tools.curl             curl downloader
+  Install curl through apt for downloads and network requests.
+tools.wget             wget downloader
+  Install wget through apt for file downloads.
+tools.nano             nano text editor
+  Install the nano terminal text editor through apt.
+tools.unzip            unzip archive extractor
+  Install unzip through apt to extract ZIP archives.
+tools.tar              tar archiver
+  Install tar through apt to create and extract archives.
+tools.tmux             tmux terminal multiplexer
+  Install tmux through apt to retain sessions and manage multiple terminals.
+tools.iftop            iftop network monitor
+  Install iftop through apt to inspect live network traffic.
+tools.btop             btop system monitor
+  Install btop through apt to inspect CPU, memory and processes.
+tools.gdu              gdu disk usage analyzer
+  Install gdu through apt to analyze directory disk usage.
+tools.fzf              fzf fuzzy finder
+  Install the fzf interactive fuzzy finder through apt.
+tools.install          Install all / choose a package
+  Install a selected package; all also installs zsh and Starship without enabling prompt customization.
+  package=all ["all", "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf"]
+ai.pi.install          Install / update Pi
+  Download the official standalone Pi Linux binary package, verify SHA-256 and retain themes, WASM and other resources. No Node.js/npm required. Verify the version before updating the current user's command.
+ai.claude.install      Install / update Claude Code
+  Download the official Claude Code Linux binary and verify SHA-256 against its manifest. No Node.js/npm required. Verify the version before updating ~/.local/bin/claude; retain user configuration and previous versions.
+ai.codex.install       Install / update Codex CLI
+  Download the complete official Codex Linux binary package with its helper programs and resources. Verify SHA-256 and the version. No Node.js/npm required. Default entrypoint: ~/.local/bin/codex; respects CODEX_INSTALL_DIR.
+ai.status              Agent tool versions
+  Check common user installation directories and PATH for Pi, Claude Code and Codex, then read --version. Distinguish missing commands from execution failures. Does not sign in.
+terminal.install       Install zsh / Starship
+  Install zsh and a checksum-verified Starship release. Keep the login shell unchanged.
+terminal.apply         Configure prompt
+  Update only managed shell initialization blocks and a dedicated Starship TOML file. Preserve a first-use baseline.
+  shell=bash ["bash", "zsh", "both"]
+  style=full ["compact", "full"]
+  color=cyan ["cyan", "green", "magenta"]
+  time=off ["on", "off"]
+  git=on ["on", "off"]
+terminal.status        Prompt status
+  Read saved prompt options and recovery baseline status for the current HOME.
+terminal.restore       Restore original prompt files
+  Restore files byte-for-byte from the first-use baseline. This overwrites later manual edits to managed files.
+docker.install         Install Docker
+  Run the explicitly selected third-party installer; keep existing daemon configuration.
+  source=official ["official", "china"]
+docker.status          Docker status
+  Show versions, images, containers, volumes, networks and registry mirrors.
+docker.clean           Prune Docker data
+  Irreversibly remove unused images, stopped containers, networks and eligible volumes.
+docker.mirror          Set registry mirror
+  Merge the mirror into daemon.json, validate and restart Docker; restore configuration and service state on failure.
+  mirror= []
+docker.ipv6            Configure Docker IPv6
+  Merge IPv6 settings and restart Docker. A generated ULA subnet does not provide public IPv6 routing.
+  enabled=on ["on", "off"]
+docker.uninstall       Uninstall Docker
+  Remove installed Docker packages. Data is retained unless purge_data=on explicitly deletes the default data/config directories.
+  purge_data=off ["on", "off"]
+test.speed             Speedtest
+  Run Ookla Speedtest; confirm its terms. Installation requires root if the binary is missing.
+test.ip                IP quality · xykt/IPQuality
+  Use xykt/IPQuality for IP type, risk scores/factors, streaming/AI access and mail checks. Choose dual-stack/IPv4/IPv6; language follows the UI. Online report upload is disabled; full IP display is off by default. The script takes over the terminal and may ask to install missing dependencies.
+  ip_family=dual ["dual", "ipv4", "ipv6"]
+  full_ip=off ["off", "on"]
+test.route             Return-route test
+  Install NextTrace with its upstream script, then run a fast TCP trace.
+test.performance       YABS benchmark
+  Run the third-party YABS script interactively; may consume CPU, disk and network resources.
+test.connectivity      IPv4 / IPv6 connectivity
+  Probe both address families over HTTPS and show explicit gai.conf precedence entries.
+test.io                Disk I/O benchmark
+  Write and sync a 1 GiB temporary file three times in the selected directory; remove it afterward.
+  directory=/var/tmp []
+app.install            Install cqs command
+  Atomically install this executable at CQS_INSTALL_PATH (default /usr/local/bin/cqs).
+app.uninstall          Uninstall cqs command
+  Remove only the installed command. Keep software, configuration and recovery material.

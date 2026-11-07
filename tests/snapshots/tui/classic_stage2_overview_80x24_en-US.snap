@@ -1,0 +1,143 @@
+# case classic_stage2_overview_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭╭ Live system status ──────────────────────────────────────── updated 2s ago ╮╮
+││                                                                            ││
+││  System                                                                    ┃│
+││  Host                vps-sg-01                                             ┃│
+││  OS                  Debian GNU/Linux 12 (bookworm)                        ┃│
+││  Kernel status       Running 6.12.8-joeyblog-bbrv3                         ┃│
+╰│  Arch / uptime       x86_64 · 3d 04h 00m                                   ┃╯
+╭│  CPU                 AMD EPYC 7B13 × 2                                     ┃╮
+││  Timezone            Asia/Shanghai                                         ┃┃
+││                                                                            ┃┃
+││  Resources                                                                 ┃┃
+││  CPU usage           12.0%                                                 ┃┃
+││  Memory              63.2% · 1.2 GiB / 1.9 GiB                             ┃│
+││  Disk                / · 41.0% · 16.4 GiB / 40.0 GiB                       ││
+││  Swap                10.0% · 205 MiB / 2.0 GiB                             ││
+││                                                                            ││
+││  Network                                                                   │┤
+││  Congestion / queue  cubic / fq_codel / Disabled · available / v3          ││
+││  TCP config          ○ not configured                                      ││
+││                                                                            ││
+││  R refresh  N public IP  PgUp/PgDn scroll  Esc back                        ││
+╰╰────────────────────────────────────────────────────────────────────────────╯╯
+ R refresh  N public IP  Esc back                                               
+---
+0 0 80 #3d5265 reset -
+1 0 1 #3d5265 reset -
+1 1 1 #45cdb6 reset -
+1 2 20 #45cdb6 reset bold
+1 22 40 #45cdb6 reset -
+1 62 16 #91a2b0 reset -
+1 78 1 #45cdb6 reset -
+1 79 1 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 1 1 #45cdb6 reset -
+2 78 1 #45cdb6 reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 1 1 #45cdb6 reset -
+3 4 6 #45cdb6 reset bold
+3 78 1 #45cdb6 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 4 20 #91a2b0 reset -
+4 78 1 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 4 20 #91a2b0 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 4 20 #91a2b0 reset -
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 4 20 #91a2b0 reset -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 4 20 #91a2b0 reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 4 20 #91a2b0 reset -
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 4 9 #45cdb6 reset bold
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 4 20 #91a2b0 reset -
+12 24 5 #5dd888 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 4 20 #91a2b0 reset -
+13 24 25 #5dd888 reset -
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 4 20 #91a2b0 reset -
+14 24 31 #5dd888 reset -
+14 78 2 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 4 20 #91a2b0 reset -
+15 24 25 #5dd888 reset -
+15 78 2 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 78 2 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 4 7 #45cdb6 reset bold
+17 78 2 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 1 #45cdb6 reset -
+18 4 20 #91a2b0 reset -
+18 78 2 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 1 1 #45cdb6 reset -
+19 4 36 #91a2b0 reset -
+19 78 2 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 1 1 #45cdb6 reset -
+20 78 1 #45cdb6 reset -
+20 79 1 #3d5265 reset -
+21 0 1 #3d5265 reset -
+21 1 1 #45cdb6 reset -
+21 4 1 #45cdb6 reset bold
+21 5 8 #91a2b0 reset -
+21 15 1 #45cdb6 reset bold
+21 16 10 #91a2b0 reset -
+21 28 9 #45cdb6 reset bold
+21 37 7 #91a2b0 reset -
+21 46 3 #45cdb6 reset bold
+21 49 5 #91a2b0 reset -
+21 78 1 #45cdb6 reset -
+21 79 1 #3d5265 reset -
+22 0 1 #3d5265 reset -
+22 1 78 #45cdb6 reset -
+22 79 1 #3d5265 reset -
+23 0 80 #3d5265 reset -

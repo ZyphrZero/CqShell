@@ -1,0 +1,143 @@
+# case baseline_overview_80x24_zh-CN
+# size 80x24
+# theme classic
+# background unavailable
+# locale zh-CN
+ CqShell v0.1.4  系统管理 › 系统概览          vps-sg-01 · ● 普通用户 · 简体中文 
+╭╭ 本机常驻状态 ────────────────────────────────────────────── 本机 2s 前更新 ╮╮
+││                                                                            ││
+││  系统                                                                      ┃│
+││  主机          vps-sg-01                                                   ┃│
+││  系统          Debian GNU/Linux 12 (bookworm)                              ┃│
+││  内核状态      运行中 6.12.8-joeyblog-bbrv3                                ┃│
+╰│  架构 / 运行   x86_64 · 3d 04h 00m                                         ┃╯
+╭│  CPU           AMD EPYC 7B13 × 2                                           ┃╮
+││  时区          Asia/Shanghai                                               ┃┃
+││                                                                            ┃┃
+││  资源                                                                      ┃┃
+││  CPU 占用      12.0%                                                       ┃┃
+││  内存          63.2% · 1.2 GiB / 1.9 GiB                                   ┃│
+││  磁盘          / · 41.0% · 16.4 GiB / 40.0 GiB                             ││
+││  交换          10.0% · 205 MiB / 2.0 GiB                                   ││
+││                                                                            ││
+││  网络                                                                      │┤
+││  拥塞 / 队列   cubic / fq_codel / 未启用 · 可用 / v3                       ││
+││  TCP 调优      ○ 未配置                                                    ││
+││                                                                            ││
+││  R 刷新  N 公网查询  PgUp/PgDn 滚动  Esc 返回                              ││
+╰╰────────────────────────────────────────────────────────────────────────────╯╯
+ R 刷新  N 公网查询  Esc 返回                                                   
+---
+0 0 80 #3d5265 reset -
+1 0 1 #3d5265 reset -
+1 1 1 #45cdb6 reset -
+1 2 14 #45cdb6 reset bold
+1 16 46 #45cdb6 reset -
+1 62 16 #91a2b0 reset -
+1 78 1 #45cdb6 reset -
+1 79 1 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 1 1 #45cdb6 reset -
+2 78 1 #45cdb6 reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 1 1 #45cdb6 reset -
+3 4 4 #45cdb6 reset bold
+3 78 1 #45cdb6 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 4 14 #91a2b0 reset -
+4 78 1 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 4 14 #91a2b0 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 4 14 #91a2b0 reset -
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 4 14 #91a2b0 reset -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 4 14 #91a2b0 reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 4 14 #91a2b0 reset -
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 4 4 #45cdb6 reset bold
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 4 14 #91a2b0 reset -
+12 18 5 #5dd888 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 4 14 #91a2b0 reset -
+13 18 25 #5dd888 reset -
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 4 14 #91a2b0 reset -
+14 18 31 #5dd888 reset -
+14 78 2 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 4 14 #91a2b0 reset -
+15 18 25 #5dd888 reset -
+15 78 2 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 78 2 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 4 4 #45cdb6 reset bold
+17 78 2 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 1 #45cdb6 reset -
+18 4 14 #91a2b0 reset -
+18 78 2 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 1 1 #45cdb6 reset -
+19 4 22 #91a2b0 reset -
+19 78 2 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 1 1 #45cdb6 reset -
+20 78 1 #45cdb6 reset -
+20 79 1 #3d5265 reset -
+21 0 1 #3d5265 reset -
+21 1 1 #45cdb6 reset -
+21 4 1 #45cdb6 reset bold
+21 5 5 #91a2b0 reset -
+21 12 1 #45cdb6 reset bold
+21 13 9 #91a2b0 reset -
+21 24 9 #45cdb6 reset bold
+21 33 5 #91a2b0 reset -
+21 40 3 #45cdb6 reset bold
+21 43 5 #91a2b0 reset -
+21 78 1 #45cdb6 reset -
+21 79 1 #3d5265 reset -
+22 0 1 #3d5265 reset -
+22 1 78 #45cdb6 reset -
+22 79 1 #3d5265 reset -
+23 0 80 #3d5265 reset -

@@ -5,3 +5,6 @@ __pycache__/
 .codegraph/
 
 /.omx/
+/.kiro/
+/AGENTS.md
+/docs/REMOTE_VALIDATION.md

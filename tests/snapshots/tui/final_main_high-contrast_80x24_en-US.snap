@@ -1,0 +1,183 @@
+# case final_main_high-contrast_80x24_en-US
+# size 80x24
+# theme high-contrast
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+┏ System & resources ━━ updated 2s ago ┓┏ Network & proxy ━━ looked up 12s ago ┓
+┃ CPU  ▂▃▁▁▂▂▁  12%  Memory ███░░  63% ┃┃ BBR   ○ Disabled · available / v3    ┃
+┃ Disk ███░░░░  41%  Swap   ▌░░░░  10% ┃┃ TCP   ○ not configured · fq_codel    ┃
+┃ Host   vps-sg-01                     ┃┃ IPv4  203.0.113.24                   ┃
+┃ Kernel 6.12.8-joeyblog-bbrv3         ┃┃ IPv6  2001:db8:3c4d:15::1a2f         ┃
+┃ Uptime 3d 04h 00m · Asia/Shanghai    ┃┃ Proxy Mihomo ● Running · v1.19.2     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏ Categories ━━━━━━┓┏ System ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1/12 ┓
+┃  0 Optimization  ┃┃  Overview                                                ┃
+┃  ────────────────┃┃› System overview                                         ┃
+┃› 1 System        ┃┃  Public IP / ISP lookup                           12s ago┃
+┃  2 Kernel        ┃┃  Packages & mirrors                                      ┃
+┃  3 Network       ┃┃  Update packages                                         │
+┃  4 SSH           ┃┃  Benchmark system mirrors                                │
+┃  5 Docker        ┃┃  Change system mirror · LinuxMirrors…                    │
+┃  6 Mihomo proxy ●┃┃  Restore previous system sources                         │
+┃  7 Tools         ┃┣ Details ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃  8 Agent tools   ┃┃ System overview                                          ┃
+┃  9 Prompt        ┃┃ Read only · Current user                                 ┃
+┃    Tests         ┃┃ Read host, CPU, memory, disk, IP and BBR status.         ┃
+┃    CqShell       ┃┃ cqs run system.info                                      ┃
+┗━━━━━━━━━━━━━━━━━━┛┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ [↑↓] move  [ENTER] open  [/] search actions  [←→] switch category  [?] help    
+---
+0 0 1 #ffffff #000000 -
+0 1 7 #ffd400 #000000 bold
+0 8 1 #ffffff #000000 -
+0 9 6 #e6e6e6 #000000 -
+0 15 2 #ffffff #000000 -
+0 17 6 #e6e6e6 #000000 -
+0 23 3 #bdbdbd #000000 -
+0 26 34 #ffffff #000000 -
+0 60 12 #bdbdbd #000000 -
+0 72 7 #e6e6e6 #000000 -
+0 79 1 #ffffff #000000 -
+1 0 1 #ffffff #000000 -
+1 1 20 #ffffff #000000 bold
+1 21 2 #ffffff #000000 -
+1 23 16 #e6e6e6 #000000 -
+1 39 2 #ffffff #000000 -
+1 41 17 #ffffff #000000 bold
+1 58 2 #ffffff #000000 -
+1 60 19 #e6e6e6 #000000 -
+1 79 1 #ffffff #000000 -
+2 0 2 #ffffff #000000 -
+2 2 5 #e6e6e6 #000000 -
+2 7 12 #ffd400 #000000 -
+2 19 2 #ffffff #000000 -
+2 21 7 #e6e6e6 #000000 -
+2 28 3 #ffd400 #000000 -
+2 31 2 #ffffff #000000 -
+2 33 5 #ffd400 #000000 -
+2 38 4 #ffffff #000000 -
+2 42 16 #e6e6e6 #000000 -
+2 58 3 #bdbdbd #000000 -
+2 61 19 #ffffff #000000 -
+3 0 2 #ffffff #000000 -
+3 2 5 #e6e6e6 #000000 -
+3 7 3 #ffd400 #000000 -
+3 10 4 #ffffff #000000 -
+3 14 5 #ffd400 #000000 -
+3 19 2 #ffffff #000000 -
+3 21 7 #e6e6e6 #000000 -
+3 28 1 #ffd400 #000000 -
+3 29 4 #ffffff #000000 -
+3 33 5 #ffd400 #000000 -
+3 38 4 #ffffff #000000 -
+3 42 22 #e6e6e6 #000000 -
+3 64 3 #bdbdbd #000000 -
+3 67 13 #ffffff #000000 -
+4 0 2 #ffffff #000000 -
+4 2 7 #e6e6e6 #000000 -
+4 9 33 #ffffff #000000 -
+4 42 6 #e6e6e6 #000000 -
+4 48 32 #ffffff #000000 -
+5 0 2 #ffffff #000000 -
+5 2 7 #e6e6e6 #000000 -
+5 9 33 #ffffff #000000 -
+5 42 6 #e6e6e6 #000000 -
+5 48 32 #ffffff #000000 -
+6 0 2 #ffffff #000000 -
+6 2 7 #e6e6e6 #000000 -
+6 9 10 #ffffff #000000 -
+6 19 3 #bdbdbd #000000 -
+6 22 20 #ffffff #000000 -
+6 42 6 #e6e6e6 #000000 -
+6 48 16 #00ff66 #000000 -
+6 64 3 #bdbdbd #000000 -
+6 67 13 #ffffff #000000 -
+7 0 80 #ffffff #000000 -
+8 0 1 #ffffff #000000 -
+8 1 12 #ffffff #000000 bold
+8 13 8 #ffffff #000000 -
+8 21 8 #ffffff #000000 bold
+8 29 44 #ffffff #000000 -
+8 73 6 #e6e6e6 #000000 -
+8 79 1 #ffffff #000000 -
+9 0 3 #ffffff #000000 -
+9 3 2 #bdbdbd #000000 -
+9 5 18 #ffffff #000000 -
+9 23 56 #e6e6e6 #000000 bold
+9 79 1 #ffd400 #000000 -
+10 0 21 #ffffff #000000 -
+10 21 58 #000000 #ffd400 bold
+10 79 1 #ffd400 #000000 -
+11 0 1 #ffffff #000000 -
+11 1 18 #000000 #ffd400 bold
+11 19 53 #ffffff #000000 -
+11 72 7 #e6e6e6 #000000 -
+11 79 1 #ffd400 #000000 -
+12 0 3 #ffffff #000000 -
+12 3 2 #bdbdbd #000000 -
+12 5 18 #ffffff #000000 -
+12 23 56 #e6e6e6 #000000 bold
+12 79 1 #ffd400 #000000 -
+13 0 3 #ffffff #000000 -
+13 3 2 #bdbdbd #000000 -
+13 5 18 #ffffff #000000 -
+13 23 15 #e6e6e6 #000000 -
+13 38 42 #ffffff #000000 -
+14 0 3 #ffffff #000000 -
+14 3 2 #bdbdbd #000000 -
+14 5 75 #ffffff #000000 -
+15 0 3 #ffffff #000000 -
+15 3 2 #bdbdbd #000000 -
+15 5 18 #ffffff #000000 -
+15 23 36 #e6e6e6 #000000 -
+15 59 21 #ffffff #000000 -
+16 0 3 #ffffff #000000 -
+16 3 2 #bdbdbd #000000 -
+16 5 12 #ffffff #000000 -
+16 17 2 #00ff66 #000000 -
+16 19 4 #ffffff #000000 -
+16 23 31 #e6e6e6 #000000 -
+16 54 26 #ffffff #000000 -
+17 0 3 #ffffff #000000 -
+17 3 2 #bdbdbd #000000 -
+17 5 16 #ffffff #000000 -
+17 21 9 #ffffff #000000 bold
+17 30 50 #ffffff #000000 -
+18 0 3 #ffffff #000000 -
+18 3 2 #bdbdbd #000000 -
+18 5 17 #ffffff #000000 -
+18 22 15 #ffffff #000000 bold
+18 37 43 #ffffff #000000 -
+19 0 3 #ffffff #000000 -
+19 3 2 #bdbdbd #000000 -
+19 5 17 #ffffff #000000 -
+19 22 9 #00ff66 #000000 -
+19 31 3 #bdbdbd #000000 -
+19 34 12 #e6e6e6 #000000 -
+19 46 34 #ffffff #000000 -
+20 0 3 #ffffff #000000 -
+20 3 2 #bdbdbd #000000 -
+20 5 75 #ffffff #000000 -
+21 0 3 #ffffff #000000 -
+21 3 2 #bdbdbd #000000 -
+21 5 17 #ffffff #000000 -
+21 22 19 #ffd400 #000000 -
+21 41 39 #ffffff #000000 -
+22 0 80 #ffffff #000000 -
+23 0 1 #ffffff #000000 -
+23 1 4 #ffd400 #000000 bold
+23 5 5 #e6e6e6 #000000 -
+23 10 2 #ffffff #000000 -
+23 12 7 #ffd400 #000000 bold
+23 19 5 #e6e6e6 #000000 -
+23 24 2 #ffffff #000000 -
+23 26 3 #ffd400 #000000 bold
+23 29 15 #e6e6e6 #000000 -
+23 44 2 #ffffff #000000 -
+23 46 4 #ffd400 #000000 bold
+23 50 16 #e6e6e6 #000000 -
+23 66 2 #ffffff #000000 -
+23 68 3 #ffd400 #000000 bold
+23 71 5 #e6e6e6 #000000 -
+23 76 4 #ffffff #000000 -

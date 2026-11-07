@@ -1,0 +1,264 @@
+# case final_main_high-contrast_120x36_en-US
+# size 120x36
+# theme high-contrast
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview                Use sudo cqs for system changes · vps-sg-01 · ● USER · English 
+┏ System & resources ━━━━━━━━━━━━━━━━━━━━━━ updated 2s ago ┓┏ Network & proxy ━━━━━━━━━━━━━━━━━━━━━━ looked up 12s ago ┓
+┃ CPU  ▅▄▃▂▃▁▁▂▂▁  12% 2-core  Memory ████░░  63% 1.2/1.9G ┃┃ BBR   ○ Disabled · available / v3 · cubic                ┃
+┃ Disk ██▌░░░  41% 16.4/40.0G  Swap   ▌░░░░░  10% 0.2/2.0G ┃┃ TCP   ○ not configured · fq_codel                        ┃
+┃ Host   vps-sg-01 · Debian GNU/Linux 12 (bookworm)        ┃┃ IPv4  203.0.113.24 · AS64500 Example Net                 ┃
+┃ Kernel 6.12.8-joeyblog-bbrv3 · x86_64                    ┃┃ IPv6  2001:db8:3c4d:15::1a2f                             ┃
+┃ Uptime 3d 04h 00m · Asia/Shanghai                        ┃┃ Proxy Mihomo ● Running · v1.19.2 · Terminal ● Enabled    ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+┏ Categories ━━━━━━┓┏ System ━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1/12 ┓┏ Details ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  0 Optimization  ┃┃  Overview                                ┃┃ System overview                                      ┃
+┃  ────────────────┃┃› System overview                         ┃┃ Read only · Current user                             ┃
+┃› 1 System        ┃┃  Public IP / ISP lookup           12s ago┃┃                                                      ┃
+┃  2 Kernel        ┃┃  Packages & mirrors                      ┃┃ Read host, CPU, memory, disk, IP and BBR status.     ┃
+┃  3 Network       ┃┃  Update packages                         ┃┃                                                      ┃
+┃  4 SSH           ┃┃  Benchmark system mirrors                ┃┃ cqs run system.info                                  ┃
+┃  5 Docker        ┃┃  Change system mirror · LinuxMirrors…    ┃┃                                                      ┃
+┃  6 Mihomo proxy ●┃┃  Restore previous system sources         ┃┃ Last result  Not run in this session                 ┃
+┃  7 Tools         ┃┃  Clean system…                   Disk 41%┃┃                                                      ┃
+┃  8 Agent tools   ┃┃  System settings                         ┃┃                                                      ┃
+┃  9 Prompt        ┃┃  Set timezone…              Asia/Shanghai┃┃                                                      ┃
+┃    Tests         ┃┃  Install fail2ban                        ┃┃                                                      ┃
+┃    CqShell       ┃┃  Swap                                    ┃┃                                                      ┃
+┃                  ┃┃  Create swap…            existing 2.0 GiB┃┃                                                      ┃
+┃                  ┃┃  Rebuild swap automatically              ┃┃                                                      ┃
+┃                  ┃┃  Remove swap             existing 2.0 GiB┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃                                                      ┃
+┃                  ┃┃                                          ┃┃ ↵ open overview                                      ┃
+┗━━━━━━━━━━━━━━━━━━┛┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+ [↑↓] move  [ENTER] open  [/] search actions  [←→] switch category  [O] optimize  [T] style  [R] refresh  [?] help      
+---
+0 0 1 #ffffff #000000 -
+0 1 7 #ffd400 #000000 bold
+0 8 1 #ffffff #000000 -
+0 9 6 #e6e6e6 #000000 -
+0 15 2 #ffffff #000000 -
+0 17 6 #e6e6e6 #000000 -
+0 23 3 #bdbdbd #000000 -
+0 26 31 #ffffff #000000 -
+0 57 34 #bdbdbd #000000 -
+0 91 9 #ffffff #000000 -
+0 100 12 #bdbdbd #000000 -
+0 112 7 #e6e6e6 #000000 -
+0 119 1 #ffffff #000000 -
+1 0 1 #ffffff #000000 -
+1 1 20 #ffffff #000000 bold
+1 21 22 #ffffff #000000 -
+1 43 16 #e6e6e6 #000000 -
+1 59 2 #ffffff #000000 -
+1 61 17 #ffffff #000000 bold
+1 78 22 #ffffff #000000 -
+1 100 19 #e6e6e6 #000000 -
+1 119 1 #ffffff #000000 -
+2 0 2 #ffffff #000000 -
+2 2 5 #e6e6e6 #000000 -
+2 7 15 #ffd400 #000000 -
+2 22 7 #e6e6e6 #000000 -
+2 29 2 #ffffff #000000 -
+2 31 7 #e6e6e6 #000000 -
+2 38 4 #ffd400 #000000 -
+2 42 2 #ffffff #000000 -
+2 44 5 #ffd400 #000000 -
+2 49 9 #e6e6e6 #000000 -
+2 58 4 #ffffff #000000 -
+2 62 16 #e6e6e6 #000000 -
+2 78 3 #bdbdbd #000000 -
+2 81 14 #ffffff #000000 -
+2 95 3 #bdbdbd #000000 -
+2 98 22 #ffffff #000000 -
+3 0 2 #ffffff #000000 -
+3 2 5 #e6e6e6 #000000 -
+3 7 3 #ffd400 #000000 -
+3 10 3 #ffffff #000000 -
+3 13 5 #ffd400 #000000 -
+3 18 11 #e6e6e6 #000000 -
+3 29 2 #ffffff #000000 -
+3 31 7 #e6e6e6 #000000 -
+3 38 1 #ffd400 #000000 -
+3 39 5 #ffffff #000000 -
+3 44 5 #ffd400 #000000 -
+3 49 9 #e6e6e6 #000000 -
+3 58 4 #ffffff #000000 -
+3 62 22 #e6e6e6 #000000 -
+3 84 3 #bdbdbd #000000 -
+3 87 33 #ffffff #000000 -
+4 0 2 #ffffff #000000 -
+4 2 7 #e6e6e6 #000000 -
+4 9 9 #ffffff #000000 -
+4 18 3 #bdbdbd #000000 -
+4 21 41 #ffffff #000000 -
+4 62 6 #e6e6e6 #000000 -
+4 68 12 #ffffff #000000 -
+4 80 3 #bdbdbd #000000 -
+4 83 37 #ffffff #000000 -
+5 0 2 #ffffff #000000 -
+5 2 7 #e6e6e6 #000000 -
+5 9 21 #ffffff #000000 -
+5 30 3 #bdbdbd #000000 -
+5 33 29 #ffffff #000000 -
+5 62 6 #e6e6e6 #000000 -
+5 68 52 #ffffff #000000 -
+6 0 2 #ffffff #000000 -
+6 2 7 #e6e6e6 #000000 -
+6 9 10 #ffffff #000000 -
+6 19 3 #bdbdbd #000000 -
+6 22 40 #ffffff #000000 -
+6 62 6 #e6e6e6 #000000 -
+6 68 16 #00ff66 #000000 -
+6 84 3 #bdbdbd #000000 -
+6 87 7 #ffffff #000000 -
+6 94 3 #bdbdbd #000000 -
+6 97 18 #00ff66 #000000 -
+6 115 5 #ffffff #000000 -
+7 0 120 #ffffff #000000 -
+8 0 1 #ffffff #000000 -
+8 1 12 #ffffff #000000 bold
+8 13 8 #ffffff #000000 -
+8 21 8 #ffffff #000000 bold
+8 29 28 #ffffff #000000 -
+8 57 6 #e6e6e6 #000000 -
+8 63 2 #ffffff #000000 -
+8 65 9 #ffffff #000000 bold
+8 74 46 #ffffff #000000 -
+9 0 3 #ffffff #000000 -
+9 3 2 #bdbdbd #000000 -
+9 5 18 #ffffff #000000 -
+9 23 40 #e6e6e6 #000000 bold
+9 63 3 #ffffff #000000 -
+9 66 15 #ffffff #000000 bold
+9 81 39 #ffffff #000000 -
+10 0 21 #ffffff #000000 -
+10 21 42 #000000 #ffd400 bold
+10 63 3 #ffffff #000000 -
+10 66 9 #00ff66 #000000 -
+10 75 3 #bdbdbd #000000 -
+10 78 12 #e6e6e6 #000000 -
+10 90 30 #ffffff #000000 -
+11 0 1 #ffffff #000000 -
+11 1 18 #000000 #ffd400 bold
+11 19 37 #ffffff #000000 -
+11 56 7 #e6e6e6 #000000 -
+11 63 57 #ffffff #000000 -
+12 0 3 #ffffff #000000 -
+12 3 2 #bdbdbd #000000 -
+12 5 18 #ffffff #000000 -
+12 23 40 #e6e6e6 #000000 bold
+12 63 57 #ffffff #000000 -
+13 0 3 #ffffff #000000 -
+13 3 2 #bdbdbd #000000 -
+13 5 18 #ffffff #000000 -
+13 23 15 #e6e6e6 #000000 -
+13 38 82 #ffffff #000000 -
+14 0 3 #ffffff #000000 -
+14 3 2 #bdbdbd #000000 -
+14 5 61 #ffffff #000000 -
+14 66 19 #ffd400 #000000 -
+14 85 35 #ffffff #000000 -
+15 0 3 #ffffff #000000 -
+15 3 2 #bdbdbd #000000 -
+15 5 18 #ffffff #000000 -
+15 23 36 #e6e6e6 #000000 -
+15 59 61 #ffffff #000000 -
+16 0 3 #ffffff #000000 -
+16 3 2 #bdbdbd #000000 -
+16 5 12 #ffffff #000000 -
+16 17 2 #00ff66 #000000 -
+16 19 4 #ffffff #000000 -
+16 23 31 #e6e6e6 #000000 -
+16 54 12 #ffffff #000000 -
+16 66 11 #e6e6e6 #000000 -
+16 77 2 #ffffff #000000 -
+16 79 23 #bdbdbd #000000 -
+16 102 18 #ffffff #000000 -
+17 0 3 #ffffff #000000 -
+17 3 2 #bdbdbd #000000 -
+17 5 18 #ffffff #000000 -
+17 23 13 #e6e6e6 #000000 -
+17 36 19 #ffffff #000000 -
+17 55 8 #e6e6e6 #000000 -
+17 63 57 #ffffff #000000 -
+18 0 3 #ffffff #000000 -
+18 3 2 #bdbdbd #000000 -
+18 5 18 #ffffff #000000 -
+18 23 40 #e6e6e6 #000000 bold
+18 63 57 #ffffff #000000 -
+19 0 3 #ffffff #000000 -
+19 3 2 #bdbdbd #000000 -
+19 5 18 #ffffff #000000 -
+19 23 13 #e6e6e6 #000000 -
+19 36 14 #ffffff #000000 -
+19 50 13 #e6e6e6 #000000 -
+19 63 57 #ffffff #000000 -
+20 0 3 #ffffff #000000 -
+20 3 2 #bdbdbd #000000 -
+20 5 18 #ffffff #000000 -
+20 23 16 #e6e6e6 #000000 -
+20 39 81 #ffffff #000000 -
+21 0 3 #ffffff #000000 -
+21 3 2 #bdbdbd #000000 -
+21 5 18 #ffffff #000000 -
+21 23 40 #e6e6e6 #000000 bold
+21 63 57 #ffffff #000000 -
+22 0 23 #ffffff #000000 -
+22 23 12 #e6e6e6 #000000 -
+22 35 12 #ffffff #000000 -
+22 47 16 #e6e6e6 #000000 -
+22 63 57 #ffffff #000000 -
+23 0 23 #ffffff #000000 -
+23 23 26 #e6e6e6 #000000 -
+23 49 71 #ffffff #000000 -
+24 0 23 #ffffff #000000 -
+24 23 11 #e6e6e6 #000000 -
+24 34 13 #ffffff #000000 -
+24 47 16 #e6e6e6 #000000 -
+24 63 57 #ffffff #000000 -
+25 0 120 #ffffff #000000 -
+26 0 120 #ffffff #000000 -
+27 0 120 #ffffff #000000 -
+28 0 120 #ffffff #000000 -
+29 0 120 #ffffff #000000 -
+30 0 120 #ffffff #000000 -
+31 0 120 #ffffff #000000 -
+32 0 120 #ffffff #000000 -
+33 0 66 #ffffff #000000 -
+33 66 1 #ffd400 #000000 bold
+33 67 14 #e6e6e6 #000000 -
+33 81 39 #ffffff #000000 -
+34 0 120 #ffffff #000000 -
+35 0 1 #ffffff #000000 -
+35 1 4 #ffd400 #000000 bold
+35 5 5 #e6e6e6 #000000 -
+35 10 2 #ffffff #000000 -
+35 12 7 #ffd400 #000000 bold
+35 19 5 #e6e6e6 #000000 -
+35 24 2 #ffffff #000000 -
+35 26 3 #ffd400 #000000 bold
+35 29 15 #e6e6e6 #000000 -
+35 44 2 #ffffff #000000 -
+35 46 4 #ffd400 #000000 bold
+35 50 16 #e6e6e6 #000000 -
+35 66 2 #ffffff #000000 -
+35 68 3 #ffd400 #000000 bold
+35 71 9 #e6e6e6 #000000 -
+35 80 2 #ffffff #000000 -
+35 82 3 #ffd400 #000000 bold
+35 85 6 #e6e6e6 #000000 -
+35 91 2 #ffffff #000000 -
+35 93 3 #ffd400 #000000 bold
+35 96 8 #e6e6e6 #000000 -
+35 104 2 #ffffff #000000 -
+35 106 3 #ffd400 #000000 bold
+35 109 5 #e6e6e6 #000000 -
+35 114 6 #ffffff #000000 -

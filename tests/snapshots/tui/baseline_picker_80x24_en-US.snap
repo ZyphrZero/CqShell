@@ -1,0 +1,124 @@
+# case baseline_picker_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭ System & resources ── updated 2s ago ╮╭ Network & proxy ── looked up 12s ago ╮
+│╭ Select subscription · Subscription name ───────────────────────────────────╮│
+││                                                                            ││
+││  › type to filter                                                  30/30   ││
+││                                                                            ││
+││    订阅-9  host9.example                                                   ││
+╰│    订阅-10  host10.example                                                 │╯
+╭│    订阅-11  host11.example                                                 │╮
+││    订阅-12  host12.example                                                 │┃
+││    订阅-13  host13.example                                                 ┃┃
+││    订阅-14  host14.example                                                 ┃┃
+││    订阅-15  host15.example                                                 ┃┃
+││    订阅-16  host16.example                                                 ┃│
+││    订阅-17  host17.example                                                 ┃│
+││    订阅-18  host18.example                                                 ││
+││    订阅-19  host19.example                                                 ││
+││  › 订阅-20  host20.example                                        current  │┤
+││                                                                            ││
+││  ↑↓ move  Enter choose  Esc Cancel                                         ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ ↑↓ move  Enter open  ←→ switch category  O optimize  R refresh  Q quit  ? help 
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 1 1 #45cdb6 reset -
+2 2 41 #45cdb6 reset bold
+2 43 36 #45cdb6 reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 1 1 #45cdb6 reset -
+3 78 1 #45cdb6 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 4 2 #45cdb6 reset -
+4 6 69 #91a2b0 reset -
+4 78 1 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 12 15 #91a2b0 reset -
+6 78 2 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 13 16 #91a2b0 reset -
+7 78 2 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 13 16 #91a2b0 reset -
+8 78 2 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 13 16 #91a2b0 reset -
+9 78 2 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 13 16 #91a2b0 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 13 16 #91a2b0 reset -
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 13 16 #91a2b0 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 13 16 #91a2b0 reset -
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 13 16 #91a2b0 reset -
+14 78 1 #45cdb6 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 13 16 #91a2b0 reset -
+15 78 2 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 13 16 #91a2b0 reset -
+16 78 2 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 4 72 black #45cdb6 bold
+17 78 2 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 1 #45cdb6 reset -
+18 78 1 #45cdb6 reset -
+18 79 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 1 1 #45cdb6 reset -
+19 4 2 #45cdb6 reset bold
+19 6 5 #91a2b0 reset -
+19 13 5 #45cdb6 reset bold
+19 18 7 #91a2b0 reset -
+19 27 3 #45cdb6 reset bold
+19 30 7 #91a2b0 reset -
+19 78 1 #45cdb6 reset -
+19 79 1 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 1 78 #45cdb6 reset -
+20 79 1 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

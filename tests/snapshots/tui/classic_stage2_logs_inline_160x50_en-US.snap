@@ -1,0 +1,310 @@
+# case classic_stage2_logs_inline_160x50_en-US
+# size 160x50
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview                                                        Use sudo cqs for system changes · vps-sg-01 · ● USER · English 
+╭ System & resources ────────────────────────────────────────── updated 2s ago ╮╭ Network & proxy ────────────────────────────────────────── looked up 12s ago ╮
+│ CPU          ▂▃▅▄▃▂▃▁▁▂▂▁  12% 2-core  Memory ━━━━━━━━━━──────  63% 1.2/1.9G ││ BBR   ○ Disabled · available / v3 · cubic                                    │
+│ Disk ━━━━━━╸─────────  41% 16.4/40.0G  Swap   ━╸──────────────  10% 0.2/2.0G ││ TCP   ○ not configured · fq_codel                                            │
+│ Host   vps-sg-01 · Debian GNU/Linux 12 (bookworm)                            ││ IPv4  203.0.113.24 · AS64500 Example Net                                     │
+│ Kernel 6.12.8-joeyblog-bbrv3 · x86_64 · AMD EPYC 7B13 × 2                    ││ IPv6  2001:db8:3c4d:15::1a2f                                                 │
+│ Uptime 3d 04h 00m · Asia/Shanghai                                            ││ Proxy Mihomo ● Running · v1.19.2 · Terminal ● Enabled                        │
+╰──────────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────╯
+╭ Categories ──────╮╭ System ──────────────────────────── 1/12 ╮╭ Details ─────────────────────────────────────────────────────────────────────────────────────╮
+│  0 Optimization  ││  Overview                                ┃│ System overview                                                                              │
+│  ────────────────││› System overview                         ┃│ Read only · Current user                                                                     │
+│› 1 System        ││  Public IP / ISP lookup           12s ago┃│                                                                                              │
+│  2 Kernel        ││  Packages & mirrors                      ┃│ Read host, CPU, memory, disk, IP and BBR status.                                             │
+│  3 Network       ││  Update packages                         ┃│                                                                                              │
+│  4 SSH           ││  Benchmark system mirrors                ┃│ cqs run system.info                                                                          │
+│  5 Docker        ││  Change system mirror · LinuxMirrors…    ┃│                                                                                              │
+│  6 Mihomo proxy ●││  Restore previous system sources         ┃│ Last result  Not run in this session                                                         │
+│  7 Tools         ││  Clean system…                   Disk 41%┃│                                                                                              │
+│  8 Agent tools   ││  System settings                         ┃│                                                                                              │
+│  9 Prompt        ││  Set timezone…              Asia/Shanghai┃│                                                                                              │
+│    Tests         ││  Install fail2ban                        ┃│                                                                                              │
+│    CqShell       ││  Swap                                    ┃│                                                                                              │
+│                  ││  Create swap…            existing 2.0 GiB┃│                                                                                              │
+│                  ││  Rebuild swap automatically              ││ ↵ open overview                                                                              │
+╰──────────────────╯╰──────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+╭ Execution log ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ working                                                                                                                                                      │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ ↑↓ move  Enter open  / search actions  ←→ switch category  O optimize  T style  R refresh  Q quit  ? help                                                      
+---
+0 1 7 #45cdb6 reset bold
+0 9 6 #91a2b0 reset -
+0 17 9 #91a2b0 reset -
+0 97 34 #91a2b0 reset -
+0 140 19 #91a2b0 reset -
+1 0 1 #3d5265 reset -
+1 1 20 reset reset bold
+1 21 42 #3d5265 reset -
+1 63 16 #91a2b0 reset -
+1 79 2 #3d5265 reset -
+1 81 17 reset reset bold
+1 98 42 #3d5265 reset -
+1 140 19 #91a2b0 reset -
+1 159 1 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 2 5 #91a2b0 reset -
+2 7 25 #5dd888 reset -
+2 32 7 #91a2b0 reset -
+2 41 7 #91a2b0 reset -
+2 48 10 #5dd888 reset -
+2 58 6 #3d5265 reset -
+2 64 5 #5dd888 reset -
+2 69 9 #91a2b0 reset -
+2 79 2 #3d5265 reset -
+2 82 19 #91a2b0 reset -
+2 115 3 #91a2b0 reset -
+2 159 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 2 5 #91a2b0 reset -
+3 7 7 #5dd888 reset -
+3 14 9 #3d5265 reset -
+3 23 5 #5dd888 reset -
+3 28 11 #91a2b0 reset -
+3 41 7 #91a2b0 reset -
+3 48 2 #5dd888 reset -
+3 50 14 #3d5265 reset -
+3 64 5 #5dd888 reset -
+3 69 9 #91a2b0 reset -
+3 79 2 #3d5265 reset -
+3 82 25 #91a2b0 reset -
+3 159 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 2 7 #91a2b0 reset -
+4 18 3 #91a2b0 reset -
+4 79 2 #3d5265 reset -
+4 82 6 #91a2b0 reset -
+4 100 3 #91a2b0 reset -
+4 159 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 2 7 #91a2b0 reset -
+5 30 3 #91a2b0 reset -
+5 39 3 #91a2b0 reset -
+5 79 2 #3d5265 reset -
+5 82 6 #91a2b0 reset -
+5 159 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 2 7 #91a2b0 reset -
+6 19 3 #91a2b0 reset -
+6 79 2 #3d5265 reset -
+6 82 6 #91a2b0 reset -
+6 88 16 #5dd888 reset -
+6 104 3 #91a2b0 reset -
+6 114 3 #91a2b0 reset -
+6 117 18 #5dd888 reset -
+6 159 1 #3d5265 reset -
+7 0 160 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 12 reset reset bold
+8 13 8 #3d5265 reset -
+8 21 8 reset reset bold
+8 29 28 #3d5265 reset -
+8 57 6 #91a2b0 reset -
+8 63 2 #3d5265 reset -
+8 65 9 reset reset bold
+8 74 86 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 3 2 #91a2b0 reset -
+9 19 2 #3d5265 reset -
+9 23 40 #91a2b0 reset bold
+9 63 1 #45cdb6 reset -
+9 64 1 #3d5265 reset -
+9 66 15 reset reset bold
+9 159 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 3 18 #3d5265 reset -
+10 21 42 black #45cdb6 bold
+10 63 1 #45cdb6 reset -
+10 64 1 #3d5265 reset -
+10 66 9 #5dd888 reset -
+10 75 15 #91a2b0 reset -
+10 159 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 18 black #45cdb6 bold
+11 19 2 #3d5265 reset -
+11 56 7 #91a2b0 reset -
+11 63 1 #45cdb6 reset -
+11 64 1 #3d5265 reset -
+11 159 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 3 2 #91a2b0 reset -
+12 19 2 #3d5265 reset -
+12 23 40 #91a2b0 reset bold
+12 63 1 #45cdb6 reset -
+12 64 1 #3d5265 reset -
+12 159 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 3 2 #91a2b0 reset -
+13 19 2 #3d5265 reset -
+13 23 15 #91a2b0 reset -
+13 63 1 #45cdb6 reset -
+13 64 1 #3d5265 reset -
+13 159 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 3 2 #91a2b0 reset -
+14 19 2 #3d5265 reset -
+14 63 1 #45cdb6 reset -
+14 64 1 #3d5265 reset -
+14 66 19 #45cdb6 reset -
+14 159 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 3 2 #91a2b0 reset -
+15 19 2 #3d5265 reset -
+15 23 36 #91a2b0 reset -
+15 63 1 #45cdb6 reset -
+15 64 1 #3d5265 reset -
+15 159 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 3 2 #91a2b0 reset -
+16 17 2 #5dd888 reset -
+16 19 2 #3d5265 reset -
+16 23 31 #91a2b0 reset -
+16 63 1 #45cdb6 reset -
+16 64 1 #3d5265 reset -
+16 66 11 #91a2b0 reset -
+16 79 23 #91a2b0 reset -
+16 159 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 3 2 #91a2b0 reset -
+17 19 2 #3d5265 reset -
+17 23 13 #91a2b0 reset -
+17 55 8 #91a2b0 reset -
+17 63 1 #45cdb6 reset -
+17 64 1 #3d5265 reset -
+17 159 1 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 3 2 #91a2b0 reset -
+18 19 2 #3d5265 reset -
+18 23 40 #91a2b0 reset bold
+18 63 1 #45cdb6 reset -
+18 64 1 #3d5265 reset -
+18 159 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 3 2 #91a2b0 reset -
+19 19 2 #3d5265 reset -
+19 23 13 #91a2b0 reset -
+19 50 13 #91a2b0 reset -
+19 63 1 #45cdb6 reset -
+19 64 1 #3d5265 reset -
+19 159 1 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 3 2 #91a2b0 reset -
+20 19 2 #3d5265 reset -
+20 23 16 #91a2b0 reset -
+20 63 1 #45cdb6 reset -
+20 64 1 #3d5265 reset -
+20 159 1 #3d5265 reset -
+21 0 1 #3d5265 reset -
+21 3 2 #91a2b0 reset -
+21 19 2 #3d5265 reset -
+21 23 40 #91a2b0 reset bold
+21 63 1 #45cdb6 reset -
+21 64 1 #3d5265 reset -
+21 159 1 #3d5265 reset -
+22 0 1 #3d5265 reset -
+22 19 2 #3d5265 reset -
+22 23 12 #91a2b0 reset -
+22 47 16 #91a2b0 reset -
+22 63 1 #45cdb6 reset -
+22 64 1 #3d5265 reset -
+22 159 1 #3d5265 reset -
+23 0 1 #3d5265 reset -
+23 19 2 #3d5265 reset -
+23 23 26 #91a2b0 reset -
+23 63 2 #3d5265 reset -
+23 66 1 #45cdb6 reset bold
+23 67 14 #91a2b0 reset -
+23 159 1 #3d5265 reset -
+24 0 160 #3d5265 reset -
+25 0 1 #3d5265 reset -
+25 1 15 reset reset bold
+25 16 144 #3d5265 reset -
+26 0 1 #3d5265 reset -
+26 159 1 #3d5265 reset -
+27 0 1 #3d5265 reset -
+27 159 1 #3d5265 reset -
+28 0 1 #3d5265 reset -
+28 159 1 #3d5265 reset -
+29 0 1 #3d5265 reset -
+29 159 1 #3d5265 reset -
+30 0 1 #3d5265 reset -
+30 159 1 #3d5265 reset -
+31 0 1 #3d5265 reset -
+31 159 1 #3d5265 reset -
+32 0 1 #3d5265 reset -
+32 159 1 #3d5265 reset -
+33 0 1 #3d5265 reset -
+33 159 1 #3d5265 reset -
+34 0 1 #3d5265 reset -
+34 159 1 #3d5265 reset -
+35 0 1 #3d5265 reset -
+35 159 1 #3d5265 reset -
+36 0 1 #3d5265 reset -
+36 159 1 #3d5265 reset -
+37 0 1 #3d5265 reset -
+37 159 1 #3d5265 reset -
+38 0 1 #3d5265 reset -
+38 159 1 #3d5265 reset -
+39 0 1 #3d5265 reset -
+39 159 1 #3d5265 reset -
+40 0 1 #3d5265 reset -
+40 159 1 #3d5265 reset -
+41 0 1 #3d5265 reset -
+41 159 1 #3d5265 reset -
+42 0 1 #3d5265 reset -
+42 159 1 #3d5265 reset -
+43 0 1 #3d5265 reset -
+43 159 1 #3d5265 reset -
+44 0 1 #3d5265 reset -
+44 159 1 #3d5265 reset -
+45 0 1 #3d5265 reset -
+45 159 1 #3d5265 reset -
+46 0 1 #3d5265 reset -
+46 159 1 #3d5265 reset -
+47 0 1 #3d5265 reset -
+47 159 1 #3d5265 reset -
+48 0 160 #3d5265 reset -
+49 1 2 #45cdb6 reset bold
+49 3 5 #91a2b0 reset -
+49 10 5 #45cdb6 reset bold
+49 15 5 #91a2b0 reset -
+49 22 1 #45cdb6 reset bold
+49 23 15 #91a2b0 reset -
+49 40 2 #45cdb6 reset bold
+49 42 16 #91a2b0 reset -
+49 60 1 #45cdb6 reset bold
+49 61 9 #91a2b0 reset -
+49 72 1 #45cdb6 reset bold
+49 73 6 #91a2b0 reset -
+49 81 1 #45cdb6 reset bold
+49 82 8 #91a2b0 reset -
+49 92 1 #45cdb6 reset bold
+49 93 5 #91a2b0 reset -
+49 100 1 #45cdb6 reset bold
+49 101 5 #91a2b0 reset -

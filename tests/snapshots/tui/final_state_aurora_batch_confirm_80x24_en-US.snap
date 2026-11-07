@@ -1,0 +1,128 @@
+# case final_state_aurora_batch_confirm_80x24_en-US
+# size 80x24
+# theme aurora
+# background #0b1119
+# locale en-US
+ CqShell v0.1.4  Optimization · 4                  vps-sg-01 · ● USER · English 
+ System & resources     updated 2s ago │ Network & proxy      looked up 12s ago 
+CPU  ▄▃▂▃▁▁▂▂▁  12%  Memory ━━━━──  63%│BBR   ○ Disabled · available / v3       
+Disk ━━━╸─────  41%  Swap   ╸─────  10%│TCP   ○ not configured · fq_codel       
+Host   vps-sg-01                       │IPv4  203.0.113.24 · AS64500 Example Net
+K╭ ! Confirm operation ───────────────────────────────────────────────────────╮ 
+U│                                                                            │ 
+ │  Run this selection in order? Individual operations may have further       │ 
+ │  confirmations.                                                            │ 
+▎│                                                                            │ 
+ │  1. Update packages                                                        │ 
+ │  2. Clean system (scope=standard)                                          │ 
+ │  3. Tune TCP buffers (bandwidth=1000, rtt=50)                              │ 
+ │  4. Enable BBR in the running kernel (qdisc=fq)                            │ 
+ │                                                                            │ 
+ │  [ Cancel ]  [ Confirm execution ]                                         │ 
+ │                                                                            │ 
+ │   ←→  switch   ↵  confirm   Y  run   Esc  Cancel                           │ 
+ ╰────────────────────────────────────────────────────────────────────────────╯ 
+                                                                                
+    Tests          │1. Update packages                                          
+    CqShell        │2. Clean system · standard                                  
+                   │ X  review and run   A  use recommended                     
+  ↵  confirm   Esc  back                                                        
+---
+0 0 80 #464a50 reset -
+1 0 80 #464a50 reset -
+2 0 80 #464a50 reset -
+3 0 80 #464a50 reset -
+4 0 80 #464a50 reset -
+5 0 1 #464a50 reset -
+5 1 1 #3c4147 #1c2229 -
+5 2 3 #f2c46d #1c2229 bold
+5 5 18 #3c4147 #1c2229 bold
+5 23 56 #3c4147 #1c2229 -
+5 79 1 #464a50 reset -
+6 0 1 #464a50 reset -
+6 1 1 #3c4147 #1c2229 -
+6 2 76 #f3f4f4 #1c2229 -
+6 78 1 #3c4147 #1c2229 -
+6 79 1 #464a50 #06090e -
+7 0 1 #464a50 reset -
+7 1 1 #3c4147 #1c2229 -
+7 2 2 #f3f4f4 #1c2229 -
+7 4 67 #f3f4f4 #1c2229 bold
+7 71 7 #f3f4f4 #1c2229 -
+7 78 1 #3c4147 #1c2229 -
+7 79 1 #464a50 #06090e -
+8 0 1 #464a50 reset -
+8 1 1 #3c4147 #1c2229 -
+8 2 2 #f3f4f4 #1c2229 -
+8 4 14 #f3f4f4 #1c2229 bold
+8 18 60 #f3f4f4 #1c2229 -
+8 78 1 #3c4147 #1c2229 -
+8 79 1 #464a50 #06090e -
+9 0 1 #464a50 reset -
+9 1 1 #3c4147 #1c2229 -
+9 2 76 #f3f4f4 #1c2229 -
+9 78 1 #3c4147 #1c2229 -
+9 79 1 #464a50 #06090e -
+10 0 1 #464a50 reset -
+10 1 1 #3c4147 #1c2229 -
+10 2 76 #f3f4f4 #1c2229 -
+10 78 1 #3c4147 #1c2229 -
+10 79 1 #464a50 #06090e -
+11 0 1 #464a50 reset -
+11 1 1 #3c4147 #1c2229 -
+11 2 76 #f3f4f4 #1c2229 -
+11 78 1 #3c4147 #1c2229 -
+11 79 1 #464a50 #06090e -
+12 0 1 #464a50 reset -
+12 1 1 #3c4147 #1c2229 -
+12 2 76 #f3f4f4 #1c2229 -
+12 78 1 #3c4147 #1c2229 -
+12 79 1 #464a50 #06090e -
+13 0 1 #464a50 reset -
+13 1 1 #3c4147 #1c2229 -
+13 2 76 #f3f4f4 #1c2229 -
+13 78 1 #3c4147 #1c2229 -
+13 79 1 #464a50 #06090e -
+14 0 1 #464a50 reset -
+14 1 1 #3c4147 #1c2229 -
+14 2 76 #f3f4f4 #1c2229 -
+14 78 1 #3c4147 #1c2229 -
+14 79 1 #464a50 #06090e -
+15 0 1 #464a50 reset -
+15 1 1 #3c4147 #1c2229 -
+15 2 2 #f3f4f4 #1c2229 -
+15 4 10 #000000 #4fd1bd bold
+15 14 64 #f3f4f4 #1c2229 -
+15 78 1 #3c4147 #1c2229 -
+15 79 1 #464a50 #06090e -
+16 0 1 #464a50 reset -
+16 1 1 #3c4147 #1c2229 -
+16 2 76 #f3f4f4 #1c2229 -
+16 78 1 #3c4147 #1c2229 -
+16 79 1 #464a50 #06090e -
+17 0 1 #464a50 reset -
+17 1 1 #3c4147 #1c2229 -
+17 2 2 #f3f4f4 #1c2229 -
+17 4 4 #4fd1bd #1f242b bold
+17 8 7 #bbbdbf #1c2229 -
+17 15 2 #f3f4f4 #1c2229 -
+17 17 3 #4fd1bd #1f242b bold
+17 20 8 #bbbdbf #1c2229 -
+17 28 2 #f3f4f4 #1c2229 -
+17 30 3 #4fd1bd #1f242b bold
+17 33 4 #bbbdbf #1c2229 -
+17 37 2 #f3f4f4 #1c2229 -
+17 39 5 #4fd1bd #1f242b bold
+17 44 7 #bbbdbf #1c2229 -
+17 51 27 #f3f4f4 #1c2229 -
+17 78 1 #3c4147 #1c2229 -
+17 79 1 #464a50 #06090e -
+18 0 1 #464a50 reset -
+18 1 78 #3c4147 #1c2229 -
+18 79 1 #464a50 #06090e -
+19 0 2 #464a50 reset -
+19 2 78 #464a50 #06090e -
+20 0 80 #464a50 reset -
+21 0 80 #464a50 reset -
+22 0 80 #464a50 reset -
+23 0 80 #464a50 reset -

@@ -1,0 +1,145 @@
+# case classic_stage2_palette_bbr_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭ System & resources ── updated 2s ago ╮╭ Network & proxy ── looked up 12s ago ╮
+│╭ Search actions ──────────────────────────────────────────────────── 5 / 80 ╮│
+││                                                                            ││
+││  › bbr                                                                     ││
+││                                                                            ││
+││    Kernel                                                                  ││
+╰│  › Install BBRv3 kernel…                                     root  run ↵   │╯
+╭│    Remove a non-running BBRv3 kernel…                        root          │╮
+││    Network                                                                 │┃
+││    BBR and queue status                 ○ Disabled · available v3          │┃
+││    Enable BBR in the running kernel…                         root          │┃
+││    Restore BBR settings                                      root          │┃
+││                                                                            ││
+││                                                                            ││
+││                                                                            ││
+││                                                                            ││
+││                                                                            │┤
+││                                                                            ││
+││  ↑↓ move  Enter run  Esc close                                             ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ ↑↓ move  Enter run  Tab jump  Ctrl+U clear  Esc close                          
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 1 1 #45cdb6 reset -
+2 2 16 #45cdb6 reset bold
+2 18 52 #45cdb6 reset -
+2 70 8 #91a2b0 reset -
+2 78 1 #45cdb6 reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 1 1 #45cdb6 reset -
+3 78 1 #45cdb6 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 4 2 #45cdb6 reset -
+4 6 69 reset reset underlined
+4 78 1 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 6 70 #91a2b0 reset bold
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 4 2 reset #45cdb6 -
+7 6 8 #91a2b0 #45cdb6 -
+7 14 3 #91a2b0 #45cdb6 bold+underlined
+7 17 10 #91a2b0 #45cdb6 -
+7 27 37 reset #45cdb6 -
+7 64 4 #91a2b0 #45cdb6 -
+7 68 1 reset #45cdb6 -
+7 69 7 #91a2b0 #45cdb6 -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 6 21 #91a2b0 reset -
+8 27 3 #91a2b0 reset bold
+8 30 10 #91a2b0 reset -
+8 64 4 #91a2b0 reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 6 70 #91a2b0 reset bold
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 6 3 #45cdb6 reset bold
+10 43 25 #91a2b0 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 6 7 #91a2b0 reset -
+11 13 3 #91a2b0 reset bold
+11 16 23 #91a2b0 reset -
+11 64 4 #91a2b0 reset -
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 6 8 #91a2b0 reset -
+12 14 3 #91a2b0 reset bold
+12 17 9 #91a2b0 reset -
+12 64 4 #91a2b0 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 78 1 #45cdb6 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 78 1 #45cdb6 reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 78 1 #45cdb6 reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 78 1 #45cdb6 reset -
+17 79 1 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 1 #45cdb6 reset -
+18 78 1 #45cdb6 reset -
+18 79 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 1 1 #45cdb6 reset -
+19 4 2 #45cdb6 reset bold
+19 6 5 #91a2b0 reset -
+19 13 5 #45cdb6 reset bold
+19 18 4 #91a2b0 reset -
+19 24 3 #45cdb6 reset bold
+19 27 6 #91a2b0 reset -
+19 78 1 #45cdb6 reset -
+19 79 1 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 1 78 #45cdb6 reset -
+20 79 1 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

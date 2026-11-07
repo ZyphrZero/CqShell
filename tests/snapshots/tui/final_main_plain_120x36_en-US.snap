@@ -1,0 +1,91 @@
+# case final_main_plain_120x36_en-US
+# size 120x36
+# theme plain
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System > System overview                Use sudo cqs for system changes | vps-sg-01 | * USER | English 
++ System & resources ---------------------- updated 2s ago ++ Network & proxy ---------------------- looked up 12s ago +
+| CPU  +=-:-..::.  12% 2-core  Memory ####--  63% 1.2/1.9G || BBR   o Disabled | available / v3 | cubic                |
+| Disk ###---  41% 16.4/40.0G  Swap   #-----  10% 0.2/2.0G || TCP   o not configured | fq_codel                        |
+| Host   vps-sg-01 | Debian GNU/Linux 12 (bookworm)        || IPv4  203.0.113.24 | AS64500 Example Net                 |
+| Kernel 6.12.8-joeyblog-bbrv3 | x86_64                    || IPv6  2001:db8:3c4d:15::1a2f                             |
+| Uptime 3d 04h 00m | Asia/Shanghai                        || Proxy Mihomo * Running | v1.19.2 | Terminal * Enabled    |
++----------------------------------------------------------++----------------------------------------------------------+
++ Categories ------++ System ---------------------------- 1/12 ++ Details ---------------------------------------------+
+|  0 Optimization  ||  Overview                                || System overview                                      |
+|  ----------------||> System overview                         || Read only | Current user                             |
+|> 1 System        ||  Public IP / ISP lookup           12s ago||                                                      |
+|  2 Kernel        ||  Packages & mirrors                      || Read host, CPU, memory, disk, IP and BBR status.     |
+|  3 Network       ||  Update packages                         ||                                                      |
+|  4 SSH           ||  Benchmark system mirrors                || cqs run system.info                                  |
+|  5 Docker        ||  Change system mirror · LinuxMirrors...  ||                                                      |
+|  6 Mihomo proxy *||  Restore previous system sources         || Last result  Not run in this session                 |
+|  7 Tools         ||  Clean system...                 Disk 41%||                                                      |
+|  8 Agent tools   ||  System settings                         ||                                                      |
+|  9 Prompt        ||  Set timezone...            Asia/Shanghai||                                                      |
+|    Tests         ||  Install fail2ban                        ||                                                      |
+|    CqShell       ||  Swap                                    ||                                                      |
+|                  ||  Create swap...          existing 2.0 GiB||                                                      |
+|                  ||  Rebuild swap automatically              ||                                                      |
+|                  ||  Remove swap             existing 2.0 GiB||                                                      |
+|                  ||                                          ||                                                      |
+|                  ||                                          ||                                                      |
+|                  ||                                          ||                                                      |
+|                  ||                                          ||                                                      |
+|                  ||                                          ||                                                      |
+|                  ||                                          ||                                                      |
+|                  ||                                          ||                                                      |
+|                  ||                                          ||                                                      |
+|                  ||                                          || Enter open overview                                  |
++------------------++------------------------------------------++------------------------------------------------------+
+ [UP/DN] move  [ENTER] open  [/] search actions  [LT/RT] switch category  [O] optimize  [T] style  [?] help             
+---
+0 1 7 reset reset bold
+0 23 3 reset reset dim
+0 57 34 reset reset dim
+0 100 12 reset reset dim
+1 1 20 reset reset bold
+1 61 17 reset reset bold
+2 78 3 reset reset dim
+2 95 3 reset reset dim
+3 84 3 reset reset dim
+4 18 3 reset reset dim
+4 80 3 reset reset dim
+5 30 3 reset reset dim
+6 19 3 reset reset dim
+6 84 3 reset reset dim
+6 94 3 reset reset dim
+8 1 12 reset reset bold
+8 21 8 reset reset bold
+8 65 9 reset reset bold
+9 3 2 reset reset dim
+9 23 40 reset reset bold
+9 66 15 reset reset bold
+10 21 42 reset reset bold
+10 75 3 reset reset dim
+11 1 2 reset reset bold
+11 3 2 reset reset bold+dim
+11 5 14 reset reset bold
+12 3 2 reset reset dim
+12 23 40 reset reset bold
+13 3 2 reset reset dim
+14 3 2 reset reset dim
+15 3 2 reset reset dim
+16 3 2 reset reset dim
+16 17 2 green reset -
+16 79 23 reset reset dim
+17 3 2 reset reset dim
+18 3 2 reset reset dim
+18 23 40 reset reset bold
+19 3 2 reset reset dim
+20 3 2 reset reset dim
+21 3 2 reset reset dim
+21 23 40 reset reset bold
+33 66 5 reset reset bold
+35 1 7 reset reset bold
+35 15 7 reset reset bold
+35 29 3 reset reset bold
+35 49 7 reset reset bold
+35 74 3 reset reset bold
+35 88 3 reset reset bold
+35 99 3 reset reset bold

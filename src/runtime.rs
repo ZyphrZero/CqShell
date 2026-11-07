@@ -25,7 +25,32 @@ pub enum Event {
         token: String,
         reply: Sender<bool>,
     },
+    Step(Step),
     Finished(Result<()>),
+}
+
+/// One job of a batch starting or ending, reported through [`Context::step`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Step {
+    /// Zero-based position of the job in the batch; shown as `index + 1`.
+    pub index: usize,
+    pub total: usize,
+    pub id: &'static str,
+    pub state: StepState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepState {
+    Started,
+    Finished { outcome: Outcome, elapsed: Duration },
+}
+
+/// How a job ended: `error.cancelled` is Cancelled, any other error is Failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Done,
+    Failed,
+    Cancelled,
 }
 
 #[derive(Clone)]
@@ -75,6 +100,36 @@ impl Context {
     }
     pub fn message(&self, key: &str, detail: impl ToString) {
         self.log(self.i18n.format(key, &[("detail", &detail.to_string())]));
+    }
+    /// Report a batch job starting or ending. An event receiver gets only the structured
+    /// step; without one the CLI prints the progress and completion lines it always printed.
+    pub fn step(&self, step: Step) {
+        if let Some(tx) = &self.events {
+            let _ = tx.send(Event::Step(step));
+        } else if let Some(line) = self.step_line(&step) {
+            self.log(line);
+        }
+    }
+    /// The log line for `step`: `notice.progress` with `{i}/{n} {label}` when it starts and
+    /// `notice.success` when it is done. Failures and cancellations have no line of their
+    /// own; the batch logs their error text.
+    pub fn step_line(&self, step: &Step) -> Option<String> {
+        // The same key as `actions::Spec::label`.
+        let label = self.i18n.text(&format!("action.{}", step.id));
+        match step.state {
+            StepState::Started => Some(self.i18n.format(
+                "notice.progress",
+                &[(
+                    "detail",
+                    &format!("{}/{} {label}", step.index + 1, step.total),
+                )],
+            )),
+            StepState::Finished {
+                outcome: Outcome::Done,
+                ..
+            } => Some(self.i18n.format("notice.success", &[("detail", label)])),
+            StepState::Finished { .. } => None,
+        }
     }
     pub fn confirm(&self, key: &str, detail: impl ToString, token: &str) -> Result<()> {
         self.check()?;
@@ -647,5 +702,72 @@ mod tests {
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ESRCH)
         );
+    }
+
+    fn step(index: usize, state: StepState) -> Step {
+        Step {
+            index,
+            total: 3,
+            id: "tcp.tune",
+            state,
+        }
+    }
+
+    #[test]
+    fn step_lines_are_the_lines_batch_printed_before_steps_existed() {
+        let elapsed = Duration::from_millis(1500);
+        for (locale, started, done) in [
+            (
+                "en-US",
+                "Running 2/3 Tune TCP buffers",
+                "Completed: Tune TCP buffers",
+            ),
+            (
+                "zh-CN",
+                "正在执行 2/3 TCP 缓冲区调优",
+                "已完成：TCP 缓冲区调优",
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let mut ctx = crate::tests::context(temp.path());
+            ctx.i18n = I18n::load(Some(locale), None).unwrap();
+            assert_eq!(
+                ctx.step_line(&step(1, StepState::Started)).as_deref(),
+                Some(started)
+            );
+            let finished = |outcome| step(1, StepState::Finished { outcome, elapsed });
+            assert_eq!(
+                ctx.step_line(&finished(Outcome::Done)).as_deref(),
+                Some(done)
+            );
+            // The batch logs the error text of failed and cancelled jobs itself.
+            for outcome in [Outcome::Failed, Outcome::Cancelled] {
+                assert_eq!(ctx.step_line(&finished(outcome)), None);
+            }
+        }
+    }
+
+    #[test]
+    fn an_event_receiver_gets_only_the_structured_step() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        let (tx, rx) = mpsc::channel();
+        ctx.events = Some(tx);
+        let steps = [
+            step(0, StepState::Started),
+            step(
+                0,
+                StepState::Finished {
+                    outcome: Outcome::Done,
+                    elapsed: Duration::from_secs(2),
+                },
+            ),
+        ];
+        for sent in steps {
+            ctx.step(sent);
+            assert!(matches!(rx.try_recv(), Ok(Event::Step(received)) if received == sent));
+            // No log line alongside the step, not even for a completed one.
+            assert!(rx.try_recv().is_err());
+        }
     }
 }

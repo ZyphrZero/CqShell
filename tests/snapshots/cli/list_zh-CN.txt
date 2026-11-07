@@ -1,0 +1,208 @@
+system.info            系统概览
+  读取主机、CPU、内存、磁盘、IP 及 BBR 状态。
+system.public_ip       查询公网 IP / ISP
+  通过 HTTPS 查询 IPv4、IPv6 和 ISP，仅在选中此操作时连接 ip.sb 和 ipinfo.io。
+system.update          更新系统软件包
+  在共享内核锁下更新 apt 索引并升级软件包。使用非交互模式，保留本机修改过的配置；列出需要重启的服务，供之后安排维护。
+system.mirror.test     系统软件源测速
+  在本机从四个 HTTPS 镜像站各下载 1 MiB 仓库索引样本，每站最多 8 秒。按包含建连时间的实际下载速度排名，并显示失败原因。不修改软件源；短时采样结果不保证持续带宽。
+system.mirror.apply    更换系统软件源 · LinuxMirrors
+  使用固定版本并校验 SHA-256 的 LinuxMirrors Lite。可选官方、清华、中科大、阿里云；auto 测速后确认最快的有效样本。按上游组件与源码仓库默认设置重建标准 APT 主源，保留独立第三方源文件。安全更新使用官方源。修改前备份，失败恢复配置，不升级软件。
+  mirror_site=auto ["auto", "official", "tuna", "ustc", "aliyun"]
+system.mirror.restore  恢复上次系统软件源
+  恢复未完成的换源操作，或撤销最近一次成功换源。检测到后续人工修改时拒绝覆盖。先恢复配置再刷新 APT；索引刷新失败时仍保留已恢复的配置。
+system.clean           清理系统
+  标准清理：apt 缓存及超过 7 天的 journal。完整清理还会删除日志、临时文件、用户缓存和未使用的 Docker 数据。保留全部内核。
+  scope=standard ["standard", "full"]
+system.timezone        设置时区
+  选择中国、新加坡、日本、美国东部/中部/山地/西部、英国、德国、法国等常用时区，或输入其他 IANA 时区名称。使用 timedatectl 应用。
+  timezone=Asia/Shanghai ["Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei", "Asia/Singapore", "Asia/Tokyo", "Asia/Seoul", "Asia/Bangkok", "Asia/Kolkata", "Asia/Dubai", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Toronto", "Europe/London", "Europe/Berlin", "Europe/Paris", "Europe/Amsterdam", "Europe/Helsinki", "Europe/Moscow", "Australia/Sydney", "Australia/Perth", "Pacific/Auckland", "UTC"]
+swap.create            创建 SWAP
+  创建 /swapfile 并注册到 fstab；已有文件时拒绝覆盖。
+  size_mb=2048 []
+swap.auto              自动重建 SWAP
+  根据物理内存计算容量并重建 /swapfile，操作成功前保留原文件。
+swap.remove            删除 SWAP
+  仅停用并删除 /swapfile 及其对应 fstab 条目。
+system.fail2ban        安装 fail2ban
+  安装 fail2ban，使用实际 SSH 端口和 systemd journal 配置受管理的 sshd jail。
+ssh.port               修改 SSH 端口
+  校验候选配置和实际监听，失败回退；外部防火墙可达性需另行验证。
+  port=55520 []
+ssh.key                配置 SSH 密钥登录
+  向当前 HOME 导入公钥，测试新连接后关闭全局密码和键盘交互认证。不会打印私钥。
+  public_key= []
+bbr.status             查看 BBR 与队列状态
+  检查运行中的实现版本、拥塞算法和网卡实际队列。
+bbr.enable             启用当前内核的 BBR
+  启用当前运行内核提供的 BBR；运行内核提供 BBRv3 时即启用 BBRv3。设置默认队列，并保留原始设置供还原。
+  qdisc=fq ["fq", "fq_codel", "fq_pie", "cake"]
+bbr.restore            撤销 BBR 设置
+  恢复记录的运行值和原始持久配置。
+tcp.tune               TCP 缓冲区调优
+  根据带宽、RTT 和 cgroup 内存限制计算上限；应用、验证并保存，支持恢复。
+  bandwidth=1000 []
+  rtt=50 []
+tcp.restore            撤销 TCP 调优
+  恢复首次记录的 TCP 运行值和配置。
+clash.install          安装 / 更新 Mihomo
+  下载当前架构的官方 Mihomo Linux 二进制，校验发布元数据、SHA-256、ELF 架构和实际版本后，为当前用户原子安装。
+  version= []
+clash.status           查看 Mihomo 状态
+  只读查看 Mihomo 进程、PID 和配置中的 HTTP/SOCKS 代理地址，不启动或修改服务。
+clash.start            启动 Mihomo
+  校验主配置与 Mixin YAML，原子发布运行配置，然后以带归属校验的 PID 记录启动 Mihomo。
+clash.stop             停止 Mihomo
+  向 CqShell 记录的 Mihomo 进程发送 SIGTERM 并等待退出。
+clash.sub.list         查看订阅列表
+  显示保存的订阅和当前选择，不下载内容，也不修改运行中的进程。
+clash.sub.add          添加订阅
+  下载 HTTPS 订阅，校验 YAML 和代理来源，原子保存，并可选择立即启用。
+  name= []
+  url= []
+  use=off ["on", "off"]
+clash.sub.use          选择订阅
+  将已保存订阅原子复制为主配置；需要另行重启 Mihomo 才会应用。
+  name= []
+clash.sub.update       更新订阅
+  重新下载并校验已保存订阅，原子替换其文件；如果它当前已选择，同时刷新主配置。
+  name= []
+clash.sub.remove       删除订阅
+  删除已保存订阅；如果它是当前选择，同时删除对应主配置。
+  name= []
+clash.controller.status 查看控制器配置
+  只读显示控制器地址及密钥是否已设置，不显示密钥。
+clash.controller.configure 配置控制器地址
+  停止 Mihomo 后设置 IP 或 localhost 与端口；校验成功后事务保存 Mixin。
+  controller_address=127.0.0.1:9090 []
+clash.proxies          查看策略组与节点
+  通过配置的控制器查询策略组、节点和当前选择。
+clash.proxy.select     切换策略组节点
+  检查策略组及节点归属后通过控制器切换；不修改订阅配置。
+  proxy_group= []
+  proxy_node= []
+clash.secret.generate  生成控制器密钥
+  停止 Mihomo 后生成随机密钥并保存到私有 Mixin；不在日志显示内容。
+clash.secret.set       从私有文件设置密钥
+  停止 Mihomo 后读取私有文件中的密钥，避免将明文放入命令参数；Linux 文件须为 0600。
+  secret_file= []
+clash.secret.clear     清除控制器密钥
+  停止 Mihomo 后清除认证密钥；仅允许回环控制器地址。
+clash.panel.status     Web 控制台地址与状态
+  检查静态面板资源，显示不含密钥的控制台 URL。回环地址需在本机或 SSH 隧道中访问。
+clash.panel.install    安装 / 更新 Web 控制台
+  下载官方 MetaCubeXD 稳定版，校验 SHA-256 并安全解压，验证后更新 external-ui；请先停止 Mihomo。
+  version= []
+clash.tun.status       查看 TUN 配置与归属
+  只读查看 TUN 配置、链路及进程归属。
+clash.tun.configure    配置 TUN 模式
+  停止 Mihomo 后配置 TUN；启用要求原生 Linux、root、NET_ADMIN 和可用设备，拒绝 WSL/容器；启动时再次检查。
+  enabled=off ["on", "off"]
+  tun_stack=mixed ["system", "gvisor", "mixed"]
+  tun_device=cqs-tun []
+  auto_route=on ["on", "off"]
+  dns_hijack=on ["on", "off"]
+clash.logs             查看 / 跟随 Mihomo 日志
+  读取有界日志尾部并隐藏密钥、代理认证及订阅参数；跟随模式可取消。
+  lines=100 []
+  follow=off ["on", "off"]
+clash.service.status   查看 systemd 托管状态
+  查看指定作用域的 CqShell Mihomo 服务状态。
+  service_scope=user ["user", "system"]
+clash.service.install  安装 systemd 自启动服务
+  为当前数据目录安装并启用 systemd 托管；系统作用域需要 root，安装后另行启动。
+  service_scope=user ["user", "system"]
+clash.service.remove   移除 systemd 托管服务
+  停止并禁用 CqShell 管理的服务，保留 Mihomo 二进制和配置。
+  service_scope=user ["user", "system"]
+kernel.list            查看内核
+  显示已安装内核软件包和当前运行版本。
+kernel.install         安装 BBRv3 内核
+  从 byJoey/Actions-bbr-v3 安装标准版或 Max 版 BBRv3 内核，支持最新匹配版本和指定版本。校验软件包、备份 GRUB 并更新引导；重启进入新内核后，在网络优化中设置 BBR 和队列。
+  profile=standard ["standard", "max"]
+  version= []
+kernel.boot            切换启动内核
+  选择已安装的 Debian/Ubuntu 内核作为下一次启动项。交互模式会单独确认并重启；非交互 --yes 只设置启动项，稍后手动重启。TUI 从已安装内核列表中选择，CLI 填写“查看内核”显示的 release；只接受唯一匹配且文件完整的 GRUB 普通启动项。
+  release= []
+kernel.remove          卸载未运行的 BBRv3 内核
+  模拟卸载并拒绝移除额外软件包，保留运行内核和引导备份。
+  release= []
+tools.curl             curl 下载工具
+  通过 apt 安装 curl，用于下载文件与发送网络请求。
+tools.wget             wget 下载工具
+  通过 apt 安装 wget，用于文件下载。
+tools.nano             nano 文本编辑器
+  通过 apt 安装 nano 终端文本编辑器。
+tools.unzip            unzip 解压缩工具
+  通过 apt 安装 unzip，用于解压 ZIP 文件。
+tools.tar              tar 压缩工具
+  通过 apt 安装 tar，用于打包与解包文件。
+tools.tmux             tmux 终端复用
+  通过 apt 安装 tmux，用于保留会话与管理多个终端。
+tools.iftop            iftop 网络监控
+  通过 apt 安装 iftop，用于查看实时网络流量。
+tools.btop             btop 系统监控
+  通过 apt 安装 btop，用于查看 CPU、内存与进程。
+tools.gdu              gdu 磁盘分析
+  通过 apt 安装 gdu，用于分析目录的磁盘占用。
+tools.fzf              fzf 模糊搜索
+  通过 apt 安装 fzf 交互式模糊搜索工具。
+tools.install          全部安装 / 自选软件
+  安装指定软件包；all 还会安装 zsh 和 Starship，但不启用提示符美化。
+  package=all ["all", "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf"]
+ai.pi.install          安装 / 更新 Pi
+  直接下载 Pi 官方 Linux 独立二进制包，校验 SHA-256 并保留主题、WASM 等配套资源。无需 Node.js/npm；验证版本后更新当前用户的命令入口。
+ai.claude.install      安装 / 更新 Claude Code
+  直接下载 Claude Code 官方 Linux 二进制，按官方 manifest 校验 SHA-256。无需 Node.js/npm；验证版本后更新 ~/.local/bin/claude，保留用户配置与旧版本。
+ai.codex.install       安装 / 更新 Codex CLI
+  直接下载 Codex 官方完整 Linux 二进制包，包含运行所需的辅助程序与资源，校验 SHA-256 和版本。无需 Node.js/npm；默认入口为 ~/.local/bin/codex，遵循 CODEX_INSTALL_DIR。
+ai.status              查看 Agent 工具版本
+  检查 Pi、Claude Code、Codex 的常见用户安装目录及 PATH，读取 --version。缺失与执行失败分别显示；不执行登录。
+terminal.install       安装 zsh / Starship
+  安装 zsh 和经过摘要校验的 Starship，保持登录 Shell 不变。
+terminal.apply         配置终端提示符
+  仅更新受管理的 Shell 初始化区块及独立 Starship TOML 文件，保留首次启用前的基线。
+  shell=bash ["bash", "zsh", "both"]
+  style=full ["compact", "full"]
+  color=cyan ["cyan", "green", "magenta"]
+  time=off ["on", "off"]
+  git=on ["on", "off"]
+terminal.status        查看提示符配置
+  读取当前 HOME 的提示符选项和恢复基线状态。
+terminal.restore       还原原始提示符文件
+  从首次基线逐字节恢复文件；会覆盖后来对受管理文件的手工修改。
+docker.install         安装 Docker
+  运行明确选择的第三方安装器，保留现有 daemon 配置。
+  source=official ["official", "china"]
+docker.status          查看 Docker 状态
+  显示版本、镜像、容器、卷、网络和镜像源。
+docker.clean           清理 Docker 数据
+  不可逆地删除未使用的镜像、已停止容器、网络和符合清理条件的卷。
+docker.mirror          设置 Docker 镜像源
+  合并镜像源到 daemon.json，验证并重启 Docker，失败时恢复配置和服务状态。
+  mirror= []
+docker.ipv6            配置 Docker IPv6
+  合并 IPv6 设置并重启 Docker；生成 ULA 子网不代表具备公网 IPv6 路由。
+  enabled=on ["on", "off"]
+docker.uninstall       卸载 Docker
+  卸载已安装的 Docker 软件包。默认保留数据；purge_data=on 会删除默认数据和配置目录。
+  purge_data=off ["on", "off"]
+test.speed             带宽测速
+  运行 Ookla Speedtest 并确认其条款；缺少程序时安装需要 root。
+test.ip                IP 质量体检 · xykt/IPQuality
+  使用 xykt/IPQuality 检测 IP 类型、风险评分/因子、流媒体/AI 解锁和邮件连通性。支持双栈/IPv4/IPv6，语言跟随界面。禁用在线报告上传，默认隐藏部分 IP。脚本会接管终端，缺少依赖时可能询问安装。
+  ip_family=dual ["dual", "ipv4", "ipv6"]
+  full_ip=off ["off", "on"]
+test.route             回程路由测试
+  使用上游脚本安装 NextTrace，然后执行 TCP 快速回程测试。
+test.performance       YABS 性能测试
+  交互运行第三方 YABS 脚本，可能消耗 CPU、磁盘和网络资源。
+test.connectivity      IPv4 / IPv6 连通性
+  通过 HTTPS 检查两类地址，并显示 gai.conf 中明确配置的 precedence 条目。
+test.io                磁盘 I/O 测试
+  在指定目录中三次写入并同步 1 GiB 临时文件，结束后删除。
+  directory=/var/tmp []
+app.install            安装 cqs 命令
+  将当前程序原子安装到 CQS_INSTALL_PATH（默认 /usr/local/bin/cqs）。
+app.uninstall          卸载 cqs 命令
+  仅删除已安装命令，保留软件、配置和恢复材料。

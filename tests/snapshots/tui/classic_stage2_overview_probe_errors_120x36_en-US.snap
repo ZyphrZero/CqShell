@@ -1,0 +1,220 @@
+# case classic_stage2_overview_probe_errors_120x36_en-US
+# size 120x36
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview                Use sudo cqs for system changes · vps-sg-01 · ● USER · English 
+╭ System &╭ Live system status ────────────────────────────────────────────────────────────── updated 2s ago ╮ 12s ago ╮
+│ CPU  ▅▄▃│                                                                                                  │         │
+│ Disk ━━╸│  System                                                                                          ┃         │
+│ Host   v│  Host                vps-sg-01                                                                   ┃         │
+│ Kernel 6│  OS                  Debian GNU/Linux 12 (bookworm)                                              ┃         │
+│ Uptime 3│  Kernel status       Running 6.12.8-joeyblog-bbrv3                                               ┃         │
+╰─────────│  Arch / uptime       x86_64 · 3d 04h 00m                                                         ┃─────────╯
+╭ Categori│  CPU                 AMD EPYC 7B13 × 2                                                           ┃─────────╮
+│  0 Optim│  Timezone            Asia/Shanghai                                                               ┃         │
+│  ───────│                                                                                                  ┃         │
+│› 1 Syste│  Resources                                                                                       ┃         │
+│  2 Kerne│  CPU usage           12.0%                                                                       ┃tus.     │
+│  3 Netwo│  Memory              63.2% · 1.2 GiB / 1.9 GiB                                                   ┃         │
+│  4 SSH  │  Disk                / · 41.0% · 16.4 GiB / 40.0 GiB                                             ┃         │
+│  5 Docke│  Swap                10.0% · 205 MiB / 2.0 GiB                                                   ┃         │
+│  6 Mihom│                                                                                                  ┃         │
+│  7 Tools│  Network                                                                                         ┃         │
+│  8 Agent│  Congestion / queue  cubic / fq_codel / Disabled · available / v3                                ┃         │
+│  9 Promp│  TCP config          ○ not configured                                                            ┃         │
+│    Tests│  IPv4                203.0.113.24                                                                ┃         │
+│    CqShe│  IPv6                2001:db8:3c4d:15::1a2f                                                      ┃         │
+│         │  ISP                 AS64500 Example Net                                                         ┃         │
+│         │  Public lookup age   12s                                                                         ┃         │
+│         │                                                                                                  ┃         │
+│         │  Proxy                                                                                           ┃         │
+│         │  Terminal proxy      ● Enabled                                                                   ┃         │
+│         │  Mihomo status       Unknown                                                                     ┃         │
+│         │  Mihomo version      Unknown                                                                     ┃         │
+│         │                                                                                                  ┃         │
+│         │  Unavailable metrics / probe errors                                                              ┃         │
+│         │  Mihomo version: version probe failed                                                            │         │
+│         │                                                                                                  │         │
+│         │  R refresh  N public IP  PgUp/PgDn scroll  Esc back                                              │         │
+╰─────────╰──────────────────────────────────────────────────────────────────────────────────────────────────╯─────────╯
+ R refresh  N public IP  Esc back                                                                                       
+---
+0 0 120 #3d5265 reset -
+1 0 10 #3d5265 reset -
+1 10 1 #45cdb6 reset -
+1 11 20 #45cdb6 reset bold
+1 31 62 #45cdb6 reset -
+1 93 16 #91a2b0 reset -
+1 109 1 #45cdb6 reset -
+1 110 10 #3d5265 reset -
+2 0 10 #3d5265 reset -
+2 10 1 #45cdb6 reset -
+2 109 1 #45cdb6 reset -
+2 110 10 #3d5265 reset -
+3 0 10 #3d5265 reset -
+3 10 1 #45cdb6 reset -
+3 13 6 #45cdb6 reset bold
+3 109 1 #45cdb6 reset -
+3 110 10 #3d5265 reset -
+4 0 10 #3d5265 reset -
+4 10 1 #45cdb6 reset -
+4 13 20 #91a2b0 reset -
+4 109 1 #45cdb6 reset -
+4 110 10 #3d5265 reset -
+5 0 10 #3d5265 reset -
+5 10 1 #45cdb6 reset -
+5 13 20 #91a2b0 reset -
+5 109 1 #45cdb6 reset -
+5 110 10 #3d5265 reset -
+6 0 10 #3d5265 reset -
+6 10 1 #45cdb6 reset -
+6 13 20 #91a2b0 reset -
+6 109 1 #45cdb6 reset -
+6 110 10 #3d5265 reset -
+7 0 10 #3d5265 reset -
+7 10 1 #45cdb6 reset -
+7 13 20 #91a2b0 reset -
+7 109 1 #45cdb6 reset -
+7 110 10 #3d5265 reset -
+8 0 10 #3d5265 reset -
+8 10 1 #45cdb6 reset -
+8 13 20 #91a2b0 reset -
+8 109 1 #45cdb6 reset -
+8 110 10 #3d5265 reset -
+9 0 10 #3d5265 reset -
+9 10 1 #45cdb6 reset -
+9 13 20 #91a2b0 reset -
+9 109 1 #45cdb6 reset -
+9 110 10 #3d5265 reset -
+10 0 10 #3d5265 reset -
+10 10 1 #45cdb6 reset -
+10 109 1 #45cdb6 reset -
+10 110 10 #3d5265 reset -
+11 0 10 #3d5265 reset -
+11 10 1 #45cdb6 reset -
+11 13 9 #45cdb6 reset bold
+11 109 1 #45cdb6 reset -
+11 110 10 #3d5265 reset -
+12 0 10 #3d5265 reset -
+12 10 1 #45cdb6 reset -
+12 13 20 #91a2b0 reset -
+12 33 5 #5dd888 reset -
+12 109 1 #45cdb6 reset -
+12 110 10 #3d5265 reset -
+13 0 10 #3d5265 reset -
+13 10 1 #45cdb6 reset -
+13 13 20 #91a2b0 reset -
+13 33 25 #5dd888 reset -
+13 109 1 #45cdb6 reset -
+13 110 10 #3d5265 reset -
+14 0 10 #3d5265 reset -
+14 10 1 #45cdb6 reset -
+14 13 20 #91a2b0 reset -
+14 33 31 #5dd888 reset -
+14 109 1 #45cdb6 reset -
+14 110 10 #3d5265 reset -
+15 0 10 #3d5265 reset -
+15 10 1 #45cdb6 reset -
+15 13 20 #91a2b0 reset -
+15 33 25 #5dd888 reset -
+15 109 1 #45cdb6 reset -
+15 110 10 #3d5265 reset -
+16 0 10 #3d5265 reset -
+16 10 1 #45cdb6 reset -
+16 109 1 #45cdb6 reset -
+16 110 10 #3d5265 reset -
+17 0 10 #3d5265 reset -
+17 10 1 #45cdb6 reset -
+17 13 7 #45cdb6 reset bold
+17 109 1 #45cdb6 reset -
+17 110 10 #3d5265 reset -
+18 0 10 #3d5265 reset -
+18 10 1 #45cdb6 reset -
+18 13 20 #91a2b0 reset -
+18 109 1 #45cdb6 reset -
+18 110 10 #3d5265 reset -
+19 0 10 #3d5265 reset -
+19 10 1 #45cdb6 reset -
+19 13 36 #91a2b0 reset -
+19 109 1 #45cdb6 reset -
+19 110 10 #3d5265 reset -
+20 0 10 #3d5265 reset -
+20 10 1 #45cdb6 reset -
+20 13 20 #91a2b0 reset -
+20 109 1 #45cdb6 reset -
+20 110 10 #3d5265 reset -
+21 0 10 #3d5265 reset -
+21 10 1 #45cdb6 reset -
+21 13 20 #91a2b0 reset -
+21 109 1 #45cdb6 reset -
+21 110 10 #3d5265 reset -
+22 0 10 #3d5265 reset -
+22 10 1 #45cdb6 reset -
+22 13 20 #91a2b0 reset -
+22 109 1 #45cdb6 reset -
+22 110 10 #3d5265 reset -
+23 0 10 #3d5265 reset -
+23 10 1 #45cdb6 reset -
+23 13 23 #91a2b0 reset -
+23 109 1 #45cdb6 reset -
+23 110 10 #3d5265 reset -
+24 0 10 #3d5265 reset -
+24 10 1 #45cdb6 reset -
+24 109 1 #45cdb6 reset -
+24 110 10 #3d5265 reset -
+25 0 10 #3d5265 reset -
+25 10 1 #45cdb6 reset -
+25 13 5 #45cdb6 reset bold
+25 109 1 #45cdb6 reset -
+25 110 10 #3d5265 reset -
+26 0 10 #3d5265 reset -
+26 10 1 #45cdb6 reset -
+26 13 20 #91a2b0 reset -
+26 33 9 #5dd888 reset -
+26 109 1 #45cdb6 reset -
+26 110 10 #3d5265 reset -
+27 0 10 #3d5265 reset -
+27 10 1 #45cdb6 reset -
+27 13 20 #91a2b0 reset -
+27 33 7 #ffbe5e reset -
+27 109 1 #45cdb6 reset -
+27 110 10 #3d5265 reset -
+28 0 10 #3d5265 reset -
+28 10 1 #45cdb6 reset -
+28 13 20 #91a2b0 reset -
+28 33 7 #ffbe5e reset -
+28 109 1 #45cdb6 reset -
+28 110 10 #3d5265 reset -
+29 0 10 #3d5265 reset -
+29 10 1 #45cdb6 reset -
+29 109 1 #45cdb6 reset -
+29 110 10 #3d5265 reset -
+30 0 10 #3d5265 reset -
+30 10 1 #45cdb6 reset -
+30 13 34 #ffbe5e reset bold
+30 109 1 #45cdb6 reset -
+30 110 10 #3d5265 reset -
+31 0 10 #3d5265 reset -
+31 10 1 #45cdb6 reset -
+31 109 11 #3d5265 reset -
+32 0 10 #3d5265 reset -
+32 10 1 #45cdb6 reset -
+32 109 1 #45cdb6 reset -
+32 110 10 #3d5265 reset -
+33 0 10 #3d5265 reset -
+33 10 1 #45cdb6 reset -
+33 13 1 #45cdb6 reset bold
+33 14 8 #91a2b0 reset -
+33 24 1 #45cdb6 reset bold
+33 25 10 #91a2b0 reset -
+33 37 9 #45cdb6 reset bold
+33 46 7 #91a2b0 reset -
+33 55 3 #45cdb6 reset bold
+33 58 5 #91a2b0 reset -
+33 109 1 #45cdb6 reset -
+33 110 10 #3d5265 reset -
+34 0 10 #3d5265 reset -
+34 10 100 #45cdb6 reset -
+34 110 10 #3d5265 reset -
+35 0 120 #3d5265 reset -

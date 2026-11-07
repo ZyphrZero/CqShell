@@ -1,0 +1,89 @@
+# case classic_stage2_confirm_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭ System & resources ── updated 2s ago ╮╭ Network & proxy ── looked up 12s ago ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  Memory ━━━──  63% ││ BBR   ○ Disabled · available / v3    │
+│ Disk ━━━────  41%  Swap   ╸────  10% ││ TCP   ○ not configured · fq_codel    │
+│ Host   vps-sg-01                     ││ IPv4  203.0.113.24                   │
+│ Kernel 6.12.8-joeyblog-bbrv3         ││ IPv6  2001:db8:3c4d:15::1a2f         │
+│ Uptime 3d 04h 00m · Asia/Shanghai    ││ Proxy Mihomo ● Running · v1.19.2     │
+╰──────────────────────────────────────╯╰──────────────────────────────────────╯
+╭╭ ! Confirm operation ───────────────────────────────────────────────────────╮╮
+││                                                                            │┃
+││  Proceed?                                                                  │┃
+││                                                                            │┃
+││  [ Cancel ]  [ Confirm execution ]                                         │┃
+││                                                                            ││
+││  ←→ switch  Enter confirm  Y run  Esc Cancel                               ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│  6 Mihomo proxy ●││  Restore previous system sources                         │
+│  7 Tools         │├ Details ─────────────────────────────────────────────────┤
+│  8 Agent tools   ││ System overview                                          │
+│  9 Prompt        ││ Read only · Current user                                 │
+│    Tests         ││ Read host, CPU, memory, disk, IP and BBR status.         │
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ Enter confirm  Esc back                                                        
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 80 #3d5265 reset -
+3 0 80 #3d5265 reset -
+4 0 80 #3d5265 reset -
+5 0 80 #3d5265 reset -
+6 0 80 #3d5265 reset -
+7 0 80 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #ffbe5e reset -
+8 2 21 #ffbe5e reset bold
+8 23 56 #ffbe5e reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #ffbe5e reset -
+9 78 1 #ffbe5e reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #ffbe5e reset -
+10 4 8 reset reset bold
+10 78 1 #ffbe5e reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #ffbe5e reset -
+11 78 1 #ffbe5e reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #ffbe5e reset -
+12 4 10 black #45cdb6 bold
+12 16 21 #ffbe5e reset -
+12 78 1 #ffbe5e reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #ffbe5e reset -
+13 78 1 #ffbe5e reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #ffbe5e reset -
+14 4 2 #45cdb6 reset bold
+14 6 7 #91a2b0 reset -
+14 15 5 #45cdb6 reset bold
+14 20 8 #91a2b0 reset -
+14 30 1 #45cdb6 reset bold
+14 31 4 #91a2b0 reset -
+14 37 3 #45cdb6 reset bold
+14 40 7 #91a2b0 reset -
+14 78 1 #ffbe5e reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 78 #ffbe5e reset -
+15 79 1 #3d5265 reset -
+16 0 80 #3d5265 reset -
+17 0 80 #3d5265 reset -
+18 0 80 #3d5265 reset -
+19 0 80 #3d5265 reset -
+20 0 80 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

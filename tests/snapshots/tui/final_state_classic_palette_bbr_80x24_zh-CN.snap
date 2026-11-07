@@ -1,0 +1,146 @@
+# case final_state_classic_palette_bbr_80x24_zh-CN
+# size 80x24
+# theme classic
+# background #0b1119
+# locale zh-CN
+ CqShell v0.1.4  系统管理 › 系统概览          vps-sg-01 · ● 普通用户 · 简体中文 
+╭ 系统与资源 ────────── 本机 2s 前更新 ╮╭ 网络与代理 ───────── 公网 12s 前查询 ╮
+│╭ 搜索操作 ────────────────────────────────────────────────────────── 5 / 80 ╮│
+││                                                                            ││
+││  › bbr                                                                     ││
+││                                                                            ││
+││    内核管理                                                                ││
+╰│  › 安装 BBRv3 内核…                                         root  执行 ↵   │╯
+╭│    卸载未运行的 BBRv3 内核…                                 root           │╮
+││    网络调优                                                                │┃
+││    查看 BBR 与队列状态                        ○ 未启用 · 可用 v3           │┃
+││    启用当前内核的 BBR…                  ○ 未启用 · 可用 v3  root           │┃
+││    撤销 BBR 设置                                            root           │┃
+││                                                                            ││
+││                                                                            ││
+││                                                                            ││
+││                                                                            ││
+││                                                                            │┤
+││                                                                            ││
+││  ↑↓ 移动  Enter 执行  Esc 关闭                                             ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ ↑↓ 移动  Enter 执行  Tab 跳转  Ctrl+U 清空  Esc 关闭                           
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 1 1 #45cdb6 reset -
+2 2 10 #45cdb6 reset bold
+2 12 58 #45cdb6 reset -
+2 70 8 #91a2b0 reset -
+2 78 1 #45cdb6 reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 1 1 #45cdb6 reset -
+3 78 1 #45cdb6 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 4 2 #45cdb6 reset -
+4 6 69 reset reset underlined
+4 78 1 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 6 70 #91a2b0 reset bold
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 4 2 reset #45cdb6 -
+7 6 5 #91a2b0 #45cdb6 -
+7 11 3 #91a2b0 #45cdb6 bold+underlined
+7 14 8 #91a2b0 #45cdb6 -
+7 22 41 reset #45cdb6 -
+7 63 4 #91a2b0 #45cdb6 -
+7 67 1 reset #45cdb6 -
+7 68 8 #91a2b0 #45cdb6 -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 6 13 #91a2b0 reset -
+8 19 3 #91a2b0 reset bold
+8 22 8 #91a2b0 reset -
+8 63 4 #91a2b0 reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 6 70 #91a2b0 reset bold
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 11 3 #45cdb6 reset bold
+10 49 18 #91a2b0 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 6 15 #91a2b0 reset -
+11 21 3 #91a2b0 reset bold
+11 24 1 #91a2b0 reset -
+11 43 18 #91a2b0 reset -
+11 63 4 #91a2b0 reset -
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 6 5 #91a2b0 reset -
+12 11 3 #91a2b0 reset bold
+12 14 5 #91a2b0 reset -
+12 63 4 #91a2b0 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 78 1 #45cdb6 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 78 1 #45cdb6 reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 78 1 #45cdb6 reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 78 1 #45cdb6 reset -
+17 79 1 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 1 #45cdb6 reset -
+18 78 1 #45cdb6 reset -
+18 79 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 1 1 #45cdb6 reset -
+19 4 2 #45cdb6 reset bold
+19 6 5 #91a2b0 reset -
+19 13 5 #45cdb6 reset bold
+19 18 5 #91a2b0 reset -
+19 25 3 #45cdb6 reset bold
+19 28 5 #91a2b0 reset -
+19 78 1 #45cdb6 reset -
+19 79 1 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 1 78 #45cdb6 reset -
+20 79 1 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

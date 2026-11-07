@@ -1,0 +1,229 @@
+# case final_state_aurora_recommended_80x24_en-US
+# size 80x24
+# theme aurora
+# background #0b1119
+# locale en-US
+ CqShell v0.1.4  Optimization · 4                  vps-sg-01 · ● ROOT · English 
+ System & resources     updated 2s ago │ Network & proxy      looked up 12s ago 
+CPU  ▄▃▂▃▁▁▂▂▁  12%  Memory ━━━━──  63%│BBR   ○ Disabled · available / v3       
+Disk ━━━╸─────  41%  Swap   ╸─────  10%│TCP   ○ not configured · fq_codel       
+Host   vps-sg-01                       │IPv4  203.0.113.24 · AS64500 Example Net
+Kernel 6.12.8-joeyblog-bbrv3 · x86_64  │IPv6  2001:db8:3c4d:15::1a2f            
+Uptime 3d 04h 00m · Asia/Shanghai      │Proxy Mihomo ● Running · v1.19.2        
+                                                                                
+ Categories        │ Optimization · Selected: 4                            1/11 
+▎ 0 Optimization 4 │▎ [✓] Update packages                                      ┃
+  ─────────────────│  [✓] Clean system…                                standard┃
+  1 System         │  [✓] Tune TCP buffers…                 1000 Mbit/s · 50 ms┃
+  2 Kernel         │  [✓] Enable BBR in the running kernel…                  fq┃
+  3 Network        │  [ ] Set timezone…                 Asia/Shanghai = current┃
+  4 SSH            │  [ ] Rebuild swap automatically                           │
+  5 Docker         │  [ ] Install fail2ban                                     │
+  6 Mihomo proxy ● │  [ ] Install all / choose a package…                   all│
+  7 Tools          │ Execution plan                                             
+  8 Agent tools    │Update packages                                             
+  9 Prompt         │Changes system or user files · Requires root                
+    Tests          │1. Update packages                                          
+    CqShell        │2. Clean system · standard                                  
+                   │ X  review and run   A  use recommended                     
+  Space  select   ↵  configure   X/F5  review and run   ?  help                 
+---
+0 1 7 #4fd1bd reset bold
+0 9 6 #bbbdbf reset -
+0 17 12 #bbbdbf reset -
+0 29 3 #8b8e91 reset -
+0 32 1 #4fd1bd reset bold
+0 51 9 #f3f4f4 reset -
+0 60 3 #8b8e91 reset -
+0 63 6 #f2879a reset -
+0 69 3 #8b8e91 reset -
+0 72 7 #bbbdbf reset -
+1 0 20 #8b8e91 #151b22 -
+1 20 3 #f3f4f4 #151b22 -
+1 23 16 #bbbdbf #151b22 -
+1 39 1 #232930 reset -
+1 40 17 #8b8e91 #151b22 -
+1 57 4 #f3f4f4 #151b22 -
+1 61 19 #bbbdbf #151b22 -
+2 0 5 #bbbdbf #151b22 -
+2 5 9 #4fd1bd #151b22 -
+2 14 4 #f3f4f4 #151b22 bold
+2 18 1 #bbbdbf #151b22 -
+2 19 2 #f3f4f4 #151b22 -
+2 21 7 #bbbdbf #151b22 -
+2 28 4 #4fd1bd #151b22 -
+2 32 2 #232930 #151b22 -
+2 34 4 #f3f4f4 #151b22 bold
+2 38 1 #bbbdbf #151b22 -
+2 39 1 #232930 reset -
+2 40 16 #bbbdbf #151b22 -
+2 56 3 #8b8e91 #151b22 -
+2 59 21 #f3f4f4 #151b22 -
+3 0 5 #bbbdbf #151b22 -
+3 5 4 #4fd1bd #151b22 -
+3 9 5 #232930 #151b22 -
+3 14 4 #f3f4f4 #151b22 bold
+3 18 1 #bbbdbf #151b22 -
+3 19 2 #f3f4f4 #151b22 -
+3 21 7 #bbbdbf #151b22 -
+3 28 1 #4fd1bd #151b22 -
+3 29 5 #232930 #151b22 -
+3 34 4 #f3f4f4 #151b22 bold
+3 38 1 #bbbdbf #151b22 -
+3 39 1 #232930 reset -
+3 40 22 #bbbdbf #151b22 -
+3 62 3 #8b8e91 #151b22 -
+3 65 15 #f3f4f4 #151b22 -
+4 0 7 #bbbdbf #151b22 -
+4 7 32 #f3f4f4 #151b22 -
+4 39 1 #232930 reset -
+4 40 6 #bbbdbf #151b22 -
+4 46 12 #f3f4f4 #151b22 -
+4 58 3 #8b8e91 #151b22 -
+4 61 19 #f3f4f4 #151b22 -
+5 0 7 #bbbdbf #151b22 -
+5 7 21 #f3f4f4 #151b22 -
+5 28 3 #8b8e91 #151b22 -
+5 31 8 #f3f4f4 #151b22 -
+5 39 1 #232930 reset -
+5 40 6 #bbbdbf #151b22 -
+5 46 34 #f3f4f4 #151b22 -
+6 0 7 #bbbdbf #151b22 -
+6 7 10 #f3f4f4 #151b22 -
+6 17 3 #8b8e91 #151b22 -
+6 20 19 #f3f4f4 #151b22 -
+6 39 1 #232930 reset -
+6 40 6 #bbbdbf #151b22 -
+6 46 16 #f3f4f4 #151b22 -
+6 62 3 #8b8e91 #151b22 -
+6 65 15 #f3f4f4 #151b22 -
+7 0 39 #f3f4f4 #151b22 -
+7 40 40 #f3f4f4 #151b22 -
+8 0 12 #8b8e91 #151b22 -
+8 12 7 #f3f4f4 #151b22 -
+8 19 1 #232930 reset -
+8 20 28 #8b8e91 #151b22 -
+8 48 26 #f3f4f4 #151b22 -
+8 74 6 #bbbdbf #151b22 -
+9 0 1 #4fd1bd #1f242b bold
+9 1 1 #f3f4f4 #1f242b bold
+9 2 2 #8b8e91 #1f242b bold
+9 4 12 #f3f4f4 #1f242b bold
+9 16 2 #4fd1bd #1f242b bold
+9 18 1 #f3f4f4 #1f242b bold
+9 19 1 #232930 reset -
+9 20 1 #4fd1bd #1f242b bold
+9 21 1 #f3f4f4 #1f242b bold
+9 22 4 #4fd1bd #1f242b bold
+9 26 53 #f3f4f4 #1f242b bold
+9 79 1 #4fd1bd #151b22 -
+10 0 2 #f3f4f4 #151b22 -
+10 2 17 #232930 #151b22 -
+10 19 1 #232930 reset -
+10 20 2 #f3f4f4 #151b22 -
+10 22 4 #4fd1bd #151b22 -
+10 26 45 #f3f4f4 #151b22 -
+10 71 8 #bbbdbf #151b22 -
+10 79 1 #4fd1bd #151b22 -
+11 0 2 #f3f4f4 #151b22 -
+11 2 2 #8b8e91 #151b22 -
+11 4 15 #f3f4f4 #151b22 -
+11 19 1 #232930 reset -
+11 20 2 #f3f4f4 #151b22 -
+11 22 4 #4fd1bd #151b22 -
+11 26 34 #f3f4f4 #151b22 -
+11 60 19 #bbbdbf #151b22 -
+11 79 1 #4fd1bd #151b22 -
+12 0 2 #f3f4f4 #151b22 -
+12 2 2 #8b8e91 #151b22 -
+12 4 15 #f3f4f4 #151b22 -
+12 19 1 #232930 reset -
+12 20 2 #f3f4f4 #151b22 -
+12 22 4 #4fd1bd #151b22 -
+12 26 51 #f3f4f4 #151b22 -
+12 77 2 #bbbdbf #151b22 -
+12 79 1 #4fd1bd #151b22 -
+13 0 2 #f3f4f4 #151b22 -
+13 2 2 #8b8e91 #151b22 -
+13 4 15 #f3f4f4 #151b22 -
+13 19 1 #232930 reset -
+13 20 2 #f3f4f4 #151b22 -
+13 22 4 #bbbdbf #151b22 -
+13 26 30 #f3f4f4 #151b22 -
+13 56 23 #bbbdbf #151b22 -
+13 79 1 #4fd1bd #151b22 -
+14 0 2 #f3f4f4 #151b22 -
+14 2 2 #8b8e91 #151b22 -
+14 4 15 #f3f4f4 #151b22 -
+14 19 1 #232930 reset -
+14 20 2 #f3f4f4 #151b22 -
+14 22 4 #bbbdbf #151b22 -
+14 26 53 #f3f4f4 #151b22 -
+14 79 1 #3c4147 #151b22 -
+15 0 2 #f3f4f4 #151b22 -
+15 2 2 #8b8e91 #151b22 -
+15 4 15 #f3f4f4 #151b22 -
+15 19 1 #232930 reset -
+15 20 2 #f3f4f4 #151b22 -
+15 22 4 #bbbdbf #151b22 -
+15 26 53 #f3f4f4 #151b22 -
+15 79 1 #3c4147 #151b22 -
+16 0 2 #f3f4f4 #151b22 -
+16 2 2 #8b8e91 #151b22 -
+16 4 12 #f3f4f4 #151b22 -
+16 16 2 #6fd39a #151b22 -
+16 18 1 #f3f4f4 #151b22 -
+16 19 1 #232930 reset -
+16 20 2 #f3f4f4 #151b22 -
+16 22 4 #bbbdbf #151b22 -
+16 26 50 #f3f4f4 #151b22 -
+16 76 3 #bbbdbf #151b22 -
+16 79 1 #3c4147 #151b22 -
+17 0 2 #f3f4f4 #151b22 -
+17 2 2 #8b8e91 #151b22 -
+17 4 15 #f3f4f4 #151b22 -
+17 19 1 #232930 reset -
+17 20 16 #8b8e91 #151b22 -
+17 36 44 #f3f4f4 #151b22 -
+18 0 2 #f3f4f4 #151b22 -
+18 2 2 #8b8e91 #151b22 -
+18 4 15 #f3f4f4 #151b22 -
+18 19 1 #232930 reset -
+18 20 60 #f3f4f4 #151b22 -
+19 0 2 #f3f4f4 #151b22 -
+19 2 2 #8b8e91 #151b22 -
+19 4 15 #f3f4f4 #151b22 -
+19 19 1 #232930 reset -
+19 20 28 #f3f4f4 #151b22 -
+19 48 3 #8b8e91 #151b22 -
+19 51 29 #f3f4f4 #151b22 -
+20 0 2 #f3f4f4 #151b22 -
+20 2 2 #8b8e91 #151b22 -
+20 4 15 #f3f4f4 #151b22 -
+20 19 1 #232930 reset -
+20 20 18 #f3f4f4 #151b22 bold
+20 38 42 #f3f4f4 #151b22 -
+21 0 2 #f3f4f4 #151b22 -
+21 2 2 #8b8e91 #151b22 -
+21 4 15 #f3f4f4 #151b22 -
+21 19 1 #232930 reset -
+21 20 15 #f3f4f4 #151b22 bold
+21 35 3 #f3f4f4 #151b22 -
+21 38 8 #bbbdbf #151b22 -
+21 46 34 #f3f4f4 #151b22 -
+22 0 19 #f3f4f4 #151b22 -
+22 19 1 #232930 reset -
+22 20 3 #4fd1bd #1f242b bold
+22 23 15 #bbbdbf #151b22 -
+22 38 2 #f3f4f4 #151b22 -
+22 40 3 #4fd1bd #1f242b bold
+22 43 16 #bbbdbf #151b22 -
+22 59 21 #f3f4f4 #151b22 -
+23 1 7 #4fd1bd #1f242b bold
+23 8 7 #bbbdbf reset -
+23 17 3 #4fd1bd #1f242b bold
+23 20 10 #bbbdbf reset -
+23 32 6 #4fd1bd #1f242b bold
+23 38 15 #bbbdbf reset -
+23 55 3 #4fd1bd #1f242b bold
+23 58 5 #bbbdbf reset -

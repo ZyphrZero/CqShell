@@ -1,0 +1,170 @@
+# case classic_stage2_palette_bbr_120x36_en-US
+# size 120x36
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview                Use sudo cqs for system changes · vps-sg-01 · ● USER · English 
+╭ System & resources ────────────────────── updated 2s ago ╮╭ Network & proxy ────────────────────── looked up 12s ago ╮
+│ CPU  ▅▄▃▂▃▁▁▂▂▁  12% 2-core  Memory ━━━━──  63% 1.2/1.9G ││ BBR   ○ Disabled · available / v3 · cubic                │
+│ Disk ━━╸───  41% 16.4/40.0G  Swap   ╸─────  10% 0.2/2.0G ││ TCP   ○ not configured · fq_codel                        │
+│ Host   vps-sg-01 · Debian GNU/Linux 12 (bookworm)        ││ IPv4  203.0.113.24 · AS64500 Example Net                 │
+│ Kernel 6.12.8-joeyblog-bbrv3 · x86_64                    ││ IPv6  2001:db8:3c4d:15::1a2f                             │
+│ Uptime 3d 04h 00m · Asia/Shanghai                        ││ Proxy Mihomo ● Running · v1.19.2 · Terminal ● Enabled    │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+╭ Categories ─╭ Search actions ────────────────────────────────────────────────────────────────── 5 / 80 ╮─────────────╮
+│  0 Optimizat│                                                                                          │             │
+│  ───────────│  › bbr                                                                                   │             │
+│› 1 System   │                                                                                          │             │
+│  2 Kernel   │    Kernel                                                                                │ status.     │
+│  3 Network  │  › Install BBRv3 kernel…                                                   root  run ↵   │             │
+│  4 SSH      │    Remove a non-running BBRv3 kernel…                                      root          │             │
+│  5 Docker   │    Network                                                                               │             │
+│  6 Mihomo pr│    BBR and queue status                               ○ Disabled · available v3          │             │
+│  7 Tools    │    Enable BBR in the running kernel…            ○ Disabled · available v3  root          │             │
+│  8 Agent too│    Restore BBR settings                                                    root          │             │
+│  9 Prompt   │                                                                                          │             │
+│    Tests    │                                                                                          │             │
+│    CqShell  │                                                                                          │             │
+│             │                                                                                          │             │
+│             │                                                                                          │             │
+│             │                                                                                          │             │
+│             │  ↑↓ move  Enter run  Esc close                                                           │             │
+│             ╰──────────────────────────────────────────────────────────────────────────────────────────╯             │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││ ↵ open overview                                      │
+╰──────────────────╯╰──────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
+ ↑↓ move  Enter run  Tab jump  Ctrl+U clear  Esc close                                                                  
+---
+0 0 120 #3d5265 reset -
+1 0 120 #3d5265 reset -
+2 0 120 #3d5265 reset -
+3 0 120 #3d5265 reset -
+4 0 120 #3d5265 reset -
+5 0 120 #3d5265 reset -
+6 0 120 #3d5265 reset -
+7 0 120 #3d5265 reset -
+8 0 14 #3d5265 reset -
+8 14 1 #45cdb6 reset -
+8 15 16 #45cdb6 reset bold
+8 31 66 #45cdb6 reset -
+8 97 8 #91a2b0 reset -
+8 105 1 #45cdb6 reset -
+8 106 14 #3d5265 reset -
+9 0 14 #3d5265 reset -
+9 14 1 #45cdb6 reset -
+9 105 1 #45cdb6 reset -
+9 106 14 #3d5265 reset -
+10 0 14 #3d5265 reset -
+10 14 1 #45cdb6 reset -
+10 17 2 #45cdb6 reset -
+10 19 83 reset reset underlined
+10 105 1 #45cdb6 reset -
+10 106 14 #3d5265 reset -
+11 0 14 #3d5265 reset -
+11 14 1 #45cdb6 reset -
+11 105 1 #45cdb6 reset -
+11 106 14 #3d5265 reset -
+12 0 14 #3d5265 reset -
+12 14 1 #45cdb6 reset -
+12 19 84 #91a2b0 reset bold
+12 105 1 #45cdb6 reset -
+12 106 14 #3d5265 reset -
+13 0 14 #3d5265 reset -
+13 14 1 #45cdb6 reset -
+13 17 2 reset #45cdb6 -
+13 19 8 #91a2b0 #45cdb6 -
+13 27 3 #91a2b0 #45cdb6 bold+underlined
+13 30 10 #91a2b0 #45cdb6 -
+13 40 51 reset #45cdb6 -
+13 91 4 #91a2b0 #45cdb6 -
+13 95 1 reset #45cdb6 -
+13 96 7 #91a2b0 #45cdb6 -
+13 105 1 #45cdb6 reset -
+13 106 14 #3d5265 reset -
+14 0 14 #3d5265 reset -
+14 14 1 #45cdb6 reset -
+14 19 21 #91a2b0 reset -
+14 40 3 #91a2b0 reset bold
+14 43 10 #91a2b0 reset -
+14 91 4 #91a2b0 reset -
+14 105 1 #45cdb6 reset -
+14 106 14 #3d5265 reset -
+15 0 14 #3d5265 reset -
+15 14 1 #45cdb6 reset -
+15 19 84 #91a2b0 reset bold
+15 105 1 #45cdb6 reset -
+15 106 14 #3d5265 reset -
+16 0 14 #3d5265 reset -
+16 14 1 #45cdb6 reset -
+16 19 3 #45cdb6 reset bold
+16 70 25 #91a2b0 reset -
+16 105 1 #45cdb6 reset -
+16 106 14 #3d5265 reset -
+17 0 14 #3d5265 reset -
+17 14 1 #45cdb6 reset -
+17 19 7 #91a2b0 reset -
+17 26 3 #91a2b0 reset bold
+17 29 23 #91a2b0 reset -
+17 64 25 #91a2b0 reset -
+17 91 4 #91a2b0 reset -
+17 105 1 #45cdb6 reset -
+17 106 14 #3d5265 reset -
+18 0 14 #3d5265 reset -
+18 14 1 #45cdb6 reset -
+18 19 8 #91a2b0 reset -
+18 27 3 #91a2b0 reset bold
+18 30 9 #91a2b0 reset -
+18 91 4 #91a2b0 reset -
+18 105 1 #45cdb6 reset -
+18 106 14 #3d5265 reset -
+19 0 14 #3d5265 reset -
+19 14 1 #45cdb6 reset -
+19 105 1 #45cdb6 reset -
+19 106 14 #3d5265 reset -
+20 0 14 #3d5265 reset -
+20 14 1 #45cdb6 reset -
+20 105 1 #45cdb6 reset -
+20 106 14 #3d5265 reset -
+21 0 14 #3d5265 reset -
+21 14 1 #45cdb6 reset -
+21 105 1 #45cdb6 reset -
+21 106 14 #3d5265 reset -
+22 0 14 #3d5265 reset -
+22 14 1 #45cdb6 reset -
+22 105 1 #45cdb6 reset -
+22 106 14 #3d5265 reset -
+23 0 14 #3d5265 reset -
+23 14 1 #45cdb6 reset -
+23 105 1 #45cdb6 reset -
+23 106 14 #3d5265 reset -
+24 0 14 #3d5265 reset -
+24 14 1 #45cdb6 reset -
+24 105 1 #45cdb6 reset -
+24 106 14 #3d5265 reset -
+25 0 14 #3d5265 reset -
+25 14 1 #45cdb6 reset -
+25 17 2 #45cdb6 reset bold
+25 19 5 #91a2b0 reset -
+25 26 5 #45cdb6 reset bold
+25 31 4 #91a2b0 reset -
+25 37 3 #45cdb6 reset bold
+25 40 6 #91a2b0 reset -
+25 105 1 #45cdb6 reset -
+25 106 14 #3d5265 reset -
+26 0 14 #3d5265 reset -
+26 14 92 #45cdb6 reset -
+26 106 14 #3d5265 reset -
+27 0 120 #3d5265 reset -
+28 0 120 #3d5265 reset -
+29 0 120 #3d5265 reset -
+30 0 120 #3d5265 reset -
+31 0 120 #3d5265 reset -
+32 0 120 #3d5265 reset -
+33 0 120 #3d5265 reset -
+34 0 120 #3d5265 reset -
+35 0 120 #3d5265 reset -

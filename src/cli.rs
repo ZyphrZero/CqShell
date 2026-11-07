@@ -1,5 +1,5 @@
 use crate::{
-    actions::{self, Parameters},
+    actions::{self, Parameters, Spec},
     config::{Paths, Preferences},
     error::{Error, Result},
     i18n::I18n,
@@ -47,6 +47,12 @@ pub fn command(i: &I18n) -> Command {
                 .help(i.text("cli.lang").to_owned()),
         )
         .arg(
+            Arg::new("theme")
+                .long("theme")
+                .global(true)
+                .help(i.text("cli.theme").to_owned()),
+        )
+        .arg(
             Arg::new("config")
                 .long("config")
                 .global(true)
@@ -88,7 +94,7 @@ pub fn command(i: &I18n) -> Command {
                 .action(ArgAction::SetTrue)
                 .help(i.text("cli.uninstall").to_owned()),
         );
-    for name in ["list", "languages"] {
+    for name in ["list", "languages", "themes"] {
         cmd = cmd.subcommand(Command::new(name).about(i.text(&format!("cli.{name}")).to_owned()));
     }
     cmd = cmd.subcommand(
@@ -155,6 +161,34 @@ pub fn parse_parameters(values: impl Iterator<Item = String>) -> Result<Paramete
     Ok(parameters)
 }
 
+/// The jobs of `cqs batch <ids> --set <sets>`. Each `--set <id>.<name>=<value>` goes to every
+/// listed ID whose `<id>.` prefixes it, and [`Spec::parameters`] fills in the defaults and
+/// validates the values. Errors keep the order `cqs batch` reports them in: malformed or
+/// repeated `--set` values first, then the IDs in order (unknown ID or invalid parameters),
+/// and last the `--set` values no ID claimed, as `error.input`.
+pub fn batch_jobs(ids: &[&str], sets: &[&str]) -> Result<Vec<(Spec, Parameters)>> {
+    let parameters = parse_parameters(sets.iter().map(|set| (*set).to_owned()))?;
+    let mut remaining = parameters.clone();
+    let mut jobs = Vec::new();
+    for id in ids {
+        let spec = actions::find(id)?;
+        let mut supplied = Parameters::new();
+        let prefix = format!("{id}.");
+        for (key, value) in &parameters {
+            if let Some(key_name) = key.strip_prefix(&prefix) {
+                supplied.insert(key_name.into(), value.clone());
+                remaining.remove(key);
+            }
+        }
+        let parameters = spec.parameters(&supplied)?;
+        jobs.push((spec, parameters));
+    }
+    if !remaining.is_empty() {
+        return Err(Error::new("error.input", format!("{remaining:?}")));
+    }
+    Ok(jobs)
+}
+
 pub fn main_entry() -> i32 {
     let mut args: Vec<String> = env::args().collect();
     crate::ops::clash::compat::normalize_arguments(&mut args);
@@ -172,14 +206,14 @@ pub fn main_entry() -> i32 {
         paths.preferences = preferences_path;
         let language = bootstrap(&args, "--lang")
             .or_else(|| env::var("CQS_LANG").ok())
-            .or(preferences.language);
+            .or_else(|| preferences.language.clone());
         let directory = bootstrap(&args, "--locale-dir")
             .map(PathBuf::from)
-            .or(preferences.locale_dir);
+            .or_else(|| preferences.locale_dir.clone());
         let i18n = I18n::load(language.as_deref(), directory.as_deref())?;
-        Ok::<_, Error>((paths, i18n))
+        Ok::<_, Error>((paths, i18n, preferences))
     })();
-    let (paths, i18n) = match result {
+    let (paths, i18n, preferences) = match result {
         Ok(pair) => pair,
         Err(e) => {
             eprintln!("{e}");
@@ -212,7 +246,7 @@ pub fn main_entry() -> i32 {
             }
         }
     }
-    let result = dispatch(&ctx, &matches);
+    let result = dispatch(&ctx, &matches, &preferences);
     match result {
         Ok(()) => 0,
         Err(e) => {
@@ -231,7 +265,7 @@ pub fn main_entry() -> i32 {
     }
 }
 
-fn dispatch(ctx: &Context, args: &clap::ArgMatches) -> Result<()> {
+fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -> Result<()> {
     if args.get_flag("install") || args.get_flag("uninstall") {
         if args.subcommand().is_some() {
             return Err(Error::new(
@@ -246,10 +280,19 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches) -> Result<()> {
         })?;
         return actions::execute(ctx, &spec, &Parameters::new());
     }
-    if args.get_flag("json") && !matches!(args.subcommand_name(), Some("list" | "languages")) {
-        return Err(Error::new("error.cli", "--json requires list/languages"));
+    if args.get_flag("json")
+        && !matches!(
+            args.subcommand_name(),
+            Some("list" | "languages" | "themes")
+        )
+    {
+        return Err(Error::new(
+            "error.cli",
+            "--json requires list/languages/themes",
+        ));
     }
     match args.subcommand() {
+        Some(("themes", _)) => themes(ctx, args.get_flag("json")),
         Some(("clashctl", matches)) => crate::ops::clash::compat::dispatch(ctx, matches),
         Some(("list", _)) => {
             let specs = actions::specs();
@@ -306,42 +349,200 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches) -> Result<()> {
             actions::execute(ctx, &actions::find(id)?, &parameters)
         }
         Some(("batch", matches)) => {
-            let parameters = parse_parameters(
-                matches
-                    .get_many::<String>("set")
-                    .into_iter()
-                    .flatten()
-                    .cloned(),
-            )?;
             let ids = matches
                 .get_many::<String>("action")
                 .unwrap()
+                .map(String::as_str)
                 .collect::<Vec<_>>();
-            let mut remaining = parameters.clone();
-            let mut jobs = Vec::new();
-            for id in ids {
-                let spec = actions::find(id)?;
-                let mut supplied = Parameters::new();
-                let prefix = format!("{id}.");
-                for (key, value) in &parameters {
-                    if let Some(key_name) = key.strip_prefix(&prefix) {
-                        supplied.insert(key_name.into(), value.clone());
-                        remaining.remove(key);
-                    }
-                }
-                jobs.push((spec.clone(), spec.parameters(&supplied)?));
-            }
-            if !remaining.is_empty() {
-                return Err(Error::new("error.input", format!("{remaining:?}")));
-            }
-            actions::batch(ctx, &jobs)
+            let sets = matches
+                .get_many::<String>("set")
+                .into_iter()
+                .flatten()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            actions::batch(ctx, &batch_jobs(&ids, &sets)?)
         }
         None => {
             if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
                 return Err(Error::new("error.tty", "cqs list / cqs run"));
             }
-            crate::tui::run(ctx.clone())
+            crate::tui::run(
+                ctx.clone(),
+                args.get_one::<String>("theme").map(String::as_str),
+                preferences,
+            )
         }
         Some((name, _)) => Err(Error::new("error.cli", name)),
+    }
+}
+
+fn themes(ctx: &Context, json: bool) -> Result<()> {
+    use crate::theme::{ThemeName, builtin, file};
+    let name = |definition: &crate::theme::ThemeDefinition| match &definition.name {
+        ThemeName::Builtin(key) => ctx.i18n.text(key).to_owned(),
+        ThemeName::Custom(name) => name.clone(),
+    };
+    let mut rows = builtin::all().into_iter().map(|definition| serde_json::json!({"id": definition.id, "name": name(&definition), "builtin": true, "path": null, "valid": true, "error": null})).collect::<Vec<_>>();
+    for custom in file::load_dir(&ctx.paths.themes) {
+        let error = custom.result.as_ref().err().map(|error| {
+            ctx.i18n
+                .format("ui.theme_error", &[("detail", &error.to_string())])
+        });
+        rows.push(serde_json::json!({"id": custom.id, "name": custom.result.as_ref().map(&name).unwrap_or_else(|_| custom.id.clone()), "builtin": false, "path": custom.path, "valid": error.is_none(), "error": error}));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        for row in rows {
+            if row["valid"] == true {
+                println!(
+                    "{}\t{}",
+                    row["id"].as_str().unwrap(),
+                    row["name"].as_str().unwrap()
+                );
+            } else {
+                eprintln!(
+                    "{}",
+                    row["error"].as_str().unwrap().replace(['\n', '\r'], " ")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `cqs batch <ids> --set <sets>…` through [`dispatch`]. Without `--yes` and without a
+    /// terminal the batch confirmation fails, so no job runs even when every argument is valid.
+    fn cqs_batch(ids: &[&str], sets: &[&str]) -> Result<()> {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        ctx.yes = false;
+        ctx.interactive = false;
+        let args = ["cqs", "batch"]
+            .into_iter()
+            .chain(ids.iter().copied())
+            .chain(sets.iter().flat_map(|set| ["--set", *set]));
+        let matches = command(&ctx.i18n).try_get_matches_from(args).unwrap();
+        dispatch(&ctx, &matches, &Preferences::default())
+    }
+
+    #[test]
+    fn batch_jobs_assigns_prefixed_values_and_fills_in_defaults() {
+        let ids = ["bbr.enable", "tcp.tune", "terminal.status"];
+        let sets = ["tcp.tune.rtt=80", "bbr.enable.qdisc=fq_codel"];
+        let jobs = batch_jobs(&ids, &sets)
+            .unwrap()
+            .into_iter()
+            .map(|(spec, parameters)| (spec.id, parameters))
+            .collect::<Vec<_>>();
+        // Jobs follow the ID order, not the --set order; an action without fields gets none.
+        assert_eq!(
+            jobs,
+            [
+                (
+                    "bbr.enable",
+                    Parameters::from([("qdisc".into(), "fq_codel".into())])
+                ),
+                (
+                    "tcp.tune",
+                    Parameters::from([
+                        ("bandwidth".into(), "1000".into()),
+                        ("rtt".into(), "80".into()),
+                    ])
+                ),
+                ("terminal.status", Parameters::new()),
+            ]
+        );
+        let defaults = batch_jobs(&["tcp.tune"], &[]).unwrap();
+        assert_eq!(defaults[0].1, defaults[0].0.defaults());
+        // `cqs batch` accepts the same arguments and stops only at the batch confirmation.
+        assert_eq!(cqs_batch(&ids, &sets).unwrap_err().key, "error.confirm");
+    }
+
+    #[test]
+    fn batch_jobs_reports_the_errors_cqs_batch_reported_before_the_extraction() {
+        // Keys and details recorded from `cqs batch` before batch_jobs left dispatch.
+        let cases: &[(&[&str], &[&str], &str, &str)] = &[
+            // Malformed and repeated --set values come first, before any ID is looked up.
+            (
+                &["tcp.tune"],
+                &["tcp.tune.rtt"],
+                "error.input",
+                "tcp.tune.rtt",
+            ),
+            (&["tcp.tune"], &["=80"], "error.input", ""),
+            (
+                &["tcp.tune"],
+                &["tcp.tune.rtt=80", "tcp.tune.rtt=90"],
+                "error.input",
+                "tcp.tune.rtt",
+            ),
+            (&["nope"], &["x"], "error.input", "x"),
+            // Then each ID in order: unknown IDs and invalid parameters.
+            (&["tcp.tune", "nope"], &[], "error.action", "nope"),
+            (
+                &["tcp.tune"],
+                &["tcp.tune.nope=1"],
+                "error.input",
+                "tcp.tune: nope",
+            ),
+            (&["tcp.tune"], &["tcp.tune.=1"], "error.input", "tcp.tune: "),
+            (
+                &["bbr.enable"],
+                &["bbr.enable.qdisc=invalid"],
+                "error.input",
+                "qdisc=invalid",
+            ),
+            (&["tcp.tune"], &["tcp.tune.rtt=abc"], "error.input", "abc"),
+            (&["ssh.key"], &[], "error.required", "public_key"),
+            (
+                &["bbr.enable", "nope"],
+                &["bbr.enable.qdisc=invalid"],
+                "error.input",
+                "qdisc=invalid",
+            ),
+            (
+                &["nope", "bbr.enable"],
+                &["bbr.enable.qdisc=invalid"],
+                "error.action",
+                "nope",
+            ),
+            // Last, the values no ID claimed.
+            (
+                &["tcp.tune"],
+                &["bbr.enable.qdisc=fq"],
+                "error.input",
+                r#"{"bbr.enable.qdisc": "fq"}"#,
+            ),
+            (
+                &["tcp.tune"],
+                &["bbr.enable.qdisc=fq", "x=1"],
+                "error.input",
+                r#"{"bbr.enable.qdisc": "fq", "x": "1"}"#,
+            ),
+            (&["nope"], &["other.a=1"], "error.action", "nope"),
+            (
+                &["bbr.enable"],
+                &["bbr.enable.qdisc=invalid", "other.a=1"],
+                "error.input",
+                "qdisc=invalid",
+            ),
+        ];
+        for (ids, sets, key, detail) in cases {
+            for (via, error) in [
+                ("batch_jobs", batch_jobs(ids, sets).unwrap_err()),
+                ("cqs batch", cqs_batch(ids, sets).unwrap_err()),
+            ] {
+                assert_eq!(
+                    (error.key, error.detail.as_str()),
+                    (*key, *detail),
+                    "{via} {ids:?} --set {sets:?}"
+                );
+            }
+        }
     }
 }

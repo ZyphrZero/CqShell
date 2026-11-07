@@ -1,0 +1,122 @@
+# case classic_stage2_chip_form_bbr_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭ System & resources ── updated 2s ago ╮╭ Network & proxy ── looked up 12s ago ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  Memory ━━━──  63% ││ BBR   ○ Disabled · available / v3    │
+│ Disk ━━━────  41%  Swap   ╸────  10% ││ TCP   ○ not configured · fq_codel    │
+│╭ Enable BBR in the running kernel ──────────────────────────────────────────╮│
+││                                                                            ││
+││  Submit to run directly; specific confirmations still apply.               ││
+╰│  Congestion control  cubic                                                 │╯
+╭│  Changes system or user files · Requires root                              │╮
+││                                                                            │┃
+││  › Default queue *  1/1                                                    │┃
+││     fq   fq_codel   fq_pie   cake                                          │┃
+││    Use the fq fair-queueing scheduler.                                     │┃
+││                                                                            ││
+││  sudo cqs run bbr.enable --set qdisc=fq                                    ││
+││                                                                            ││
+││  [ Confirm execution ]  [ Cancel ]                                         ││
+││  Tab/↑↓ field  ←→ choice / cursor  Ctrl+Enter submit  Esc Cancel           │┤
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│  9 Prompt        ││ Read only · Current user                                 │
+│    Tests         ││ Read host, CPU, memory, disk, IP and BBR status.         │
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ Tab/↑↓ field  ←→ choice / cursor  Ctrl+Enter submit  Esc back                  
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 80 #3d5265 reset -
+3 0 80 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 2 34 #45cdb6 reset bold
+4 36 43 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 4 59 #91a2b0 reset -
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 4 28 #ffbe5e reset -
+8 32 3 #91a2b0 reset -
+8 35 13 #ffbe5e reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 4 2 #45cdb6 reset -
+10 6 13 #45cdb6 reset bold
+10 19 2 #ff7585 reset -
+10 21 5 #91a2b0 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 6 4 black #45cdb6 -
+11 11 10 #91a2b0 reset -
+11 22 8 #91a2b0 reset -
+11 31 6 #91a2b0 reset -
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 6 35 #91a2b0 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 4 38 #45cdb6 reset -
+14 78 1 #45cdb6 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 78 1 #45cdb6 reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 4 21 #45cdb6 reset -
+16 78 1 #45cdb6 reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 4 6 #45cdb6 reset bold
+17 10 6 #91a2b0 reset -
+17 18 2 #45cdb6 reset bold
+17 20 16 #91a2b0 reset -
+17 38 10 #45cdb6 reset bold
+17 48 7 #91a2b0 reset -
+17 57 3 #45cdb6 reset bold
+17 60 7 #91a2b0 reset -
+17 78 1 #45cdb6 reset -
+17 79 1 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 78 #45cdb6 reset -
+18 79 1 #3d5265 reset -
+19 0 80 #3d5265 reset -
+20 0 80 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

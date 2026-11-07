@@ -1,11 +1,12 @@
 use crate::{
     error::{Error, Result},
     ops,
-    runtime::Context,
+    runtime::{Context, Outcome, Step, StepState},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
+    time::{Duration, Instant},
 };
 
 pub type Parameters = BTreeMap<String, String>;
@@ -151,6 +152,9 @@ pub struct Spec {
     pub changes: bool,
     pub external: bool,
     pub fields: Vec<Field>,
+    /// Whether a reviewed Run-mode form submission may skip the generic confirmation.
+    /// Set from [`REVERSIBLE`]; never shown by `cqs list`.
+    pub reversible: bool,
 }
 impl Spec {
     pub fn label(&self) -> String {
@@ -271,6 +275,17 @@ pub const OPTIMIZATION: &[&str] = &[
     "ssh.key",
 ];
 
+/// Actions whose effect the user can undo, so a reviewed form submission runs them without
+/// the generic confirmation. Each entry was reviewed individually (design, component 8);
+/// every other action is not reversible.
+const REVERSIBLE: &[&str] = &[
+    "bbr.enable",
+    "tcp.tune",
+    "system.timezone",
+    "terminal.apply",
+    "clash.proxy.select",
+];
+
 pub fn specs() -> Vec<Spec> {
     use Kind::*;
     let mut items = Vec::new();
@@ -283,6 +298,7 @@ pub fn specs() -> Vec<Spec> {
             changes,
             external,
             fields,
+            reversible: REVERSIBLE.contains(&id),
         })
     };
     add("system.info", "system", Info, false, false, false, vec![]);
@@ -952,24 +968,65 @@ fn retain_valid(choices: &mut Vec<ops::Choice>) {
     }
 }
 
+/// How the entry point that runs an action has already involved the user, which decides
+/// whether the generic `confirm.action` is still shown. Specific confirmations requested
+/// by the operation itself are unaffected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Prompt {
+    /// `cqs run` and TUI activation without a form.
+    Generic,
+    /// Submission of a Run-mode parameter form the user has just reviewed.
+    Reviewed,
+    /// One item of a batch the user has confirmed as a whole.
+    Batch,
+}
+
+/// Actions that ask for their own, more specific confirmation instead of the generic one.
+fn self_confirming(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::KernelInstall
+            | Kind::KernelRemove
+            | Kind::KernelBoot
+            | Kind::AiInstall(_)
+            | Kind::MirrorApply
+            | Kind::ClashInstall
+            | Kind::ClashStart
+    )
+}
+
+/// Whether running `spec` from an entry point of mode `prompt` shows `confirm.action`.
+fn needs_generic(spec: &Spec, prompt: Prompt) -> bool {
+    spec.changes
+        && !self_confirming(spec.kind)
+        && match prompt {
+            Prompt::Generic => true,
+            // Skipping the prompt for reviewed reversible actions is the rule itself, not
+            // a fallback path.
+            Prompt::Reviewed => !spec.reversible,
+            // The batch confirmation covers every item; restoring the terminal baseline
+            // still asks for its RESTORE token.
+            Prompt::Batch => spec.kind == Kind::TerminalRestore,
+        }
+}
+
+/// Run `spec` with the generic confirmation rule of `cqs run` and form-less TUI activation.
 pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> {
+    run(ctx, spec, supplied, Prompt::Generic)
+}
+
+/// Run `spec` after the user submitted its Run-mode parameter form.
+pub fn execute_reviewed(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> {
+    run(ctx, spec, supplied, Prompt::Reviewed)
+}
+
+fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Result<()> {
     let p = spec.parameters(supplied)?;
     ctx.platform()?;
     if spec.root {
         ctx.root()?;
     }
-    if spec.changes
-        && !matches!(
-            spec.kind,
-            Kind::KernelInstall
-                | Kind::KernelRemove
-                | Kind::KernelBoot
-                | Kind::AiInstall(_)
-                | Kind::MirrorApply
-                | Kind::ClashInstall
-                | Kind::ClashStart
-        )
-    {
+    if needs_generic(spec, prompt) {
         let detail = format!(
             "{}\n{}\n{}",
             ctx.i18n.text(&spec.label()),
@@ -1088,47 +1145,100 @@ pub fn execute(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Result<()> 
     }
 }
 
+/// What happened to one job of a batch. Both fields are `None` when the job never started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepRecord {
+    pub id: &'static str,
+    pub outcome: Option<Outcome>,
+    pub elapsed: Option<Duration>,
+}
+
+/// The result of a batch with one record per job, in job order, so a batch that ran without
+/// live events (after handing over the terminal) can still be replayed.
+#[derive(Debug)]
+pub struct BatchReport {
+    pub steps: Vec<StepRecord>,
+    pub result: Result<()>,
+}
+
+/// [`batch_report`] without the per-job records, for `cqs batch`.
 pub fn batch(ctx: &Context, jobs: &[(Spec, Parameters)]) -> Result<()> {
+    batch_report(ctx, jobs).result
+}
+
+/// Run `jobs` after a single `confirm.batch`. Each job runs with [`Prompt::Batch`], so the
+/// only confirmations left are the ones an operation asks for itself and terminal.restore's
+/// RESTORE. Every job reports its start and end through [`Context::step`].
+pub fn batch_report(ctx: &Context, jobs: &[(Spec, Parameters)]) -> BatchReport {
+    let mut steps = jobs
+        .iter()
+        .map(|(spec, _)| StepRecord {
+            id: spec.id,
+            outcome: None,
+            elapsed: None,
+        })
+        .collect::<Vec<_>>();
+    let result = run_batch(ctx, jobs, &mut steps);
+    BatchReport { steps, result }
+}
+
+fn run_batch(ctx: &Context, jobs: &[(Spec, Parameters)], steps: &mut [StepRecord]) -> Result<()> {
     if jobs.is_empty() {
         return Err(Error::new("error.input", "empty selection"));
     }
     let mut unique = BTreeSet::new();
-    for (spec, p) in jobs {
+    let mut lines = Vec::new();
+    for (n, (spec, p)) in jobs.iter().enumerate() {
         if !unique.insert(spec.id) {
             return Err(Error::new("error.input", spec.id));
         }
-        spec.parameters(p)?;
+        // The batch confirmation replaces each item's generic one, so it lists every
+        // parameter, defaults included.
+        let p = spec.parameters(p)?;
+        let label = ctx.i18n.text(&spec.label());
+        lines.push(if p.is_empty() {
+            format!("{}. {label}", n + 1)
+        } else {
+            let values = p
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>();
+            format!("{}. {label} ({})", n + 1, values.join(", "))
+        });
     }
-    ctx.confirm(
-        "confirm.batch",
-        jobs.iter()
-            .map(|(s, _)| ctx.i18n.text(&s.label()))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        "YES",
-    )?;
+    ctx.confirm("confirm.batch", lines.join("\n"), "YES")?;
     let mut failures = Vec::new();
     for (index, (spec, p)) in jobs.iter().enumerate() {
         ctx.check()?;
-        ctx.message(
-            "notice.progress",
-            format!(
-                "{}/{} {}",
-                index + 1,
-                jobs.len(),
-                ctx.i18n.text(&spec.label())
-            ),
-        );
-        match execute(ctx, spec, p) {
-            Ok(()) => ctx.message("notice.success", ctx.i18n.text(&spec.label())),
-            Err(e) => {
-                ctx.log(ctx.i18n.error(&e));
-                failures.push(spec.id);
-                if e.key == "error.cancelled"
-                    || !matches!(spec.kind, Kind::TcpTune | Kind::BbrEnable)
-                {
-                    return Err(e);
-                }
+        let step = |state| Step {
+            index,
+            total: jobs.len(),
+            id: spec.id,
+            state,
+        };
+        ctx.step(step(StepState::Started));
+        let started = Instant::now();
+        let result = run(ctx, spec, p, Prompt::Batch);
+        let elapsed = started.elapsed();
+        let outcome = match &result {
+            Ok(()) => Outcome::Done,
+            Err(e) if e.key == "error.cancelled" => Outcome::Cancelled,
+            Err(_) => Outcome::Failed,
+        };
+        if let Err(e) = &result {
+            ctx.log(ctx.i18n.error(e));
+        }
+        steps[index].outcome = Some(outcome);
+        steps[index].elapsed = Some(elapsed);
+        ctx.step(step(StepState::Finished { outcome, elapsed }));
+        if let Err(e) = result {
+            failures.push(spec.id);
+            // A failed TCP tune or BBR enable does not stop the batch; a cancellation or any
+            // other failure does.
+            if outcome == Outcome::Cancelled
+                || !matches!(spec.kind, Kind::TcpTune | Kind::BbrEnable)
+            {
+                return Err(e);
             }
         }
     }
@@ -1136,5 +1246,243 @@ pub fn batch(ctx: &Context, jobs: &[(Spec, Parameters)]) -> Result<()> {
         Ok(())
     } else {
         Err(Error::new("error.batch", failures.join(", ")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reversible_actions_exist_take_parameters_and_change_the_system() {
+        let specs = specs();
+        for id in REVERSIBLE {
+            let spec = specs
+                .iter()
+                .find(|s| s.id == *id)
+                .unwrap_or_else(|| panic!("{id} is not an action"));
+            assert!(!spec.fields.is_empty(), "{id} has no parameter form");
+            assert!(spec.changes, "{id} does not change the system");
+        }
+        // Undeclared actions are not reversible.
+        let marked: BTreeSet<_> = specs
+            .iter()
+            .filter(|s| s.reversible)
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(marked, REVERSIBLE.iter().copied().collect::<BTreeSet<_>>());
+    }
+
+    // Feature: tui-redesign, Property 15: 确认规则
+    // **Validates: Requirements 11.2, 11.7, 12.3, 12.4, 12.5**
+    //
+    // The domain is finite, so every spec is checked under every mode instead of sampling.
+    #[test]
+    fn generic_confirmation_follows_the_entry_point_table() {
+        // Written out from the design rather than derived from the implementation: actions
+        // with their own confirmation, and the reviewed reversible actions.
+        const OWN_CONFIRMATION: &[&str] = &[
+            "kernel.install",
+            "kernel.remove",
+            "kernel.boot",
+            "ai.pi.install",
+            "ai.claude.install",
+            "ai.codex.install",
+            "system.mirror.apply",
+            "clash.install",
+            "clash.start",
+        ];
+        const REVIEWED_REVERSIBLE: &[&str] = &[
+            "bbr.enable",
+            "tcp.tune",
+            "system.timezone",
+            "terminal.apply",
+            "clash.proxy.select",
+        ];
+        // Component 8, "generic confirmation per entry point".
+        let expected = |spec: &Spec, prompt: Prompt| {
+            let entry = match prompt {
+                // `cqs run`, TUI activation without a form: always.
+                Prompt::Generic => true,
+                // TUI Run-mode form submission: only when not reversible.
+                Prompt::Reviewed => !REVIEWED_REVERSIBLE.contains(&spec.id),
+                // Each batch item: only terminal.restore.
+                Prompt::Batch => spec.id == "terminal.restore",
+            };
+            spec.changes && !OWN_CONFIRMATION.contains(&spec.id) && entry
+        };
+        let specs = specs();
+        for id in OWN_CONFIRMATION.iter().chain(REVIEWED_REVERSIBLE) {
+            assert!(specs.iter().any(|s| s.id == *id), "{id} is not an action");
+        }
+        let mut cases = 0;
+        for spec in &specs {
+            for prompt in [Prompt::Generic, Prompt::Reviewed, Prompt::Batch] {
+                cases += 1;
+                let shown = needs_generic(spec, prompt);
+                assert_eq!(shown, expected(spec, prompt), "{} {prompt:?}", spec.id);
+                match prompt {
+                    Prompt::Generic => assert_eq!(
+                        shown,
+                        spec.changes && !self_confirming(spec.kind),
+                        "{} changed its existing confirmation",
+                        spec.id
+                    ),
+                    Prompt::Reviewed => {
+                        if spec.reversible {
+                            assert!(!shown, "{} asks again after its form", spec.id);
+                        }
+                    }
+                    Prompt::Batch => assert!(
+                        !shown || spec.kind == Kind::TerminalRestore,
+                        "{} asks inside a batch",
+                        spec.id
+                    ),
+                }
+            }
+        }
+        assert!(cases >= 100, "only {cases} combinations");
+    }
+
+    /// What a batch sent to its event receiver.
+    #[derive(Default)]
+    struct Sent {
+        confirmations: Vec<(String, String)>,
+        logs: Vec<String>,
+        steps: Vec<Step>,
+    }
+
+    /// Run a batch on a worker, as the TUI does, answering every confirmation with `accept`.
+    fn batch_with_events(
+        mut ctx: Context,
+        jobs: Vec<(Spec, Parameters)>,
+        accept: bool,
+    ) -> (BatchReport, Sent) {
+        use crate::runtime::Event;
+        use std::sync::mpsc;
+        let (tx, rx) = mpsc::channel();
+        ctx.events = Some(tx);
+        let worker = std::thread::spawn(move || batch_report(&ctx, &jobs));
+        let mut sent = Sent::default();
+        // The channel closes when the worker drops its context.
+        loop {
+            match rx.recv_timeout(Duration::from_secs(30)) {
+                Ok(Event::Confirm { text, token, reply }) => {
+                    sent.confirmations.push((text, token));
+                    reply.send(accept).unwrap();
+                }
+                Ok(Event::Log(text)) => sent.logs.push(text),
+                Ok(Event::Step(step)) => sent.steps.push(step),
+                Ok(Event::Finished(_)) => panic!("batch_report does not send Finished"),
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => panic!("batch did not finish"),
+            }
+        }
+        (worker.join().unwrap(), sent)
+    }
+
+    fn not_run(id: &'static str) -> StepRecord {
+        StepRecord {
+            id,
+            outcome: None,
+            elapsed: None,
+        }
+    }
+
+    #[test]
+    fn one_batch_confirmation_lists_all_parameters_and_rejection_runs_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        ctx.yes = false;
+        ctx.interactive = false;
+        let i18n = ctx.i18n.clone();
+        let jobs = vec![
+            (
+                find("tcp.tune").unwrap(),
+                Parameters::from([("rtt".into(), "80".into())]),
+            ),
+            (find("tcp.restore").unwrap(), Parameters::new()),
+        ];
+        let (report, sent) = batch_with_events(ctx, jobs, false);
+        // The defaulted bandwidth is listed too; a job without parameters shows its name.
+        let detail = "1. Tune TCP buffers (bandwidth=1000, rtt=80)\n2. Restore TCP settings";
+        assert_eq!(
+            sent.confirmations,
+            [(
+                i18n.format("confirm.batch", &[("detail", detail)]),
+                "YES".to_owned()
+            )]
+        );
+        assert_eq!(report.result.unwrap_err().key, "error.cancelled");
+        assert_eq!(report.steps, [not_run("tcp.tune"), not_run("tcp.restore")]);
+        assert!(sent.steps.is_empty() && sent.logs.is_empty());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn tcp_tune_failures_continue_and_other_failures_stop_the_batch() {
+        use crate::storage::{Lock, suffix};
+        for (ids, failed, stops) in [
+            // tcp.tune fails and the batch goes on; tcp.restore fails and it stops.
+            (&["tcp.tune", "tcp.restore", "bbr.restore"][..], 2, true),
+            // Only continuable failures: error.batch names them.
+            (&["tcp.tune"][..], 1, false),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let ctx = crate::tests::context(temp.path());
+            let i18n = ctx.i18n.clone();
+            // Every job fails before it changes anything: at the platform check, the root
+            // check, or, where both pass, at these configuration locks.
+            let _tcp = Lock::acquire(&suffix(&ctx.paths.tcp, ".cqs-lock")).unwrap();
+            let _bbr = Lock::acquire(&suffix(&ctx.paths.bbr, ".cqs-lock")).unwrap();
+            let jobs = ids
+                .iter()
+                .map(|id| (find(id).unwrap(), Parameters::new()))
+                .collect();
+            let (report, sent) = batch_with_events(ctx, jobs, true);
+            assert!(sent.confirmations.is_empty(), "--yes accepts confirm.batch");
+            let ran = &report.steps[..failed];
+            assert!(
+                ran.iter()
+                    .all(|s| s.outcome == Some(Outcome::Failed) && s.elapsed.is_some()),
+                "{:?}",
+                report.steps
+            );
+            let skipped = report.steps[failed..].iter().map(|s| s.id);
+            assert!(skipped.eq(ids[failed..].iter().copied()));
+            assert!(report.steps[failed..].iter().all(|s| *s == not_run(s.id)));
+            // Each job that ran sent Started, then Finished with its record's values.
+            let expected = ran
+                .iter()
+                .enumerate()
+                .flat_map(|(index, record)| {
+                    let step = |state| Step {
+                        index,
+                        total: ids.len(),
+                        id: record.id,
+                        state,
+                    };
+                    [
+                        step(StepState::Started),
+                        step(StepState::Finished {
+                            outcome: Outcome::Failed,
+                            elapsed: record.elapsed.unwrap(),
+                        }),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(sent.steps, expected);
+            let error = report.result.unwrap_err();
+            if stops {
+                // The stopping job's own error, also logged as the batch's last line.
+                assert_ne!(error.key, "error.batch");
+                assert_eq!(sent.logs.last(), Some(&i18n.error(&error)));
+            } else {
+                assert_eq!(
+                    (error.key, error.detail.as_str()),
+                    ("error.batch", "tcp.tune")
+                );
+            }
+        }
     }
 }

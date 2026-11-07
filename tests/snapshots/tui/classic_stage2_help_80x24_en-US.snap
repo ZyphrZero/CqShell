@@ -1,0 +1,184 @@
+# case classic_stage2_help_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭╭ Keys ──────────────────────────────────────────────────────────────────────╮╮
+││ Navigate                              View & data                          ││
+││ ↑↓ / j k     move                     R            refresh                 ││
+││ ←→/Tab/Shift+Tab switch category      N            public IP               ││
+││ Home/End     first / last             G            log panel               ││
+││ 1–9          jump                     F2           full log                ││
+╰│ O / 0        optimize                 L            language                │╯
+╭│ Alt+↑↓       reorder categories       T            style                   │╮
+││ Run                                   Running tasks                        │┃
+││ Enter        open                     Esc          cancel task             │┃
+││ /            search actions           Q / Ctrl+C   quit                    │┃
+││ Space        select                   PgUp/PgDn    scroll                  │┃
+││ X / F5       review and run           Style panel                          ││
+││ A            use recommended          ↑↓/j k/Home/End preview              ││
+││ Search                                Enter        save style              ││
+││ a…z / ←→     edit query               ?/F1         help                    ││
+││ Home/End/Bksp/Del/Ctrl+U edit query   Esc          restore style           │┤
+││ ↑↓/PgUp/PgDn move                                                          ││
+││ Enter/Tab/Esc run/jump/close                                               ││
+││                                                                            ││
+││ Esc close                                                                  ││
+╰╰────────────────────────────────────────────────────────────────────────────╯╯
+ Esc close                                                                      
+---
+0 0 80 #3d5265 reset -
+1 0 1 #3d5265 reset -
+1 1 1 #45cdb6 reset -
+1 2 6 #45cdb6 reset bold
+1 8 71 #45cdb6 reset -
+1 79 1 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 1 1 #45cdb6 reset -
+2 3 8 #45cdb6 reset bold
+2 41 11 #45cdb6 reset bold
+2 78 1 #45cdb6 reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 1 1 #45cdb6 reset -
+3 3 13 reset reset bold
+3 16 4 #91a2b0 reset -
+3 41 13 reset reset bold
+3 54 7 #91a2b0 reset -
+3 78 1 #45cdb6 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #45cdb6 reset -
+4 3 17 reset reset bold
+4 20 15 #91a2b0 reset -
+4 41 13 reset reset bold
+4 54 9 #91a2b0 reset -
+4 78 1 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #45cdb6 reset -
+5 3 13 reset reset bold
+5 16 12 #91a2b0 reset -
+5 41 13 reset reset bold
+5 54 9 #91a2b0 reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #45cdb6 reset -
+6 3 13 reset reset bold
+6 16 4 #91a2b0 reset -
+6 41 13 reset reset bold
+6 54 8 #91a2b0 reset -
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 3 13 reset reset bold
+7 16 8 #91a2b0 reset -
+7 41 13 reset reset bold
+7 54 8 #91a2b0 reset -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 3 13 reset reset bold
+8 16 18 #91a2b0 reset -
+8 41 13 reset reset bold
+8 54 5 #91a2b0 reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 3 3 #45cdb6 reset bold
+9 41 13 #45cdb6 reset bold
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 3 13 reset reset bold
+10 16 4 #91a2b0 reset -
+10 41 13 reset reset bold
+10 54 11 #91a2b0 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 3 13 reset reset bold
+11 16 14 #91a2b0 reset -
+11 41 13 reset reset bold
+11 54 4 #91a2b0 reset -
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 3 13 reset reset bold
+12 16 6 #91a2b0 reset -
+12 41 13 reset reset bold
+12 54 6 #91a2b0 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 3 13 reset reset bold
+13 16 14 #91a2b0 reset -
+13 41 11 #45cdb6 reset bold
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 3 13 reset reset bold
+14 16 15 #91a2b0 reset -
+14 41 16 reset reset bold
+14 57 7 #91a2b0 reset -
+14 78 1 #45cdb6 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #45cdb6 reset -
+15 3 6 #45cdb6 reset bold
+15 41 13 reset reset bold
+15 54 10 #91a2b0 reset -
+15 78 1 #45cdb6 reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #45cdb6 reset -
+16 3 13 reset reset bold
+16 16 10 #91a2b0 reset -
+16 41 13 reset reset bold
+16 54 4 #91a2b0 reset -
+16 78 1 #45cdb6 reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #45cdb6 reset -
+17 3 25 reset reset bold
+17 28 10 #91a2b0 reset -
+17 41 13 reset reset bold
+17 54 13 #91a2b0 reset -
+17 78 1 #45cdb6 reset -
+17 79 1 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 1 #45cdb6 reset -
+18 3 13 reset reset bold
+18 16 4 #91a2b0 reset -
+18 78 1 #45cdb6 reset -
+18 79 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 1 1 #45cdb6 reset -
+19 3 14 reset reset bold
+19 17 14 #91a2b0 reset -
+19 78 1 #45cdb6 reset -
+19 79 1 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 1 1 #45cdb6 reset -
+20 78 1 #45cdb6 reset -
+20 79 1 #3d5265 reset -
+21 0 1 #3d5265 reset -
+21 1 1 #45cdb6 reset -
+21 3 3 #45cdb6 reset bold
+21 6 6 #91a2b0 reset -
+21 78 1 #45cdb6 reset -
+21 79 1 #3d5265 reset -
+22 0 1 #3d5265 reset -
+22 1 78 #45cdb6 reset -
+22 79 1 #3d5265 reset -
+23 0 80 #3d5265 reset -

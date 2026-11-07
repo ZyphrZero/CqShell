@@ -1,0 +1,202 @@
+# case final_main_sand_80x24_en-US
+# size 80x24
+# theme sand
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+ System & resources     updated 2s ago   Network & proxy      looked up 12s ago 
+CPU  ▄▃▂▃▁▁▂▂▁  12%  Memory ■■■■□□  63% BBR   ○ Disabled · available / v3       
+Disk ■■■■□□□□□  41%  Swap   ■□□□□□  10% TCP   ○ not configured · fq_codel       
+Host   vps-sg-01                        IPv4  203.0.113.24 · AS64500 Example Net
+Kernel 6.12.8-joeyblog-bbrv3 · x86_64   IPv6  2001:db8:3c4d:15::1a2f            
+Uptime 3d 04h 00m · Asia/Shanghai       Proxy Mihomo ● Running · v1.19.2        
+                                                                                
+ Categories          System                                                1/12 
+  0 Optimization      Overview                                                 ┃
+                    ▸ System overview                                          ┃
+▸ 1 System            Public IP / ISP lookup                            12s ago┃
+  2 Kernel            Packages & mirrors                                       ┃
+  3 Network           Update packages                                          │
+  4 SSH               Benchmark system mirrors                                 │
+  5 Docker            Change system mirror · LinuxMirrors…                     │
+  6 Mihomo proxy ●    Restore previous system sources                          │
+  7 Tools            Details                                                    
+  8 Agent tools       System overview                                           
+  9 Prompt            Read only · Current user                                  
+    Tests             Read host, CPU, memory, disk, IP and BBR status.          
+    CqShell           cqs run system.info                                       
+                                                                                
+ ↑↓ move  Enter open  / search actions  ←→ switch category  O optimize  ? help  
+---
+0 0 1 #ebdbb2 #282828 -
+0 1 7 #fe8019 #282828 bold
+0 8 1 #ebdbb2 #282828 -
+0 9 6 #d5c4a1 #282828 -
+0 15 2 #ebdbb2 #282828 -
+0 17 6 #d5c4a1 #282828 -
+0 23 3 #928374 #282828 -
+0 26 34 #ebdbb2 #282828 -
+0 60 12 #928374 #282828 -
+0 72 7 #d5c4a1 #282828 -
+0 79 1 #ebdbb2 #282828 -
+1 0 20 #ebdbb2 #3c3836 bold
+1 20 3 #ebdbb2 #3c3836 -
+1 23 16 #d5c4a1 #3c3836 -
+1 39 1 #ebdbb2 #3c3836 -
+1 40 17 #ebdbb2 #3c3836 bold
+1 57 4 #ebdbb2 #3c3836 -
+1 61 19 #d5c4a1 #3c3836 -
+2 0 5 #d5c4a1 #32302f -
+2 5 9 #fabd2f #32302f -
+2 14 4 #ebdbb2 #32302f bold
+2 18 1 #d5c4a1 #32302f -
+2 19 2 #ebdbb2 #32302f -
+2 21 7 #d5c4a1 #32302f -
+2 28 4 #fabd2f #32302f -
+2 32 2 #504945 #32302f -
+2 34 4 #ebdbb2 #32302f bold
+2 38 1 #d5c4a1 #32302f -
+2 39 1 #ebdbb2 #282828 -
+2 40 16 #d5c4a1 #32302f -
+2 56 3 #928374 #32302f -
+2 59 21 #ebdbb2 #32302f -
+3 0 5 #d5c4a1 #32302f -
+3 5 4 #fabd2f #32302f -
+3 9 5 #504945 #32302f -
+3 14 4 #ebdbb2 #32302f bold
+3 18 1 #d5c4a1 #32302f -
+3 19 2 #ebdbb2 #32302f -
+3 21 7 #d5c4a1 #32302f -
+3 28 1 #fabd2f #32302f -
+3 29 5 #504945 #32302f -
+3 34 4 #ebdbb2 #32302f bold
+3 38 1 #d5c4a1 #32302f -
+3 39 1 #ebdbb2 #282828 -
+3 40 22 #d5c4a1 #32302f -
+3 62 3 #928374 #32302f -
+3 65 15 #ebdbb2 #32302f -
+4 0 7 #d5c4a1 #32302f -
+4 7 32 #ebdbb2 #32302f -
+4 39 1 #ebdbb2 #282828 -
+4 40 6 #d5c4a1 #32302f -
+4 46 12 #ebdbb2 #32302f -
+4 58 3 #928374 #32302f -
+4 61 19 #ebdbb2 #32302f -
+5 0 7 #d5c4a1 #32302f -
+5 7 21 #ebdbb2 #32302f -
+5 28 3 #928374 #32302f -
+5 31 8 #ebdbb2 #32302f -
+5 39 1 #ebdbb2 #282828 -
+5 40 6 #d5c4a1 #32302f -
+5 46 34 #ebdbb2 #32302f -
+6 0 7 #d5c4a1 #32302f -
+6 7 10 #ebdbb2 #32302f -
+6 17 3 #928374 #32302f -
+6 20 19 #ebdbb2 #32302f -
+6 39 1 #ebdbb2 #282828 -
+6 40 6 #d5c4a1 #32302f -
+6 46 16 #ebdbb2 #32302f -
+6 62 3 #928374 #32302f -
+6 65 15 #ebdbb2 #32302f -
+7 0 39 #ebdbb2 #32302f -
+7 39 1 #ebdbb2 #282828 -
+7 40 40 #ebdbb2 #32302f -
+8 0 12 #ebdbb2 #3c3836 bold
+8 12 8 #ebdbb2 #3c3836 -
+8 20 8 #ebdbb2 #3c3836 bold
+8 28 46 #ebdbb2 #3c3836 -
+8 74 6 #d5c4a1 #3c3836 -
+9 0 2 #ebdbb2 #32302f -
+9 2 2 #928374 #32302f -
+9 4 18 #ebdbb2 #32302f -
+9 22 57 #d5c4a1 #32302f bold
+9 79 1 #fe8019 #32302f -
+10 0 2 #ebdbb2 #32302f -
+10 2 17 #504945 #32302f -
+10 19 1 #ebdbb2 #32302f -
+10 20 1 #fe8019 #32302f bold
+10 21 1 #ebdbb2 #32302f bold
+10 22 15 #fe8019 #32302f bold
+10 37 42 #ebdbb2 #32302f bold
+10 79 1 #fe8019 #32302f -
+11 0 1 #fe8019 #32302f bold
+11 1 1 #ebdbb2 #32302f bold
+11 2 2 #928374 #32302f bold
+11 4 6 #fe8019 #32302f bold
+11 10 9 #ebdbb2 #32302f bold
+11 19 53 #ebdbb2 #32302f -
+11 72 7 #d5c4a1 #32302f -
+11 79 1 #fe8019 #32302f -
+12 0 2 #ebdbb2 #32302f -
+12 2 2 #928374 #32302f -
+12 4 18 #ebdbb2 #32302f -
+12 22 57 #d5c4a1 #32302f bold
+12 79 1 #fe8019 #32302f -
+13 0 2 #ebdbb2 #32302f -
+13 2 2 #928374 #32302f -
+13 4 18 #ebdbb2 #32302f -
+13 22 15 #d5c4a1 #32302f -
+13 37 42 #ebdbb2 #32302f -
+13 79 1 #504945 #32302f -
+14 0 2 #ebdbb2 #32302f -
+14 2 2 #928374 #32302f -
+14 4 75 #ebdbb2 #32302f -
+14 79 1 #504945 #32302f -
+15 0 2 #ebdbb2 #32302f -
+15 2 2 #928374 #32302f -
+15 4 18 #ebdbb2 #32302f -
+15 22 36 #d5c4a1 #32302f -
+15 58 21 #ebdbb2 #32302f -
+15 79 1 #504945 #32302f -
+16 0 2 #ebdbb2 #32302f -
+16 2 2 #928374 #32302f -
+16 4 12 #ebdbb2 #32302f -
+16 16 2 #b8bb26 #32302f -
+16 18 4 #ebdbb2 #32302f -
+16 22 31 #d5c4a1 #32302f -
+16 53 26 #ebdbb2 #32302f -
+16 79 1 #504945 #32302f -
+17 0 2 #ebdbb2 #32302f -
+17 2 2 #928374 #32302f -
+17 4 16 #ebdbb2 #32302f -
+17 20 9 #ebdbb2 #3c3836 bold
+17 29 51 #ebdbb2 #3c3836 -
+18 0 2 #ebdbb2 #32302f -
+18 2 2 #928374 #32302f -
+18 4 18 #ebdbb2 #32302f -
+18 22 15 #ebdbb2 #32302f bold
+18 37 43 #ebdbb2 #32302f -
+19 0 2 #ebdbb2 #32302f -
+19 2 2 #928374 #32302f -
+19 4 27 #ebdbb2 #32302f -
+19 31 3 #928374 #32302f -
+19 34 12 #d5c4a1 #32302f -
+19 46 34 #ebdbb2 #32302f -
+20 0 2 #ebdbb2 #32302f -
+20 2 2 #928374 #32302f -
+20 4 76 #ebdbb2 #32302f -
+21 0 2 #ebdbb2 #32302f -
+21 2 2 #928374 #32302f -
+21 4 18 #ebdbb2 #32302f -
+21 22 19 #fe8019 #32302f -
+21 41 39 #ebdbb2 #32302f -
+22 0 80 #ebdbb2 #32302f -
+23 0 1 #ebdbb2 #282828 -
+23 1 2 #fe8019 #282828 bold
+23 3 5 #d5c4a1 #282828 -
+23 8 2 #ebdbb2 #282828 -
+23 10 5 #fe8019 #282828 bold
+23 15 5 #d5c4a1 #282828 -
+23 20 2 #ebdbb2 #282828 -
+23 22 1 #fe8019 #282828 bold
+23 23 15 #d5c4a1 #282828 -
+23 38 2 #ebdbb2 #282828 -
+23 40 2 #fe8019 #282828 bold
+23 42 16 #d5c4a1 #282828 -
+23 58 2 #ebdbb2 #282828 -
+23 60 1 #fe8019 #282828 bold
+23 61 9 #d5c4a1 #282828 -
+23 70 2 #ebdbb2 #282828 -
+23 72 1 #fe8019 #282828 bold
+23 73 5 #d5c4a1 #282828 -
+23 78 2 #ebdbb2 #282828 -

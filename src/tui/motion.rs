@@ -15,6 +15,11 @@ pub(super) const SPINNER_FRAME: Duration = SPINNER_STEP;
 pub(super) const IDLE_FRAME: Duration = Duration::from_millis(250);
 /// Background reads shorter than this open their form without showing a loading dialog.
 pub(super) const LOADING_DELAY: Duration = Duration::from_millis(150);
+pub(super) const DIALOG_FADE: Duration = Duration::from_millis(120);
+
+pub(super) fn dialog_opacity(age: Duration) -> f64 {
+    (age.as_secs_f64() / DIALOG_FADE.as_secs_f64()).clamp(0.0, 1.0)
+}
 
 pub(super) fn spinner(elapsed: Duration) -> &'static str {
     let step = (elapsed.as_millis() / SPINNER_STEP.as_millis()) as usize;

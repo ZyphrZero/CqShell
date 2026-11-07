@@ -1,0 +1,355 @@
+# case final_main_aurora-light_120x36_en-US
+# size 120x36
+# theme aurora
+# background #f6f7f9
+# locale en-US
+ CqShell v0.1.4  System › System overview                Use sudo cqs for system changes · vps-sg-01 · ● USER · English 
+ System & resources                         updated 2s ago │ Network & proxy                          looked up 12s ago 
+  CPU       ▂▃▅▄▃▂▃▁▁▂▂▁  12%  Memory ━━━━━━━━━─────  63%  │  BBR   ○ Disabled · available / v3 · cubic                 
+  Disk ━━━━━━━──────────  41%  Swap   ━╸────────────  10%  │  TCP   ○ not configured · fq_codel                         
+  Host   vps-sg-01 · Debian GNU/Linux 12 (bookworm)        │  IPv4  203.0.113.24 · AS64500 Example Net                  
+  Kernel 6.12.8-joeyblog-bbrv3 · x86_64                    │  IPv6  2001:db8:3c4d:15::1a2f                              
+  Uptime 3d 04h 00m · Asia/Shanghai                        │  Proxy Mihomo ● Running · v1.19.2 · Terminal ● Enabled     
+                                                                                                                        
+ Categories        │ System                                1/12│ Details                                                
+  0 Optimization   │  Overview                                 │  System overview                                       
+  ─────────────────│▎ System overview                          │  Read only · Current user                              
+▎ 1 System         │  Public IP / ISP lookup            12s ago│                                                        
+  2 Kernel         │  Packages & mirrors                       │  Read host, CPU, memory, disk, IP and BBR status.      
+  3 Network        │  Update packages                          │                                                        
+  4 SSH            │  Benchmark system mirrors                 │  cqs run system.info                                   
+  5 Docker         │  Change system mirror · LinuxMirrors…     │                                                        
+  6 Mihomo proxy ● │  Restore previous system sources          │  Last result  Not run in this session                  
+  7 Tools          │  Clean system…                    Disk 41%│                                                        
+  8 Agent tools    │  System settings                          │                                                        
+  9 Prompt         │  Set timezone…               Asia/Shanghai│                                                        
+    Tests          │  Install fail2ban                         │                                                        
+    CqShell        │  Swap                                     │                                                        
+                   │  Create swap…             existing 2.0 GiB│                                                        
+                   │  Rebuild swap automatically               │                                                        
+                   │  Remove swap              existing 2.0 GiB│                                                        
+                   │                                           │                                                        
+                   │                                           │                                                        
+                   │                                           │                                                        
+                   │                                           │                                                        
+                   │                                           │                                                        
+                   │                                           │                                                        
+                   │                                           │                                                        
+                   │                                           │                                                        
+                   │                                           │                                                        
+                   │                                           │  ↵ open overview                                       
+  ↑↓  move   ↵  open   /  search actions   ←→  switch category   O  optimize   T  style   R  refresh   ?  help          
+---
+0 1 7 #0a6a5e reset bold
+0 9 6 #414242 reset -
+0 17 6 #414242 reset -
+0 23 3 #656566 reset -
+0 26 15 #1a1a1b reset -
+0 57 34 #656566 reset -
+0 91 9 #1a1a1b reset -
+0 100 12 #656566 reset -
+0 112 7 #414242 reset -
+1 0 20 #656566 #ecedef -
+1 20 23 #1a1a1b #ecedef -
+1 43 16 #414242 #ecedef -
+1 59 1 #dddee0 reset -
+1 60 17 #656566 #ecedef -
+1 77 24 #1a1a1b #ecedef -
+1 101 19 #414242 #ecedef -
+2 0 2 #1a1a1b #ecedef -
+2 2 5 #414242 #ecedef -
+2 7 17 #0a6a5e #ecedef -
+2 24 4 #1a1a1b #ecedef bold
+2 28 1 #414242 #ecedef -
+2 29 2 #1a1a1b #ecedef -
+2 31 7 #414242 #ecedef -
+2 38 9 #0a6a5e #ecedef -
+2 47 5 #dddee0 #ecedef -
+2 52 4 #1a1a1b #ecedef bold
+2 56 1 #414242 #ecedef -
+2 57 2 #1a1a1b #ecedef -
+2 59 1 #dddee0 reset -
+2 60 2 #1a1a1b #ecedef -
+2 62 16 #414242 #ecedef -
+2 78 3 #656566 #ecedef -
+2 81 14 #1a1a1b #ecedef -
+2 95 3 #656566 #ecedef -
+2 98 22 #1a1a1b #ecedef -
+3 0 2 #1a1a1b #ecedef -
+3 2 5 #414242 #ecedef -
+3 7 7 #0a6a5e #ecedef -
+3 14 10 #dddee0 #ecedef -
+3 24 4 #1a1a1b #ecedef bold
+3 28 1 #414242 #ecedef -
+3 29 2 #1a1a1b #ecedef -
+3 31 7 #414242 #ecedef -
+3 38 2 #0a6a5e #ecedef -
+3 40 12 #dddee0 #ecedef -
+3 52 4 #1a1a1b #ecedef bold
+3 56 1 #414242 #ecedef -
+3 57 2 #1a1a1b #ecedef -
+3 59 1 #dddee0 reset -
+3 60 2 #1a1a1b #ecedef -
+3 62 22 #414242 #ecedef -
+3 84 3 #656566 #ecedef -
+3 87 33 #1a1a1b #ecedef -
+4 0 2 #1a1a1b #ecedef -
+4 2 7 #414242 #ecedef -
+4 9 9 #1a1a1b #ecedef -
+4 18 3 #656566 #ecedef -
+4 21 38 #1a1a1b #ecedef -
+4 59 1 #dddee0 reset -
+4 60 2 #1a1a1b #ecedef -
+4 62 6 #414242 #ecedef -
+4 68 12 #1a1a1b #ecedef -
+4 80 3 #656566 #ecedef -
+4 83 37 #1a1a1b #ecedef -
+5 0 2 #1a1a1b #ecedef -
+5 2 7 #414242 #ecedef -
+5 9 21 #1a1a1b #ecedef -
+5 30 3 #656566 #ecedef -
+5 33 26 #1a1a1b #ecedef -
+5 59 1 #dddee0 reset -
+5 60 2 #1a1a1b #ecedef -
+5 62 6 #414242 #ecedef -
+5 68 52 #1a1a1b #ecedef -
+6 0 2 #1a1a1b #ecedef -
+6 2 7 #414242 #ecedef -
+6 9 10 #1a1a1b #ecedef -
+6 19 3 #656566 #ecedef -
+6 22 37 #1a1a1b #ecedef -
+6 59 1 #dddee0 reset -
+6 60 2 #1a1a1b #ecedef -
+6 62 6 #414242 #ecedef -
+6 68 16 #1a1a1b #ecedef -
+6 84 3 #656566 #ecedef -
+6 87 7 #1a1a1b #ecedef -
+6 94 3 #656566 #ecedef -
+6 97 23 #1a1a1b #ecedef -
+7 0 59 #1a1a1b #ecedef -
+7 60 60 #1a1a1b #ecedef -
+8 0 12 #656566 #ecedef -
+8 12 7 #1a1a1b #ecedef -
+8 19 1 #dddee0 reset -
+8 20 8 #656566 #ecedef -
+8 28 30 #1a1a1b #ecedef -
+8 58 5 #414242 #ecedef -
+8 63 1 #dddee0 reset -
+8 64 9 #656566 #ecedef -
+8 73 47 #1a1a1b #ecedef -
+9 0 2 #1a1a1b #ecedef -
+9 2 2 #656566 #ecedef -
+9 4 15 #1a1a1b #ecedef -
+9 19 1 #dddee0 reset -
+9 20 2 #1a1a1b #ecedef -
+9 22 41 #414242 #ecedef bold
+9 63 1 #dddee0 reset -
+9 64 2 #1a1a1b #ecedef -
+9 66 15 #1a1a1b #ecedef bold
+9 81 39 #1a1a1b #ecedef -
+10 0 2 #1a1a1b #ecedef -
+10 2 17 #dddee0 #ecedef -
+10 19 1 #dddee0 reset -
+10 20 1 #0a6a5e #e2e3e5 bold
+10 21 42 #1a1a1b #e2e3e5 bold
+10 63 1 #dddee0 reset -
+10 64 11 #1a1a1b #ecedef -
+10 75 3 #656566 #ecedef -
+10 78 12 #414242 #ecedef -
+10 90 30 #1a1a1b #ecedef -
+11 0 1 #0a6a5e #e2e3e5 bold
+11 1 1 #1a1a1b #e2e3e5 bold
+11 2 2 #656566 #e2e3e5 bold
+11 4 15 #1a1a1b #e2e3e5 bold
+11 19 1 #dddee0 reset -
+11 20 36 #1a1a1b #ecedef -
+11 56 7 #414242 #ecedef -
+11 63 1 #dddee0 reset -
+11 64 56 #1a1a1b #ecedef -
+12 0 2 #1a1a1b #ecedef -
+12 2 2 #656566 #ecedef -
+12 4 15 #1a1a1b #ecedef -
+12 19 1 #dddee0 reset -
+12 20 2 #1a1a1b #ecedef -
+12 22 41 #414242 #ecedef bold
+12 63 1 #dddee0 reset -
+12 64 56 #1a1a1b #ecedef -
+13 0 2 #1a1a1b #ecedef -
+13 2 2 #656566 #ecedef -
+13 4 15 #1a1a1b #ecedef -
+13 19 1 #dddee0 reset -
+13 20 2 #1a1a1b #ecedef -
+13 22 15 #414242 #ecedef -
+13 37 26 #1a1a1b #ecedef -
+13 63 1 #dddee0 reset -
+13 64 56 #1a1a1b #ecedef -
+14 0 2 #1a1a1b #ecedef -
+14 2 2 #656566 #ecedef -
+14 4 15 #1a1a1b #ecedef -
+14 19 1 #dddee0 reset -
+14 20 43 #1a1a1b #ecedef -
+14 63 1 #dddee0 reset -
+14 64 2 #1a1a1b #ecedef -
+14 66 19 #0a6a5e #ecedef -
+14 85 35 #1a1a1b #ecedef -
+15 0 2 #1a1a1b #ecedef -
+15 2 2 #656566 #ecedef -
+15 4 15 #1a1a1b #ecedef -
+15 19 1 #dddee0 reset -
+15 20 2 #1a1a1b #ecedef -
+15 22 36 #414242 #ecedef -
+15 58 5 #1a1a1b #ecedef -
+15 63 1 #dddee0 reset -
+15 64 56 #1a1a1b #ecedef -
+16 0 2 #1a1a1b #ecedef -
+16 2 2 #656566 #ecedef -
+16 4 12 #1a1a1b #ecedef -
+16 16 2 #166c3a #ecedef -
+16 18 1 #1a1a1b #ecedef -
+16 19 1 #dddee0 reset -
+16 20 2 #1a1a1b #ecedef -
+16 22 31 #414242 #ecedef -
+16 53 10 #1a1a1b #ecedef -
+16 63 1 #dddee0 reset -
+16 64 2 #1a1a1b #ecedef -
+16 66 11 #414242 #ecedef -
+16 77 2 #1a1a1b #ecedef -
+16 79 23 #656566 #ecedef -
+16 102 18 #1a1a1b #ecedef -
+17 0 2 #1a1a1b #ecedef -
+17 2 2 #656566 #ecedef -
+17 4 15 #1a1a1b #ecedef -
+17 19 1 #dddee0 reset -
+17 20 2 #1a1a1b #ecedef -
+17 22 13 #414242 #ecedef -
+17 35 20 #1a1a1b #ecedef -
+17 55 8 #414242 #ecedef -
+17 63 1 #dddee0 reset -
+17 64 56 #1a1a1b #ecedef -
+18 0 2 #1a1a1b #ecedef -
+18 2 2 #656566 #ecedef -
+18 4 15 #1a1a1b #ecedef -
+18 19 1 #dddee0 reset -
+18 20 2 #1a1a1b #ecedef -
+18 22 41 #414242 #ecedef bold
+18 63 1 #dddee0 reset -
+18 64 56 #1a1a1b #ecedef -
+19 0 2 #1a1a1b #ecedef -
+19 2 2 #656566 #ecedef -
+19 4 15 #1a1a1b #ecedef -
+19 19 1 #dddee0 reset -
+19 20 2 #1a1a1b #ecedef -
+19 22 13 #414242 #ecedef -
+19 35 15 #1a1a1b #ecedef -
+19 50 13 #414242 #ecedef -
+19 63 1 #dddee0 reset -
+19 64 56 #1a1a1b #ecedef -
+20 0 2 #1a1a1b #ecedef -
+20 2 2 #656566 #ecedef -
+20 4 15 #1a1a1b #ecedef -
+20 19 1 #dddee0 reset -
+20 20 2 #1a1a1b #ecedef -
+20 22 16 #414242 #ecedef -
+20 38 25 #1a1a1b #ecedef -
+20 63 1 #dddee0 reset -
+20 64 56 #1a1a1b #ecedef -
+21 0 2 #1a1a1b #ecedef -
+21 2 2 #656566 #ecedef -
+21 4 15 #1a1a1b #ecedef -
+21 19 1 #dddee0 reset -
+21 20 2 #1a1a1b #ecedef -
+21 22 41 #414242 #ecedef bold
+21 63 1 #dddee0 reset -
+21 64 56 #1a1a1b #ecedef -
+22 0 19 #1a1a1b #ecedef -
+22 19 1 #dddee0 reset -
+22 20 2 #1a1a1b #ecedef -
+22 22 12 #414242 #ecedef -
+22 34 13 #1a1a1b #ecedef -
+22 47 16 #414242 #ecedef -
+22 63 1 #dddee0 reset -
+22 64 56 #1a1a1b #ecedef -
+23 0 19 #1a1a1b #ecedef -
+23 19 1 #dddee0 reset -
+23 20 2 #1a1a1b #ecedef -
+23 22 26 #414242 #ecedef -
+23 48 15 #1a1a1b #ecedef -
+23 63 1 #dddee0 reset -
+23 64 56 #1a1a1b #ecedef -
+24 0 19 #1a1a1b #ecedef -
+24 19 1 #dddee0 reset -
+24 20 2 #1a1a1b #ecedef -
+24 22 11 #414242 #ecedef -
+24 33 14 #1a1a1b #ecedef -
+24 47 16 #414242 #ecedef -
+24 63 1 #dddee0 reset -
+24 64 56 #1a1a1b #ecedef -
+25 0 19 #1a1a1b #ecedef -
+25 19 1 #dddee0 reset -
+25 20 43 #1a1a1b #ecedef -
+25 63 1 #dddee0 reset -
+25 64 56 #1a1a1b #ecedef -
+26 0 19 #1a1a1b #ecedef -
+26 19 1 #dddee0 reset -
+26 20 43 #1a1a1b #ecedef -
+26 63 1 #dddee0 reset -
+26 64 56 #1a1a1b #ecedef -
+27 0 19 #1a1a1b #ecedef -
+27 19 1 #dddee0 reset -
+27 20 43 #1a1a1b #ecedef -
+27 63 1 #dddee0 reset -
+27 64 56 #1a1a1b #ecedef -
+28 0 19 #1a1a1b #ecedef -
+28 19 1 #dddee0 reset -
+28 20 43 #1a1a1b #ecedef -
+28 63 1 #dddee0 reset -
+28 64 56 #1a1a1b #ecedef -
+29 0 19 #1a1a1b #ecedef -
+29 19 1 #dddee0 reset -
+29 20 43 #1a1a1b #ecedef -
+29 63 1 #dddee0 reset -
+29 64 56 #1a1a1b #ecedef -
+30 0 19 #1a1a1b #ecedef -
+30 19 1 #dddee0 reset -
+30 20 43 #1a1a1b #ecedef -
+30 63 1 #dddee0 reset -
+30 64 56 #1a1a1b #ecedef -
+31 0 19 #1a1a1b #ecedef -
+31 19 1 #dddee0 reset -
+31 20 43 #1a1a1b #ecedef -
+31 63 1 #dddee0 reset -
+31 64 56 #1a1a1b #ecedef -
+32 0 19 #1a1a1b #ecedef -
+32 19 1 #dddee0 reset -
+32 20 43 #1a1a1b #ecedef -
+32 63 1 #dddee0 reset -
+32 64 56 #1a1a1b #ecedef -
+33 0 19 #1a1a1b #ecedef -
+33 19 1 #dddee0 reset -
+33 20 43 #1a1a1b #ecedef -
+33 63 1 #dddee0 reset -
+33 64 56 #1a1a1b #ecedef -
+34 0 19 #1a1a1b #ecedef -
+34 19 1 #dddee0 reset -
+34 20 43 #1a1a1b #ecedef -
+34 63 1 #dddee0 reset -
+34 64 2 #1a1a1b #ecedef -
+34 66 1 #0a6a5e #ecedef bold
+34 67 14 #414242 #ecedef -
+34 81 39 #1a1a1b #ecedef -
+35 1 4 #0a6a5e #e2e3e5 bold
+35 5 5 #414242 reset -
+35 12 3 #0a6a5e #e2e3e5 bold
+35 15 5 #414242 reset -
+35 22 3 #0a6a5e #e2e3e5 bold
+35 25 15 #414242 reset -
+35 42 4 #0a6a5e #e2e3e5 bold
+35 46 16 #414242 reset -
+35 64 3 #0a6a5e #e2e3e5 bold
+35 67 9 #414242 reset -
+35 78 3 #0a6a5e #e2e3e5 bold
+35 81 6 #414242 reset -
+35 89 3 #0a6a5e #e2e3e5 bold
+35 92 8 #414242 reset -
+35 102 3 #0a6a5e #e2e3e5 bold
+35 105 5 #414242 reset -

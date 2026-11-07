@@ -1,0 +1,249 @@
+# case final_main_nord_80x24_en-US
+# size 80x24
+# theme nord
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+┌ System & resources ── updated 2s ago ┐┌ Network & proxy ── looked up 12s ago ┐
+│ CPU  ▂▃▁▁▂▂▁  12%  Memory ▰▰▰▱▱  63% ││ BBR   ○ Disabled · available / v3    │
+│ Disk ▰▰▰▱▱▱▱  41%  Swap   ▰▱▱▱▱  10% ││ TCP   ○ not configured · fq_codel    │
+│ Host   vps-sg-01                     ││ IPv4  203.0.113.24                   │
+│ Kernel 6.12.8-joeyblog-bbrv3         ││ IPv6  2001:db8:3c4d:15::1a2f         │
+│ Uptime 3d 04h 00m · Asia/Shanghai    ││ Proxy Mihomo ● Running · v1.19.2     │
+└──────────────────────────────────────┘└──────────────────────────────────────┘
+┌ Categories ──────┐┌ System ──────────────────────────────────────────── 1/12 ┐
+│  0 Optimization  ││  Overview                                                ┃
+│  ────────────────││▎ System overview                                         ┃
+│▎ 1 System        ││  Public IP / ISP lookup                           12s ago┃
+│  2 Kernel        ││  Packages & mirrors                                      ┃
+│  3 Network       ││  Update packages                                         │
+│  4 SSH           ││  Benchmark system mirrors                                │
+│  5 Docker        ││  Change system mirror · LinuxMirrors…                    │
+│  6 Mihomo proxy ●││  Restore previous system sources                         │
+│  7 Tools         │├ Details ─────────────────────────────────────────────────┤
+│  8 Agent tools   ││ System overview                                          │
+│  9 Prompt        ││ Read only · Current user                                 │
+│    Tests         ││ Read host, CPU, memory, disk, IP and BBR status.         │
+│    CqShell       ││ cqs run system.info                                      │
+└──────────────────┘└──────────────────────────────────────────────────────────┘
+  ↑↓  move   ↵  open   /  search actions   ←→  switch category   ?  help        
+---
+0 0 1 #eceff4 #2e3440 -
+0 1 7 #8fc4d3 #2e3440 bold
+0 8 1 #eceff4 #2e3440 -
+0 9 6 #d8dee9 #2e3440 -
+0 15 2 #eceff4 #2e3440 -
+0 17 6 #d8dee9 #2e3440 -
+0 23 3 #8f9bb3 #2e3440 -
+0 26 34 #eceff4 #2e3440 -
+0 60 12 #8f9bb3 #2e3440 -
+0 72 7 #d8dee9 #2e3440 -
+0 79 1 #eceff4 #2e3440 -
+1 0 1 #4c566a #3b4252 -
+1 1 20 #eceff4 #3b4252 bold
+1 21 2 #4c566a #3b4252 -
+1 23 16 #d8dee9 #3b4252 -
+1 39 2 #4c566a #3b4252 -
+1 41 17 #eceff4 #3b4252 bold
+1 58 2 #4c566a #3b4252 -
+1 60 19 #d8dee9 #3b4252 -
+1 79 1 #4c566a #3b4252 -
+2 0 1 #4c566a #3b4252 -
+2 1 1 #eceff4 #3b4252 -
+2 2 5 #d8dee9 #3b4252 -
+2 7 12 #8fc4d3 #3b4252 -
+2 19 2 #eceff4 #3b4252 -
+2 21 7 #d8dee9 #3b4252 -
+2 28 3 #8fc4d3 #3b4252 -
+2 31 2 #4c566a #3b4252 -
+2 33 5 #8fc4d3 #3b4252 -
+2 38 1 #eceff4 #3b4252 -
+2 39 2 #4c566a #3b4252 -
+2 41 1 #eceff4 #3b4252 -
+2 42 16 #d8dee9 #3b4252 -
+2 58 3 #8f9bb3 #3b4252 -
+2 61 18 #eceff4 #3b4252 -
+2 79 1 #4c566a #3b4252 -
+3 0 1 #4c566a #3b4252 -
+3 1 1 #eceff4 #3b4252 -
+3 2 5 #d8dee9 #3b4252 -
+3 7 3 #8fc4d3 #3b4252 -
+3 10 4 #4c566a #3b4252 -
+3 14 5 #8fc4d3 #3b4252 -
+3 19 2 #eceff4 #3b4252 -
+3 21 7 #d8dee9 #3b4252 -
+3 28 1 #8fc4d3 #3b4252 -
+3 29 4 #4c566a #3b4252 -
+3 33 5 #8fc4d3 #3b4252 -
+3 38 1 #eceff4 #3b4252 -
+3 39 2 #4c566a #3b4252 -
+3 41 1 #eceff4 #3b4252 -
+3 42 22 #d8dee9 #3b4252 -
+3 64 3 #8f9bb3 #3b4252 -
+3 67 12 #eceff4 #3b4252 -
+3 79 1 #4c566a #3b4252 -
+4 0 1 #4c566a #3b4252 -
+4 1 1 #eceff4 #3b4252 -
+4 2 7 #d8dee9 #3b4252 -
+4 9 30 #eceff4 #3b4252 -
+4 39 2 #4c566a #3b4252 -
+4 41 1 #eceff4 #3b4252 -
+4 42 6 #d8dee9 #3b4252 -
+4 48 31 #eceff4 #3b4252 -
+4 79 1 #4c566a #3b4252 -
+5 0 1 #4c566a #3b4252 -
+5 1 1 #eceff4 #3b4252 -
+5 2 7 #d8dee9 #3b4252 -
+5 9 30 #eceff4 #3b4252 -
+5 39 2 #4c566a #3b4252 -
+5 41 1 #eceff4 #3b4252 -
+5 42 6 #d8dee9 #3b4252 -
+5 48 31 #eceff4 #3b4252 -
+5 79 1 #4c566a #3b4252 -
+6 0 1 #4c566a #3b4252 -
+6 1 1 #eceff4 #3b4252 -
+6 2 7 #d8dee9 #3b4252 -
+6 9 10 #eceff4 #3b4252 -
+6 19 3 #8f9bb3 #3b4252 -
+6 22 17 #eceff4 #3b4252 -
+6 39 2 #4c566a #3b4252 -
+6 41 1 #eceff4 #3b4252 -
+6 42 6 #d8dee9 #3b4252 -
+6 48 16 #abc496 #3b4252 -
+6 64 3 #8f9bb3 #3b4252 -
+6 67 12 #eceff4 #3b4252 -
+6 79 1 #4c566a #3b4252 -
+7 0 80 #4c566a #3b4252 -
+8 0 1 #4c566a #3b4252 -
+8 1 12 #eceff4 #3b4252 bold
+8 13 8 #4c566a #3b4252 -
+8 21 8 #eceff4 #3b4252 bold
+8 29 44 #4c566a #3b4252 -
+8 73 6 #d8dee9 #3b4252 -
+8 79 1 #4c566a #3b4252 -
+9 0 1 #4c566a #3b4252 -
+9 1 2 #eceff4 #3b4252 -
+9 3 2 #8f9bb3 #3b4252 -
+9 5 14 #eceff4 #3b4252 -
+9 19 2 #4c566a #3b4252 -
+9 21 2 #eceff4 #3b4252 -
+9 23 56 #d8dee9 #3b4252 bold
+9 79 1 #8fc4d3 #3b4252 -
+10 0 1 #4c566a #3b4252 -
+10 1 2 #eceff4 #3b4252 -
+10 3 18 #4c566a #3b4252 -
+10 21 1 #8fc4d3 #434c5e bold
+10 22 57 #eceff4 #434c5e bold
+10 79 1 #8fc4d3 #3b4252 -
+11 0 1 #4c566a #3b4252 -
+11 1 1 #8fc4d3 #434c5e bold
+11 2 1 #eceff4 #434c5e bold
+11 3 2 #8f9bb3 #434c5e bold
+11 5 14 #eceff4 #434c5e bold
+11 19 2 #4c566a #3b4252 -
+11 21 51 #eceff4 #3b4252 -
+11 72 7 #d8dee9 #3b4252 -
+11 79 1 #8fc4d3 #3b4252 -
+12 0 1 #4c566a #3b4252 -
+12 1 2 #eceff4 #3b4252 -
+12 3 2 #8f9bb3 #3b4252 -
+12 5 14 #eceff4 #3b4252 -
+12 19 2 #4c566a #3b4252 -
+12 21 2 #eceff4 #3b4252 -
+12 23 56 #d8dee9 #3b4252 bold
+12 79 1 #8fc4d3 #3b4252 -
+13 0 1 #4c566a #3b4252 -
+13 1 2 #eceff4 #3b4252 -
+13 3 2 #8f9bb3 #3b4252 -
+13 5 14 #eceff4 #3b4252 -
+13 19 2 #4c566a #3b4252 -
+13 21 2 #eceff4 #3b4252 -
+13 23 15 #d8dee9 #3b4252 -
+13 38 41 #eceff4 #3b4252 -
+13 79 1 #4c566a #3b4252 -
+14 0 1 #4c566a #3b4252 -
+14 1 2 #eceff4 #3b4252 -
+14 3 2 #8f9bb3 #3b4252 -
+14 5 14 #eceff4 #3b4252 -
+14 19 2 #4c566a #3b4252 -
+14 21 58 #eceff4 #3b4252 -
+14 79 1 #4c566a #3b4252 -
+15 0 1 #4c566a #3b4252 -
+15 1 2 #eceff4 #3b4252 -
+15 3 2 #8f9bb3 #3b4252 -
+15 5 14 #eceff4 #3b4252 -
+15 19 2 #4c566a #3b4252 -
+15 21 2 #eceff4 #3b4252 -
+15 23 36 #d8dee9 #3b4252 -
+15 59 20 #eceff4 #3b4252 -
+15 79 1 #4c566a #3b4252 -
+16 0 1 #4c566a #3b4252 -
+16 1 2 #eceff4 #3b4252 -
+16 3 2 #8f9bb3 #3b4252 -
+16 5 12 #eceff4 #3b4252 -
+16 17 2 #abc496 #3b4252 -
+16 19 2 #4c566a #3b4252 -
+16 21 2 #eceff4 #3b4252 -
+16 23 31 #d8dee9 #3b4252 -
+16 54 25 #eceff4 #3b4252 -
+16 79 1 #4c566a #3b4252 -
+17 0 1 #4c566a #3b4252 -
+17 1 2 #eceff4 #3b4252 -
+17 3 2 #8f9bb3 #3b4252 -
+17 5 14 #eceff4 #3b4252 -
+17 19 2 #4c566a #3b4252 -
+17 21 9 #eceff4 #3b4252 bold
+17 30 50 #4c566a #3b4252 -
+18 0 1 #4c566a #3b4252 -
+18 1 2 #eceff4 #3b4252 -
+18 3 2 #8f9bb3 #3b4252 -
+18 5 14 #eceff4 #3b4252 -
+18 19 2 #4c566a #3b4252 -
+18 21 1 #eceff4 #3b4252 -
+18 22 15 #eceff4 #3b4252 bold
+18 37 42 #eceff4 #3b4252 -
+18 79 1 #4c566a #3b4252 -
+19 0 1 #4c566a #3b4252 -
+19 1 2 #eceff4 #3b4252 -
+19 3 2 #8f9bb3 #3b4252 -
+19 5 14 #eceff4 #3b4252 -
+19 19 2 #4c566a #3b4252 -
+19 21 1 #eceff4 #3b4252 -
+19 22 9 #abc496 #3b4252 -
+19 31 3 #8f9bb3 #3b4252 -
+19 34 12 #d8dee9 #3b4252 -
+19 46 33 #eceff4 #3b4252 -
+19 79 1 #4c566a #3b4252 -
+20 0 1 #4c566a #3b4252 -
+20 1 2 #eceff4 #3b4252 -
+20 3 2 #8f9bb3 #3b4252 -
+20 5 14 #eceff4 #3b4252 -
+20 19 2 #4c566a #3b4252 -
+20 21 58 #eceff4 #3b4252 -
+20 79 1 #4c566a #3b4252 -
+21 0 1 #4c566a #3b4252 -
+21 1 2 #eceff4 #3b4252 -
+21 3 2 #8f9bb3 #3b4252 -
+21 5 14 #eceff4 #3b4252 -
+21 19 2 #4c566a #3b4252 -
+21 21 1 #eceff4 #3b4252 -
+21 22 19 #8fc4d3 #3b4252 -
+21 41 38 #eceff4 #3b4252 -
+21 79 1 #4c566a #3b4252 -
+22 0 80 #4c566a #3b4252 -
+23 0 1 #eceff4 #2e3440 -
+23 1 4 #8fc4d3 #434c5e bold
+23 5 5 #d8dee9 #2e3440 -
+23 10 2 #eceff4 #2e3440 -
+23 12 3 #8fc4d3 #434c5e bold
+23 15 5 #d8dee9 #2e3440 -
+23 20 2 #eceff4 #2e3440 -
+23 22 3 #8fc4d3 #434c5e bold
+23 25 15 #d8dee9 #2e3440 -
+23 40 2 #eceff4 #2e3440 -
+23 42 4 #8fc4d3 #434c5e bold
+23 46 16 #d8dee9 #2e3440 -
+23 62 2 #eceff4 #2e3440 -
+23 64 3 #8fc4d3 #434c5e bold
+23 67 5 #d8dee9 #2e3440 -
+23 72 8 #eceff4 #2e3440 -

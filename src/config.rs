@@ -5,19 +5,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preferences {
     pub language: Option<String>,
     pub locale_dir: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub category_order: Vec<String>,
+    /// Saved theme ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// Terminal background detection; `None` means enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detect_background: Option<bool>,
 }
 
 impl Preferences {
     pub fn read(path: &Path, explicit: bool) -> Result<Self> {
         match fs::read_to_string(path) {
-            Ok(s) => Ok(toml::from_str(&s)?),
+            // Syntax errors, wrong value types and unknown keys are all
+            // configuration errors of this file, like an unreadable file.
+            Ok(s) => toml::from_str(&s)
+                .map_err(|e| Error::new("error.config", format!("{}: {e}", path.display()))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Ok(Self::default()),
             Err(e) => Err(Error::new(
                 "error.config",
@@ -37,6 +46,8 @@ pub struct Paths {
     pub home: PathBuf,
     pub state: PathBuf,
     pub preferences: PathBuf,
+    /// Theme_Directory: `themes` next to the default config.toml.
+    pub themes: PathBuf,
     pub terminal: PathBuf,
     pub bashrc: PathBuf,
     pub zshrc: PathBuf,
@@ -89,6 +100,7 @@ impl Paths {
                 env_path("XDG_STATE_HOME", home.join(".local/state")).join("cqs"),
             ),
             preferences: config.join("config.toml"),
+            themes: config.join("themes"),
             terminal: env_path("CQS_TERMINAL_CONFIG", config.join("terminal.toml")),
             bashrc: home.join(".bashrc"),
             zshrc: env_path("ZDOTDIR", home.clone()).join(".zshrc"),
@@ -114,5 +126,111 @@ impl Paths {
             clash_binary,
             home,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Reorderable_Category IDs: every category except `optimization`.
+    const REORDERABLE: [&str; 11] = [
+        "system", "network", "kernel", "ssh", "docker", "tools", "ai", "terminal", "tests", "app",
+        "clash",
+    ];
+
+    fn read_text(text: &str) -> Result<Preferences> {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        fs::write(&path, text).unwrap();
+        Preferences::read(&path, true)
+    }
+
+    fn preferences() -> impl Strategy<Value = Preferences> {
+        let language =
+            prop::option::of(prop_oneof![Just("zh-CN"), Just("en-US")].prop_map(String::from));
+        let locale_dir = prop::option::of("\\PC{1,64}".prop_map(PathBuf::from));
+        let category_order = prop_oneof![
+            Just(Vec::new()),
+            Just(REORDERABLE.map(String::from).to_vec()).prop_shuffle(),
+        ];
+        let theme = prop::option::of("[A-Za-z0-9_-]{1,32}");
+        let detect_background = prop::option::of(any::<bool>());
+        (
+            language,
+            locale_dir,
+            category_order,
+            theme,
+            detect_background,
+        )
+            .prop_map(
+                |(language, locale_dir, category_order, theme, detect_background)| Preferences {
+                    language,
+                    locale_dir,
+                    category_order,
+                    theme,
+                    detect_background,
+                },
+            )
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        // Feature: tui-redesign, Property 2: Preferences 往返
+        /// **Validates: Requirements 24.5, 24.6**
+        #[test]
+        fn preferences_round_trip(p in preferences()) {
+            let text = toml::to_string(&p)?;
+            prop_assert_eq!(toml::from_str::<Preferences>(&text)?, p);
+        }
+    }
+
+    #[test]
+    fn new_keys_with_wrong_types_are_config_errors() {
+        for text in ["theme = 1\n", "detect_background = \"yes\"\n"] {
+            let error = read_text(text).unwrap_err();
+            assert_eq!(error.key, "error.config", "{text}");
+        }
+    }
+
+    #[test]
+    fn unknown_keys_are_still_rejected() {
+        let error = read_text("language = \"en-US\"\ncolour = \"blue\"\n").unwrap_err();
+        assert_eq!(error.key, "error.config");
+        assert!(error.detail.contains("colour"), "{}", error.detail);
+    }
+
+    #[test]
+    fn legacy_config_without_new_keys_still_loads() {
+        let preferences = read_text(
+            "language = \"zh-CN\"\nlocale_dir = \"/opt/locales\"\ncategory_order = [\"kernel\", \"system\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            preferences,
+            Preferences {
+                language: Some("zh-CN".into()),
+                locale_dir: Some("/opt/locales".into()),
+                category_order: vec!["kernel".into(), "system".into()],
+                theme: None,
+                detect_background: None,
+            }
+        );
+    }
+
+    #[test]
+    fn new_keys_are_read_and_unset_keys_are_not_written() {
+        let preferences = read_text("theme = \"nord\"\ndetect_background = false\n").unwrap();
+        assert_eq!(preferences.theme.as_deref(), Some("nord"));
+        assert_eq!(preferences.detect_background, Some(false));
+        assert_eq!(toml::to_string(&Preferences::default()).unwrap(), "");
+    }
+
+    #[test]
+    fn theme_directory_sits_next_to_the_default_config() {
+        let paths = Paths::from_env().unwrap();
+        assert_eq!(paths.themes, paths.preferences.with_file_name("themes"));
     }
 }

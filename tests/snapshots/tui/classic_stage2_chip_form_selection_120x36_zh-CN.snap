@@ -1,0 +1,146 @@
+# case classic_stage2_chip_form_selection_120x36_zh-CN
+# size 120x36
+# theme classic
+# background unavailable
+# locale zh-CN
+ CqShell v0.1.4  系统管理 › 系统概览                        系统修改请使用 sudo cqs · vps-sg-01 · ● 普通用户 · 简体中文 
+╭ 系统与资源 ────────────────────────────── 本机 2s 前更新 ╮╭ 网络与代理 ───────────────────────────── 公网 12s 前查询 ╮
+│ CPU  ▂▃▅▄▃▂▃▁▁▂▂▁  12% 2 核  内存 ━━━━━───  63% 1.2/1.9G ││ BBR  ○ 未启用 · 可用 / v3 · cubic                        │
+│ 磁盘 ━━╸───  41% 16.4/40.0G  交换 ━───────  10% 0.2/2.0G ││ TCP  ○ 未配置 · fq_codel                                 │
+│ 主机 vps-sg-01 · Debian GNU/Linux 12 (bookworm)          ││ IPv4 203.0.113.24 · AS64500 Example Net                  │
+│ 内核 6.12.8-joeyblog-bbrv3 · x86_64 · AMD EPYC 7B13 × 2  ││ IPv6 2001:db8:3c4d:15::1a2f                              │
+│ 运行 3d 04h 00m · Asia/Shanghai                          ││ 代理 Mihomo ● 运行中 · v1.19.2 · 终端 ● 已启用           │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+╭ 功能分类 ────────╮╭ 系统管理 ────────────────────────── 1/12 ╮╭ 说明 ────────────────────────────────────────────────╮
+│  0 一键优化      ││  概览                                    ││ 系统概览                                             │
+│  ───────────╭ 启用当前内核的 BBR ──────────────────────────────────────────────────────────────────────╮             │
+│› 1 系统管理 │                                                                                          │             │
+│  2 内核管理 │  配置此项目并加入优化清单，保存后不会立即执行。                                          │ 。          │
+│  3 网络调优 │  拥塞控制  cubic                                                                         │             │
+│  4 SSH      │  会修改系统或用户文件 · 需要 root                                                        │             │
+│  5 Docker   │                                                                                          │             │
+│  6 Mihomo 代│  › 默认队列 *  1/1                                                                       │             │
+│  7 常用工具 │     fq   fq_codel   fq_pie   cake                                                        │             │
+│  8 Agent 工 │    使用 fq 公平队列调度器。                                                              │             │
+│  9 终端美化 │                                                                                          │             │
+│    服务器测 │  sudo cqs run bbr.enable --set qdisc=fq                                                  │             │
+│    CqShell  │                                                                                          │             │
+│             │  [ 保存到清单 ]  [ 取消 ]                                                                │             │
+│             │  Tab/↑↓ 字段  ←→ 选项 / 光标  Ctrl+Enter 提交  Esc 取消                                  │             │
+│             ╰──────────────────────────────────────────────────────────────────────────────────────────╯             │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││ ↵ 打开概览                                           │
+╰──────────────────╯╰──────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
+ Tab/↑↓ 字段  ←→ 选项 / 光标  Ctrl+Enter 提交  Esc 返回                                                                 
+---
+0 0 120 #3d5265 reset -
+1 0 120 #3d5265 reset -
+2 0 120 #3d5265 reset -
+3 0 120 #3d5265 reset -
+4 0 120 #3d5265 reset -
+5 0 120 #3d5265 reset -
+6 0 120 #3d5265 reset -
+7 0 120 #3d5265 reset -
+8 0 120 #3d5265 reset -
+9 0 120 #3d5265 reset -
+10 0 14 #3d5265 reset -
+10 14 1 #45cdb6 reset -
+10 15 20 #45cdb6 reset bold
+10 35 71 #45cdb6 reset -
+10 106 14 #3d5265 reset -
+11 0 14 #3d5265 reset -
+11 14 1 #45cdb6 reset -
+11 105 1 #45cdb6 reset -
+11 106 14 #3d5265 reset -
+12 0 14 #3d5265 reset -
+12 14 1 #45cdb6 reset -
+12 17 46 #91a2b0 reset -
+12 105 1 #45cdb6 reset -
+12 106 14 #3d5265 reset -
+13 0 14 #3d5265 reset -
+13 14 1 #45cdb6 reset -
+13 105 1 #45cdb6 reset -
+13 106 14 #3d5265 reset -
+14 0 14 #3d5265 reset -
+14 14 1 #45cdb6 reset -
+14 17 20 #ffbe5e reset -
+14 37 3 #91a2b0 reset -
+14 40 9 #ffbe5e reset -
+14 105 1 #45cdb6 reset -
+14 106 14 #3d5265 reset -
+15 0 14 #3d5265 reset -
+15 14 1 #45cdb6 reset -
+15 105 1 #45cdb6 reset -
+15 106 14 #3d5265 reset -
+16 0 14 #3d5265 reset -
+16 14 1 #45cdb6 reset -
+16 17 2 #45cdb6 reset -
+16 19 8 #45cdb6 reset bold
+16 27 2 #ff7585 reset -
+16 29 5 #91a2b0 reset -
+16 105 1 #45cdb6 reset -
+16 106 14 #3d5265 reset -
+17 0 14 #3d5265 reset -
+17 14 1 #45cdb6 reset -
+17 19 4 black #45cdb6 -
+17 24 10 #91a2b0 reset -
+17 35 8 #91a2b0 reset -
+17 44 6 #91a2b0 reset -
+17 105 1 #45cdb6 reset -
+17 106 14 #3d5265 reset -
+18 0 14 #3d5265 reset -
+18 14 1 #45cdb6 reset -
+18 19 24 #91a2b0 reset -
+18 105 1 #45cdb6 reset -
+18 106 14 #3d5265 reset -
+19 0 14 #3d5265 reset -
+19 14 1 #45cdb6 reset -
+19 105 1 #45cdb6 reset -
+19 106 14 #3d5265 reset -
+20 0 14 #3d5265 reset -
+20 14 1 #45cdb6 reset -
+20 17 38 #45cdb6 reset -
+20 105 1 #45cdb6 reset -
+20 106 14 #3d5265 reset -
+21 0 14 #3d5265 reset -
+21 14 1 #45cdb6 reset -
+21 105 1 #45cdb6 reset -
+21 106 14 #3d5265 reset -
+22 0 14 #3d5265 reset -
+22 14 1 #45cdb6 reset -
+22 17 14 #45cdb6 reset -
+22 105 1 #45cdb6 reset -
+22 106 14 #3d5265 reset -
+23 0 14 #3d5265 reset -
+23 14 1 #45cdb6 reset -
+23 17 6 #45cdb6 reset bold
+23 23 5 #91a2b0 reset -
+23 30 2 #45cdb6 reset bold
+23 32 12 #91a2b0 reset -
+23 46 10 #45cdb6 reset bold
+23 56 5 #91a2b0 reset -
+23 63 3 #45cdb6 reset bold
+23 66 5 #91a2b0 reset -
+23 105 1 #45cdb6 reset -
+23 106 14 #3d5265 reset -
+24 0 14 #3d5265 reset -
+24 14 92 #45cdb6 reset -
+24 106 14 #3d5265 reset -
+25 0 120 #3d5265 reset -
+26 0 120 #3d5265 reset -
+27 0 120 #3d5265 reset -
+28 0 120 #3d5265 reset -
+29 0 120 #3d5265 reset -
+30 0 120 #3d5265 reset -
+31 0 120 #3d5265 reset -
+32 0 120 #3d5265 reset -
+33 0 120 #3d5265 reset -
+34 0 120 #3d5265 reset -
+35 0 120 #3d5265 reset -

@@ -1,13 +1,28 @@
+mod detect;
 mod input;
 mod motion;
+mod palette;
+mod preview;
+#[cfg(test)]
+mod progress_tests;
+mod related;
+mod sections;
+mod session;
+#[cfg(test)]
+mod snapshot;
+mod style_panel;
+#[cfg(test)]
+mod theme_tests;
 mod view;
 
 use crate::{
     actions::{self, Kind, Listing, Parameters, Source, Spec},
+    config::Preferences,
     dashboard::{Monitor, Snapshot},
     error::{Error, Result},
     ops::Choice,
-    runtime::{Context, Event},
+    runtime::{Context, Event, Outcome, Step, StepState},
+    theme::{self, Background, ThemeSource, ThemeState, builtin},
 };
 use crossterm::{
     event::{
@@ -22,6 +37,7 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Position, Rect},
 };
+use session::SessionRecords;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io::{self, Write},
@@ -48,22 +64,33 @@ const GROUPS: &[&str] = &[
     "clash",
     "optimization",
 ];
+/// Optimization_Category: pinned above the Reorderable_Categories, never reordered.
 const OPTIMIZATION_GROUP: usize = GROUPS.len() - 1;
+/// Default order of the Reorderable_Categories, i.e. every group except optimization.
 const DEFAULT_CATEGORY_ORDER: &[&str] = &[
-    "system",
-    "kernel",
-    "network",
-    "ssh",
-    "docker",
-    "clash",
-    "tools",
-    "ai",
-    "terminal",
-    "tests",
+    "system", "kernel", "network", "ssh", "docker", "clash", "tools", "ai", "terminal", "tests",
     "app",
-    "optimization",
 ];
-type Jobs = Vec<(Spec, Parameters)>;
+const RECOMMENDED: &[&str] = &["system.update", "system.clean", "tcp.tune", "bbr.enable"];
+
+#[derive(Debug)]
+enum Task {
+    Single {
+        spec: Spec,
+        params: Parameters,
+        reviewed: bool,
+    },
+    Batch(Vec<(Spec, Parameters)>),
+}
+
+impl Task {
+    fn jobs(&self) -> Vec<(&Spec, &Parameters)> {
+        match self {
+            Self::Single { spec, params, .. } => vec![(spec, params)],
+            Self::Batch(jobs) => jobs.iter().map(|(spec, params)| (spec, params)).collect(),
+        }
+    }
+}
 
 fn default_category_order() -> Vec<usize> {
     let mut order = DEFAULT_CATEGORY_ORDER
@@ -75,7 +102,7 @@ fn default_category_order() -> Vec<usize> {
                 .expect("category ID")
         })
         .collect::<Vec<_>>();
-    for index in 0..GROUPS.len() {
+    for index in (0..GROUPS.len()).filter(|index| *index != OPTIMIZATION_GROUP) {
         if !order.contains(&index) {
             order.push(index);
         }
@@ -83,19 +110,12 @@ fn default_category_order() -> Vec<usize> {
     order
 }
 
+/// Older versions saved `optimization` in the list; it is pinned now, so those entries are
+/// dropped wherever they appear. The result holds only Reorderable_Categories.
 fn category_order_from_ids(ids: &[String]) -> Result<Vec<usize>> {
-    if ids.is_empty() {
-        return Ok(default_category_order());
-    }
-    if ids.len() > GROUPS.len() {
-        return Err(Error::new(
-            "error.config",
-            "category_order contains too many categories",
-        ));
-    }
     let mut seen = [false; GROUPS.len()];
-    let mut order = Vec::with_capacity(ids.len());
-    for id in ids {
+    let mut order = Vec::with_capacity(DEFAULT_CATEGORY_ORDER.len());
+    for id in ids.iter().filter(|id| *id != GROUPS[OPTIMIZATION_GROUP]) {
         let Some(index) = GROUPS.iter().position(|group| *group == id) else {
             return Err(Error::new(
                 "error.config",
@@ -119,15 +139,37 @@ fn category_order_from_ids(ids: &[String]) -> Result<Vec<usize>> {
     Ok(order)
 }
 
-fn load_category_order(ctx: &Context) -> Result<Vec<usize>> {
-    let preferences = crate::config::Preferences::read(&ctx.paths.preferences, false)?;
-    category_order_from_ids(&preferences.category_order)
+/// A row of a category's Action_List. Section titles and the Rule are never selected.
+#[derive(Debug, Clone)]
+enum Row {
+    /// The title of a Section, by its ID in the Section table.
+    Section(&'static str),
+    Rule,
+    Action(Spec),
+    /// Execute_Row: runs the Checklist; only in the Optimization_View.
+    Execute,
 }
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Focus {
-    Categories,
-    Actions,
+impl Row {
+    /// Selectable_Row: an action or the Execute_Row.
+    fn selectable(&self) -> bool {
+        matches!(self, Self::Action(_) | Self::Execute)
+    }
+}
+/// Index in `rows` of the `position`-th Selectable_Row.
+fn row_index(rows: &[Row], position: usize) -> usize {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.selectable())
+        .nth(position)
+        .map(|(index, _)| index)
+        .expect("positions name a Selectable_Row")
+}
+/// The Selectable_Row number of `rows[index]`; `None` for a Section title, the Rule or a
+/// row past the end.
+fn row_position(rows: &[Row], index: usize) -> Option<usize> {
+    rows.get(index)
+        .filter(|row| row.selectable())
+        .map(|_| rows[..index].iter().filter(|row| row.selectable()).count())
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Phase {
@@ -181,12 +223,13 @@ struct Toast {
 struct LogLine {
     text: String,
     tone: Tone,
+    bold: bool,
 }
 #[derive(Debug)]
 enum Effect {
     None,
     Quit,
-    Run(Jobs),
+    Run(Task),
     Refresh,
     PublicIp,
 }
@@ -207,6 +250,18 @@ struct Form {
     picker: Option<Picker>,
 }
 impl Form {
+    fn parameters(&self) -> Parameters {
+        self.spec
+            .fields
+            .iter()
+            .zip(&self.values)
+            .map(|(field, value)| (field.name.to_owned(), value.text.clone()))
+            .collect()
+    }
+    fn chip_field(&self, index: usize) -> bool {
+        let field = &self.spec.fields[index];
+        !field.choices.is_empty() && !field.allow_custom
+    }
     /// Listed fields name existing items, so they are chosen from a list, never typed.
     fn listed(&self, index: usize) -> bool {
         self.spec.fields[index].source.is_some()
@@ -337,8 +392,9 @@ pub struct App {
     ctx: Context,
     group: usize,
     category_order: Vec<usize>,
+    /// Per category, the selected row counted among its Selectable_Rows only, so a
+    /// selection never rests on a Section title or the Rule.
     positions: [usize; GROUPS.len()],
-    focus: Focus,
     marked: BTreeSet<String>,
     parameters: BTreeMap<String, Parameters>,
     logs: VecDeque<LogLine>,
@@ -366,10 +422,34 @@ pub struct App {
     started: Instant,
     toast: Option<Toast>,
     help: bool,
+    /// The open Command_Palette, an Overlay that owns input (design component 5).
+    command_palette: Option<palette::CommandPalette>,
+    style_panel: Option<style_panel::StylePanel>,
+    dialog_opened: Option<Instant>,
+    dialog_kind: u8,
     hover: Option<Position>,
     gauges: [Option<motion::Tween>; 4],
     /// A user-requested refresh in flight; cleared when a newer sample arrives.
     refreshing: Option<Instant>,
+    /// Drawing reads `theme.active`; a change shows from the next frame.
+    theme: ThemeState,
+    /// Last_Result and Recent_Use for this process; never written to a file.
+    records: SessionRecords,
+    /// Action ID and wall-clock start of the running single task. `None` while idle and
+    /// during a batch, whose steps are recorded from Step events instead (task 13.2).
+    single_task: Option<(&'static str, Instant)>,
+    progress: Option<view::plan::Progress>,
+}
+fn initial_theme() -> ThemeState {
+    let background = Background::Unavailable("background detection is not enabled".into());
+    ThemeState {
+        active: theme::resolve(&builtin::aurora(), &background),
+        definitions: builtin::all(),
+        saved_id: None,
+        source: ThemeSource::Default,
+        error: None,
+        background,
+    }
 }
 impl App {
     pub fn new(ctx: Context) -> Self {
@@ -384,7 +464,6 @@ impl App {
             group: 0,
             category_order: default_category_order(),
             positions: [0; GROUPS.len()],
-            focus: Focus::Actions,
             marked: BTreeSet::new(),
             parameters: BTreeMap::new(),
             logs: VecDeque::new(),
@@ -411,16 +490,134 @@ impl App {
             started: now,
             toast: None,
             help: false,
+            command_palette: None,
+            style_panel: None,
+            dialog_opened: None,
+            dialog_kind: 0,
             hover: None,
             gauges: [None; 4],
             refreshing: None,
+            theme: initial_theme(),
+            records: SessionRecords::default(),
+            single_task: None,
+            progress: None,
         }
     }
     fn elapsed(&self) -> Duration {
         self.now.saturating_duration_since(self.started)
     }
     fn spin(&self) -> &'static str {
-        motion::spinner(self.elapsed())
+        view::spinner(&self.theme.active, self.elapsed())
+    }
+
+    pub fn preview_theme(&mut self, id: &str, background: Background) -> Result<()> {
+        let definition = builtin::all()
+            .into_iter()
+            .find(|definition| definition.id == id)
+            .ok_or_else(|| Error::new("error.input", id))?;
+        self.theme.active = theme::resolve(&definition, &background);
+        self.theme.background = background;
+        Ok(())
+    }
+
+    fn configure_theme(
+        &mut self,
+        flag: Option<&str>,
+        environment: Option<&str>,
+        background: Background,
+        preferences: &Preferences,
+    ) {
+        let customs = theme::file::load_dir(&self.ctx.paths.themes);
+        let builtins = builtin::all();
+        let (id, source) =
+            theme::resolve::resolve_id(flag, environment, preferences.theme.as_deref());
+        let (definition, error) = theme::resolve::select(&id, source, &builtins, &customs);
+        let mut definitions = builtins;
+        definitions.extend(customs.into_iter().filter_map(|custom| custom.result.ok()));
+        self.theme = ThemeState {
+            definitions,
+            active: theme::resolve(&definition, &background),
+            saved_id: preferences.theme.clone(),
+            source,
+            error: error.clone(),
+            background,
+        };
+        if let Some(detail) = error {
+            self.notify(
+                self.ctx
+                    .i18n
+                    .format("toast.theme_error", &[("detail", &detail)]),
+                Tone::Warning,
+            );
+        }
+    }
+
+    fn open_style(&mut self) {
+        self.style_panel = Some(style_panel::StylePanel::new(
+            self.theme.active.clone(),
+            &mut self.theme.definitions,
+            theme::file::load_dir(&self.ctx.paths.themes),
+        ));
+    }
+
+    fn preview_style(&mut self, cursor: usize) {
+        let panel = self.style_panel.as_mut().expect("open style panel");
+        panel.cursor = cursor.min(panel.entries.len() - 1);
+        if let Some(theme) = panel.preview(&self.theme) {
+            self.theme.active = theme;
+        }
+    }
+
+    fn style_key(&mut self, key: KeyEvent) -> Result<Effect> {
+        let panel = self.style_panel.as_ref().expect("open style panel");
+        let last = panel.entries.len() - 1;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.preview_style(panel.cursor.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.preview_style((panel.cursor + 1).min(last)),
+            KeyCode::Home => self.preview_style(0),
+            KeyCode::End => self.preview_style(last),
+            KeyCode::Esc => {
+                self.theme.active = self.style_panel.take().unwrap().previous;
+            }
+            KeyCode::Char('?') | KeyCode::F(1) => self.help = true,
+            KeyCode::Enter => {
+                let entry = &panel.entries[panel.cursor];
+                let definition = match entry.definition(&self.theme.definitions) {
+                    Ok(definition) => definition,
+                    Err(detail) => {
+                        self.notify(
+                            self.ctx
+                                .i18n
+                                .format("ui.theme_error", &[("detail", detail)]),
+                            Tone::Warning,
+                        );
+                        return Ok(Effect::None);
+                    }
+                };
+                let id = entry.id.clone();
+                let selected_theme = theme::resolve(definition, &self.theme.background);
+                let result = (|| {
+                    let mut preferences =
+                        crate::config::Preferences::read(&self.ctx.paths.preferences, false)?;
+                    preferences.theme = Some(id.clone());
+                    preferences.write(&self.ctx.paths.preferences)
+                })();
+                if let Err(error) = result {
+                    self.theme.active = panel.previous.clone();
+                    self.fail_ui(error);
+                } else {
+                    self.theme.active = selected_theme;
+                    self.theme.saved_id = Some(id.clone());
+                    self.style_panel = None;
+                    self.notify(
+                        self.ctx.i18n.format("toast.theme_saved", &[("theme", &id)]),
+                        Tone::Success,
+                    );
+                }
+            }
+            _ => (),
+        }
+        Ok(Effect::None)
     }
     /// Toasts use the wall clock: they may be raised after a terminal handoff, when the
     /// frame clock is stale.
@@ -434,6 +631,11 @@ impl App {
     /// Advance the frame clock and the state that depends on it.
     fn tick(&mut self, now: Instant) {
         self.now = now;
+        let kind = self.overlay_kind();
+        if kind != self.dialog_kind {
+            self.dialog_kind = kind;
+            self.dialog_opened = (kind != 0).then_some(now);
+        }
         if self.toast.as_ref().is_some_and(|toast| {
             now.saturating_duration_since(toast.shown) >= motion::TOAST_LIFETIME
         }) {
@@ -467,7 +669,7 @@ impl App {
                 motion::toast_fading(self.now.saturating_duration_since(toast.shown))
             });
         // A pending form polls quickly so it opens as soon as its items arrive.
-        if moving || self.loading.is_some() {
+        if moving || self.loading.is_some() || self.dialog_fading() {
             motion::ANIMATION_FRAME
         } else if self.worker.is_some()
             || self.refreshing.is_some()
@@ -478,11 +680,65 @@ impl App {
             motion::IDLE_FRAME
         }
     }
+    fn overlay_kind(&self) -> u8 {
+        if self.confirmation.is_some() {
+            1
+        } else if self.loading.is_some() {
+            2
+        } else if self.form.as_ref().is_some_and(|form| form.picker.is_some()) {
+            3
+        } else if self.form.is_some() {
+            4
+        } else if self.notice.is_some() {
+            5
+        } else if self.help {
+            6
+        } else if self.command_palette.is_some() {
+            7
+        } else if self.overview {
+            8
+        } else if self.log_modal {
+            9
+        } else {
+            0
+        }
+    }
+    fn dialog_fading(&self) -> bool {
+        matches!(self.theme.active.palette.dialog, theme::Color::Rgb(..))
+            && self.dialog_opened.is_some_and(|opened| {
+                self.now.saturating_duration_since(opened) < motion::DIALOG_FADE
+            })
+    }
+    /// Category_List order: the pinned Optimization_Category, then `category_order`.
+    fn display_order(&self) -> Vec<usize> {
+        std::iter::once(OPTIMIZATION_GROUP)
+            .chain(self.category_order.iter().copied())
+            .collect()
+    }
+    /// Row of Current_Category in `display_order()`.
     fn category_position(&self) -> usize {
-        self.category_order
+        self.display_order()
             .iter()
             .position(|index| *index == self.group)
             .unwrap_or(0)
+    }
+    /// The rows Category_List draws: `display_order()` with the rule (`None`) under the
+    /// pinned Optimization_Category.
+    fn category_rows(&self) -> Vec<Option<usize>> {
+        let order = self.display_order();
+        let (pinned, reorderable) = order.split_at(1);
+        pinned
+            .iter()
+            .copied()
+            .map(Some)
+            .chain([None])
+            .chain(reorderable.iter().copied().map(Some))
+            .collect()
+    }
+    /// Row of Current_Category in `category_rows()`.
+    fn category_row(&self) -> usize {
+        let position = self.category_position();
+        position + usize::from(position > 0)
     }
     fn set_category_order(&mut self, order: Vec<usize>) {
         self.group = order[0];
@@ -491,21 +747,55 @@ impl App {
     fn optimization(&self) -> bool {
         self.group == OPTIMIZATION_GROUP
     }
+    /// Position of the selection among Current_Category's Selectable_Rows.
     fn selected(&self) -> usize {
         self.positions[self.group]
     }
-    fn items(&self) -> Vec<Spec> {
-        if self.optimization() {
-            actions::OPTIMIZATION
+    /// The Action_List of `group`: grouped categories follow the Section table, each Section
+    /// title before its actions; the others list their actions in `actions::specs()` order.
+    /// Both come from `sections::blocks`, which the Command_Palette's search reads too.
+    /// The Optimization_View lists OPTIMIZATION, then a Rule and the Execute_Row.
+    fn rows(&self, group: usize) -> Vec<Row> {
+        let specs = actions::specs();
+        let action = |id: &str| {
+            Row::Action(
+                specs
+                    .iter()
+                    .find(|spec| spec.id == id)
+                    .cloned()
+                    .expect("static action ID"),
+            )
+        };
+        if group == OPTIMIZATION_GROUP {
+            return actions::OPTIMIZATION
                 .iter()
-                .map(|id| actions::find(id).expect("static action ID"))
-                .collect()
-        } else {
-            actions::specs()
-                .into_iter()
-                .filter(|s| s.group == GROUPS[self.group])
-                .collect()
+                .map(|id| action(id))
+                .chain([Row::Rule, Row::Execute])
+                .collect();
         }
+        sections::blocks(GROUPS[group], &specs)
+            .into_iter()
+            .flat_map(|(section, ids)| {
+                section
+                    .map(Row::Section)
+                    .into_iter()
+                    .chain(ids.into_iter().map(&action))
+            })
+            .collect()
+    }
+    fn selectable_count(&self, group: usize) -> usize {
+        self.rows(group)
+            .iter()
+            .filter(|row| row.selectable())
+            .count()
+    }
+    /// Current_Category's selected row: always an action or the Execute_Row.
+    fn selected_row(&self) -> Row {
+        self.rows(self.group)
+            .into_iter()
+            .filter(Row::selectable)
+            .nth(self.selected())
+            .expect("positions name a Selectable_Row")
     }
     fn available(&self, spec: &Spec) -> Result<()> {
         if matches!(spec.kind, Kind::Info | Kind::PublicIp) {
@@ -523,10 +813,14 @@ impl App {
         self.log_tone(text, Tone::Plain);
     }
     fn log_tone(&mut self, text: impl AsRef<str>, tone: Tone) {
+        self.log_styled(text, tone, false);
+    }
+    fn log_styled(&mut self, text: impl AsRef<str>, tone: Tone, bold: bool) {
         for line in text.as_ref().lines() {
             self.logs.push_back(LogLine {
                 text: crate::runtime::sanitize(line),
                 tone,
+                bold,
             });
         }
         while self.logs.len() > 2000 {
@@ -543,11 +837,22 @@ impl App {
     }
     fn finish(&mut self, result: Result<()>) {
         self.confirmation = None;
-        self.phase = match &result {
-            Ok(()) => Phase::Completed,
-            Err(e) if e.key == "error.cancelled" => Phase::Cancelled,
-            Err(_) => Phase::Failed,
+        let outcome = outcome(&result);
+        if let Some(progress) = &mut self.progress {
+            progress.finish(outcome, Instant::now());
+        }
+        self.phase = match outcome {
+            Outcome::Done => Phase::Completed,
+            Outcome::Failed => Phase::Failed,
+            Outcome::Cancelled => Phase::Cancelled,
         };
+        // The wall clock, not the frame clock: this runs before `tick` and after a terminal
+        // handoff, when the frame clock is stale.
+        if let Some((id, started)) = self.single_task.take() {
+            let now = Instant::now();
+            let elapsed = now.saturating_duration_since(started);
+            self.records.finished(id, outcome, elapsed, now);
+        }
         let tone = self.phase.tone();
         let message = match result {
             Err(error) => self.ctx.i18n.error(&error),
@@ -585,6 +890,7 @@ impl App {
             match event {
                 Event::Log(text) => self.log(text),
                 Event::Confirm { text, token, reply } => {
+                    self.dialog_opened = Some(Instant::now());
                     self.confirmation = Some(Confirmation {
                         text,
                         token,
@@ -594,6 +900,7 @@ impl App {
                         accept: false,
                     })
                 }
+                Event::Step(step) => self.record_step(&step),
                 Event::Finished(result) => {
                     let joined = self
                         .worker
@@ -620,10 +927,11 @@ impl App {
         }
         self.receive_choices();
     }
-    fn start(&mut self, terminal: &mut DefaultTerminal, jobs: Jobs) -> Result<()> {
+    fn start(&mut self, terminal: &mut DefaultTerminal, task: Task) -> Result<()> {
         if self.worker.is_some() {
             return Err(Error::new("error.busy", ""));
         }
+        let jobs = task.jobs();
         for (spec, p) in &jobs {
             self.available(spec)?;
             spec.parameters(p)?;
@@ -633,12 +941,13 @@ impl App {
         self.scroll = 0;
         self.logs_open = true;
         self.phase = Phase::Running;
-        self.task_ids = jobs.iter().map(|(s, _)| s.id.into()).collect();
+        self.record_start(&task);
         if jobs.iter().any(|(s, _)| s.external) {
             leave()?;
             println!("{}", self.ctx.i18n.text("ui.external"));
-            let result = perform(&self.ctx, &jobs);
-            if let Err(e) = &result {
+            let report = perform(&self.ctx, &task);
+            self.record_report(&report);
+            if let Err(e) = &report.result {
                 eprintln!("{}", self.ctx.i18n.error(e));
             }
             println!("{}", self.ctx.i18n.text("ui.return"));
@@ -647,18 +956,70 @@ impl App {
             io::stdin().read_line(&mut line)?;
             enter()?;
             terminal.clear()?;
-            self.finish(result);
+            self.finish(report.result);
         } else {
             let (tx, rx) = mpsc::channel();
             let mut ctx = self.ctx.clone();
             ctx.events = Some(tx.clone());
             self.receiver = Some(rx);
             self.worker = Some(thread::spawn(move || {
-                let result = perform(&ctx, &jobs);
-                let _ = tx.send(Event::Finished(result));
+                let report = perform(&ctx, &task);
+                let _ = tx.send(Event::Finished(report.result));
             }));
         }
         Ok(())
+    }
+    fn record_start(&mut self, task: &Task) {
+        self.task_ids = task
+            .jobs()
+            .iter()
+            .map(|(spec, _)| spec.id.to_owned())
+            .collect();
+        self.progress = match task {
+            Task::Batch(jobs) => Some(view::plan::Progress::new(jobs.len(), Instant::now())),
+            Task::Single { .. } => None,
+        };
+        self.single_task = match task {
+            Task::Single { spec, .. } => {
+                self.records.started(spec.id);
+                Some((spec.id, Instant::now()))
+            }
+            Task::Batch(_) => None,
+        };
+    }
+    fn record_step(&mut self, step: &Step) {
+        let now = Instant::now();
+        if let Some(line) = self.ctx.step_line(step) {
+            let started = matches!(step.state, StepState::Started);
+            self.log_styled(
+                line,
+                if started { Tone::Info } else { Tone::Success },
+                started,
+            );
+        }
+        match step.state {
+            StepState::Started => self.records.started(step.id),
+            StepState::Finished { outcome, elapsed } => {
+                self.records.finished(step.id, outcome, elapsed, now)
+            }
+        }
+        if let Some(progress) = &mut self.progress {
+            progress.apply(step, now);
+        }
+    }
+    fn record_report(&mut self, report: &actions::BatchReport) {
+        for (index, step) in report.steps.iter().enumerate() {
+            if let (Some(outcome), Some(elapsed)) = (step.outcome, step.elapsed) {
+                for state in [StepState::Started, StepState::Finished { outcome, elapsed }] {
+                    self.record_step(&Step {
+                        index,
+                        total: report.steps.len(),
+                        id: step.id,
+                        state,
+                    });
+                }
+            }
+        }
     }
     fn make_form(&self, spec: Spec, mode: FormMode) -> Result<Form> {
         let mut values = spec.defaults();
@@ -771,16 +1132,27 @@ impl App {
         }
     }
     fn activate(&mut self) -> Result<Effect> {
-        let spec = self.items()[self.selected()].clone();
-        self.available(&spec)?;
-        if self.optimization() {
-            if spec.fields.is_empty() {
-                self.toggle_selected()?;
-            } else {
-                self.open_form(spec, FormMode::Optimization)?;
-            }
-            return Ok(Effect::None);
+        let spec = match self.selected_row() {
+            Row::Action(spec) => spec,
+            // Enter on the Execute_Row runs the Checklist, as F5 does.
+            _ => return self.optimization_jobs(),
+        };
+        if !self.optimization() {
+            return self.activate_action(spec);
         }
+        self.available(&spec)?;
+        if spec.fields.is_empty() {
+            self.toggle_selected()?;
+        } else {
+            self.open_form(spec, FormMode::Optimization)?;
+        }
+        Ok(Effect::None)
+    }
+    /// Enter on an Action of a Reorderable_Category (Requirement 1.7), from the Action_List
+    /// or the Command_Palette (Requirement 8.8): a Form_Action opens its Run-mode form,
+    /// system.info the overview, system.public_ip the public lookup; any other Action runs.
+    fn activate_action(&mut self, spec: Spec) -> Result<Effect> {
+        self.available(&spec)?;
         match spec.kind {
             Kind::Info => {
                 self.overview = true;
@@ -788,7 +1160,11 @@ impl App {
                 Ok(Effect::Refresh)
             }
             Kind::PublicIp => Ok(Effect::PublicIp),
-            _ if spec.fields.is_empty() => Ok(Effect::Run(vec![(spec, Parameters::new())])),
+            _ if spec.fields.is_empty() => Ok(Effect::Run(Task::Single {
+                spec,
+                params: Parameters::new(),
+                reviewed: false,
+            })),
             _ => {
                 self.open_form(spec, FormMode::Run)?;
                 Ok(Effect::None)
@@ -799,11 +1175,14 @@ impl App {
         if !self.optimization() {
             return Ok(());
         }
-        let spec = self.items()[self.selected()].clone();
+        let Row::Action(spec) = self.selected_row() else {
+            return Ok(());
+        };
         self.available(&spec)?;
         if !self.marked.remove(spec.id) {
             self.marked.insert(spec.id.into());
         }
+        self.progress = None;
         Ok(())
     }
     fn cycle_language(&mut self) -> Result<()> {
@@ -850,17 +1229,8 @@ impl App {
             return Ok(Effect::None);
         }
         let mut jobs = Vec::new();
-        for spec in self
-            .items()
-            .into_iter()
-            .filter(|s| self.marked.contains(s.id))
-        {
+        for (spec, values) in self.checklist() {
             self.available(&spec)?;
-            let values = self
-                .parameters
-                .get(spec.id)
-                .cloned()
-                .unwrap_or_else(|| spec.defaults());
             match spec.parameters(&values) {
                 Ok(values) => jobs.push((spec, values)),
                 Err(error) => {
@@ -871,20 +1241,67 @@ impl App {
                 }
             }
         }
-        Ok(Effect::Run(jobs))
+        Ok(Effect::Run(Task::Batch(jobs)))
+    }
+    fn checklist(&self) -> Vec<(Spec, Parameters)> {
+        self.checklist_from_rows(&self.rows(OPTIMIZATION_GROUP))
+    }
+    fn checklist_from_rows(&self, rows: &[Row]) -> Vec<(Spec, Parameters)> {
+        rows.iter()
+            .filter_map(|row| match row {
+                Row::Action(spec) if self.marked.contains(spec.id) => {
+                    let params = self.saved_parameters(spec);
+                    Some((spec.clone(), params))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+    fn saved_parameters(&self, spec: &Spec) -> Parameters {
+        let mut params = spec.defaults();
+        if let Some(saved) = self.parameters.get(spec.id) {
+            params.extend(saved.clone());
+        }
+        params
+    }
+    fn recommend(&mut self) -> Result<()> {
+        if !self.optimization() {
+            return Ok(());
+        }
+        for id in RECOMMENDED {
+            self.available(&actions::find(id)?)?;
+        }
+        let marked = RECOMMENDED.iter().map(|id| (*id).to_owned()).collect();
+        if self.marked != marked
+            || self
+                .saved_parameters(&actions::find("system.clean")?)
+                .get("scope")
+                .map(String::as_str)
+                != Some("standard")
+        {
+            self.progress = None;
+        }
+        self.marked = marked;
+        self.parameters.insert(
+            "system.clean".into(),
+            Parameters::from([("scope".into(), "standard".into())]),
+        );
+        self.notify(
+            self.ctx.i18n.text("toast.recommended").to_owned(),
+            Tone::Success,
+        );
+        Ok(())
     }
     fn submit_form(&mut self) -> Result<Effect> {
         let form = self.form.as_ref().expect("active form");
-        let values = form
-            .spec
-            .fields
-            .iter()
-            .zip(&form.values)
-            .map(|(field, value)| (field.name.into(), value.text.clone()))
-            .collect();
-        let values = form.spec.parameters(&values)?;
+        let values = form.spec.parameters(&form.parameters())?;
         let spec = form.spec.clone();
         let mode = form.mode;
+        if self.marked.contains(spec.id) && self.saved_parameters(&spec) != values
+            || mode == FormMode::Optimization && !self.marked.contains(spec.id)
+        {
+            self.progress = None;
+        }
         self.parameters.insert(spec.id.into(), values.clone());
         self.form = None;
         if mode == FormMode::Optimization {
@@ -896,7 +1313,11 @@ impl App {
             self.notify(message, Tone::Success);
             Ok(Effect::None)
         } else {
-            Ok(Effect::Run(vec![(spec, values)]))
+            Ok(Effect::Run(Task::Single {
+                spec,
+                params: values,
+                reviewed: true,
+            }))
         }
     }
     fn cycle_field(&mut self, forward: bool) {
@@ -1066,7 +1487,10 @@ impl App {
             }
             // A listed value is never edited by hand: it must name an existing item.
             _ if form.listed(form.index) => (),
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && form.spec.fields[form.index].editable() =>
+            {
                 form.values[form.index].clear()
             }
             KeyCode::Home => form.values[form.index].cursor = 0,
@@ -1172,28 +1596,160 @@ impl App {
             let _ = confirm.reply.send(false);
         }
     }
-    fn reorder_category(&mut self, forward: bool) -> Result<()> {
-        let position = self.category_position();
-        let destination = if forward {
-            position + 1
-        } else {
-            position.saturating_sub(1)
+    /// Alt+↑/↓: swap Current_Category with its neighbour in `category_order`. The new order
+    /// takes effect only once config.toml holds it; a failed save is shown and the old
+    /// order stays. Optimization_Category is not in `category_order`, so it never moves and
+    /// nothing moves above it; at either end nothing is written.
+    fn reorder_category(&mut self, forward: bool) {
+        let Some(position) = self
+            .category_order
+            .iter()
+            .position(|index| *index == self.group)
+        else {
+            return;
         };
-        if destination >= self.category_order.len() || destination == position {
-            return Ok(());
-        }
+        let neighbour = if forward {
+            Some(position + 1)
+        } else {
+            position.checked_sub(1)
+        };
+        let Some(neighbour) = neighbour.filter(|index| *index < self.category_order.len()) else {
+            return;
+        };
         let mut order = self.category_order.clone();
-        order.swap(position, destination);
+        order.swap(position, neighbour);
+        match self.save_category_order(&order) {
+            Ok(()) => {
+                self.category_order = order;
+                let message = self.ctx.i18n.text("toast.order_saved").to_owned();
+                self.notify(message, Tone::Success);
+            }
+            Err(error) => self.fail_ui(error),
+        }
+    }
+    /// Store `order`, Reorderable_Category IDs only, keeping every other preference.
+    fn save_category_order(&self, order: &[usize]) -> Result<()> {
         let mut preferences = crate::config::Preferences::read(&self.ctx.paths.preferences, false)?;
         preferences.category_order = order
             .iter()
             .map(|index| GROUPS[*index].to_owned())
             .collect();
-        preferences.write(&self.ctx.paths.preferences)?;
-        self.category_order = order;
-        let message = self.ctx.i18n.text("toast.order_saved").to_owned();
-        self.notify(message, Tone::Success);
-        Ok(())
+        preferences.write(&self.ctx.paths.preferences)
+    }
+    /// The Command_Palette's rows for its query, grouped in Category_List order; empty
+    /// while it is closed.
+    fn palette_results(&self) -> palette::Results {
+        let query = self
+            .command_palette
+            .as_ref()
+            .map_or("", |palette| palette.query.text.as_str());
+        palette::Results::new(
+            query,
+            self.records.recent.iter().copied(),
+            &actions::specs(),
+            &self.ctx.i18n,
+            &self.category_order,
+        )
+    }
+    /// The Action of the highlighted result, if the Command_Palette lists any.
+    fn palette_highlighted(&self) -> Option<Spec> {
+        let cursor = self.command_palette.as_ref()?.cursor;
+        self.palette_results()
+            .hit(cursor)
+            .map(|hit| hit.spec.clone())
+    }
+    /// Enter, or a click on "执行 ↵": while a task runs the Command_Palette stays open and
+    /// shows `error.busy` (Requirement 8.9), and an Action that cannot run shows why without
+    /// running (8.13). Otherwise it closes and the Action is activated exactly as Enter on
+    /// the Action_List activates it (8.8), while Current_Category and its selection stay as
+    /// they were: only Tab moves them.
+    fn palette_enter(&mut self) -> Result<Effect> {
+        let Some(spec) = self.palette_highlighted() else {
+            return Ok(Effect::None);
+        };
+        if self.worker.is_some() {
+            self.fail_ui(Error::new("error.busy", ""));
+            return Ok(Effect::None);
+        }
+        if let Err(error) = self.available(&spec) {
+            self.fail_ui(error);
+            return Ok(Effect::None);
+        }
+        self.command_palette = None;
+        self.activate_action(spec)
+    }
+    /// Tab (Requirement 8.10): close, then select the highlighted Action in its own category.
+    fn palette_jump(&mut self) {
+        let Some(spec) = self.palette_highlighted() else {
+            return;
+        };
+        self.command_palette = None;
+        self.group = GROUPS
+            .iter()
+            .position(|group| *group == spec.group)
+            .expect("an Action belongs to a category");
+        self.positions[self.group] = self
+            .rows(self.group)
+            .iter()
+            .filter(|row| row.selectable())
+            .position(|row| matches!(row, Row::Action(listed) if listed.id == spec.id))
+            .expect("an Action is listed in its category");
+    }
+    /// Command_Palette keys (design component 2): printable characters, digits and letter
+    /// shortcuts included, edit the query with ←→, Home/End, Backspace, Delete and Ctrl+U;
+    /// ↑↓ and PgUp/PgDn move the highlight, which a new query puts back on its first result.
+    fn palette_key(&mut self, key: KeyEvent) -> Result<Effect> {
+        match key.code {
+            KeyCode::Esc => {
+                self.command_palette = None;
+                return Ok(Effect::None);
+            }
+            KeyCode::Enter => return self.palette_enter(),
+            KeyCode::Tab => {
+                self.palette_jump();
+                return Ok(Effect::None);
+            }
+            _ => (),
+        }
+        let results = self.palette_results();
+        let count = results.count();
+        let page = view::CommandPaletteGeometry::new(self.viewport, self, &results)
+            .rows
+            .height
+            .saturating_sub(1)
+            .max(1) as usize;
+        let palette = self.command_palette.as_mut().expect("open Command_Palette");
+        let last = count.saturating_sub(1);
+        match key.code {
+            KeyCode::Down if count > 0 => palette.cursor = (palette.cursor + 1) % count,
+            KeyCode::Up if count > 0 => palette.cursor = (palette.cursor + count - 1) % count,
+            KeyCode::PageDown => palette.cursor = (palette.cursor + page).min(last),
+            KeyCode::PageUp => palette.cursor = palette.cursor.saturating_sub(page),
+            KeyCode::Left => palette.query.left(),
+            KeyCode::Right => palette.query.right(),
+            KeyCode::Home => palette.query.cursor = 0,
+            KeyCode::End => palette.query.cursor = palette.query.text.len(),
+            code => {
+                let before = palette.query.text.clone();
+                match code {
+                    KeyCode::Backspace => palette.query.backspace(),
+                    KeyCode::Delete => palette.query.delete(),
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        palette.query.clear()
+                    }
+                    KeyCode::Char(c)
+                        if !c.is_control() && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        palette.query.insert(c)
+                    }
+                    _ => (),
+                }
+                if palette.query.text != before {
+                    palette.cursor = 0;
+                }
+            }
+        }
+        Ok(Effect::None)
     }
     fn key(&mut self, key: KeyEvent) -> Result<Effect> {
         // Keyboard navigation takes over from the pointer.
@@ -1235,6 +1791,9 @@ impl App {
             }
             return Ok(Effect::None);
         }
+        if self.command_palette.is_some() {
+            return self.palette_key(key);
+        }
         if self.overview {
             let geometry = view::OverviewGeometry::new(self.viewport, self);
             let (page, max) = (geometry.page(), geometry.max_scroll());
@@ -1265,94 +1824,73 @@ impl App {
             }
             return Ok(Effect::None);
         }
-        if self.worker.is_some() && key.code == KeyCode::Esc {
-            self.request_cancel(false);
+        if self.style_panel.is_some() {
+            return self.style_key(key);
+        }
+        self.main_key(key)
+    }
+    /// Main_View keys. There is no focus: ↑/↓ always move the Action_List, while ←/→, Tab,
+    /// the digits and O pick the category.
+    fn main_key(&mut self, key: KeyEvent) -> Result<Effect> {
+        let idle = self.worker.is_none();
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Up | KeyCode::Down)
+        {
+            // Reordering waits for the task; the plain arrow never acts in its place.
+            if idle {
+                self.reorder_category(key.code == KeyCode::Down);
+            }
             return Ok(Effect::None);
         }
-        if self.worker.is_none()
-            && self.focus == Focus::Categories
-            && key.modifiers.contains(KeyModifiers::ALT)
-        {
-            match key.code {
-                KeyCode::Up => {
-                    self.reorder_category(false)?;
-                    return Ok(Effect::None);
-                }
-                KeyCode::Down => {
-                    self.reorder_category(true)?;
-                    return Ok(Effect::None);
-                }
-                _ => (),
-            }
-        }
         match key.code {
+            // Esc never navigates: it only cancels a running task.
+            KeyCode::Esc => {
+                if !idle {
+                    self.request_cancel(false);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => self.move_row(false),
+            KeyCode::Down | KeyCode::Char('j') => self.move_row(true),
+            KeyCode::Home => self.positions[self.group] = 0,
+            KeyCode::End => self.positions[self.group] = self.selectable_count(self.group) - 1,
+            KeyCode::Left | KeyCode::BackTab => self.cycle_category(false),
+            KeyCode::Right | KeyCode::Tab => self.cycle_category(true),
+            // n is the n-th Reorderable_Category, as numbered in Category_List.
+            KeyCode::Char(digit @ '1'..='9') => {
+                let n = digit as usize - '0' as usize;
+                if let Some(group) = self.category_order.get(n - 1) {
+                    self.group = *group;
+                }
+            }
+            KeyCode::Char('o' | 'O' | '0') => self.group = OPTIMIZATION_GROUP,
+            // Opens with an empty query and its first result highlighted (Requirement 8.1).
+            KeyCode::Char('/') => self.command_palette = Some(palette::CommandPalette::default()),
+            KeyCode::Char('t' | 'T') => self.open_style(),
             KeyCode::Char('r' | 'R') => return Ok(Effect::Refresh),
             KeyCode::Char('n' | 'N') => return Ok(Effect::PublicIp),
             KeyCode::Char('g' | 'G') => self.logs_open = !self.logs_open,
             KeyCode::F(2) => self.log_modal = !self.log_modal,
             KeyCode::Char('l' | 'L') => self.cycle_language()?,
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.focus = if self.focus == Focus::Actions {
-                    Focus::Categories
-                } else {
-                    Focus::Actions
-                }
-            }
-            KeyCode::Left | KeyCode::Esc => self.focus = Focus::Categories,
-            KeyCode::Right => self.focus = Focus::Actions,
-            KeyCode::Char('o' | 'O') => {
-                self.group = OPTIMIZATION_GROUP;
-                self.focus = Focus::Actions;
-            }
-            KeyCode::Up | KeyCode::Char('k') => self.move_selection(false),
-            KeyCode::Down | KeyCode::Char('j') => self.move_selection(true),
-            KeyCode::Home => {
-                if self.focus == Focus::Actions {
-                    self.positions[self.group] = 0;
-                } else {
-                    self.group = self.category_order[0];
-                }
-            }
-            KeyCode::End => {
-                if self.focus == Focus::Actions {
-                    self.positions[self.group] = self.items().len() - 1;
-                } else {
-                    self.group = *self
-                        .category_order
-                        .last()
-                        .expect("category order is not empty");
-                }
-            }
-            KeyCode::Char('q' | 'Q') if self.worker.is_none() => return Ok(Effect::Quit),
-            KeyCode::Enter if self.focus == Focus::Categories => self.focus = Focus::Actions,
-            KeyCode::Enter if self.worker.is_none() => return self.activate(),
-            KeyCode::Char(' ') if self.worker.is_none() && self.focus == Focus::Actions => {
-                self.toggle_selected()?
-            }
-            KeyCode::F(5) if self.worker.is_none() => return self.optimization_jobs(),
+            KeyCode::Char('q' | 'Q') if idle => return Ok(Effect::Quit),
+            KeyCode::Enter if idle => return self.activate(),
+            KeyCode::Char(' ') if idle => self.toggle_selected()?,
+            KeyCode::Char('x' | 'X') | KeyCode::F(5) if idle => return self.optimization_jobs(),
+            KeyCode::Char('a' | 'A') if idle => self.recommend()?,
             KeyCode::Char('?') | KeyCode::F(1) => self.help = true,
             code => self.log_key(code),
         }
         Ok(Effect::None)
     }
-    fn move_selection(&mut self, forward: bool) {
-        if self.focus == Focus::Categories {
-            let position = self.category_position();
-            let next = if forward {
-                (position + 1) % self.category_order.len()
-            } else {
-                (position + self.category_order.len() - 1) % self.category_order.len()
-            };
-            self.group = self.category_order[next];
-        } else {
-            let n = self.items().len();
-            let index = &mut self.positions[self.group];
-            *index = if forward {
-                (*index + 1) % n
-            } else {
-                (*index + n - 1) % n
-            };
-        }
+    /// The previous or next Selectable_Row of Current_Category, wrapping at both ends.
+    fn move_row(&mut self, forward: bool) {
+        let count = self.selectable_count(self.group);
+        self.positions[self.group] = step(Some(self.selected()), count, forward);
+    }
+    /// The previous or next category in `display_order()`, wrapping at both ends. Each
+    /// category keeps its own entry in `positions`.
+    fn cycle_category(&mut self, forward: bool) {
+        let order = self.display_order();
+        self.group = order[step(Some(self.category_position()), order.len(), forward)];
     }
     /// Pages move by the visible height; the full-screen view also takes line and end keys.
     fn log_key(&mut self, code: KeyCode) {
@@ -1423,11 +1961,12 @@ impl App {
         if self.loading.is_some() {
             return Ok(Effect::None);
         }
-        if let Some(form) = &mut self.form {
+        if let Some(form) = &self.form {
             if form.picker.is_some() {
                 return self.picker_mouse(event, area);
             }
-            let geometry = view::FormGeometry::new(area, form, &self.ctx.i18n);
+            let geometry = view::FormGeometry::new(area, form, self);
+            let form = self.form.as_mut().expect("active form");
             if event.kind == MouseEventKind::Down(MouseButton::Left) {
                 if geometry.buttons[0].contains(point) {
                     return self.submit_form();
@@ -1436,11 +1975,15 @@ impl App {
                     self.form = None;
                     return Ok(Effect::None);
                 }
-                if let Some(index) = geometry.field_at(point, form.values.len()) {
+                if let Some((index, choice)) = geometry.chip_at(point) {
+                    form.index = index;
+                    form.values[index].replace(form.spec.fields[index].choices[choice].into());
+                } else if let Some(index) = geometry.field_at(point) {
                     form.index = index;
                     if form.listed(index) {
                         form.open_picker(String::new(), false);
-                    } else if !form.spec.fields[index].choices.is_empty() {
+                    } else if !form.chip_field(index) && !form.spec.fields[index].choices.is_empty()
+                    {
                         self.cycle_field(true);
                     }
                 }
@@ -1452,13 +1995,17 @@ impl App {
             return Ok(Effect::None);
         }
         if self.help {
-            if matches!(event.kind, MouseEventKind::Down(_)) {
-                self.help = false;
-            }
             return Ok(Effect::None);
         }
+        if self.command_palette.is_some() {
+            return self.palette_mouse(event, area);
+        }
         if self.overview {
-            let max = view::OverviewGeometry::new(area, self).max_scroll();
+            let geometry = view::OverviewGeometry::new(area, self);
+            if !geometry.body.contains(point) {
+                return Ok(Effect::None);
+            }
+            let max = geometry.max_scroll();
             let scroll = self.overview_scroll.min(max);
             self.overview_scroll = match event.kind {
                 MouseEventKind::ScrollUp => scroll.saturating_sub(3),
@@ -1468,6 +2015,9 @@ impl App {
             return Ok(Effect::None);
         }
         if self.log_modal {
+            if !view::log_body(self, area).contains(point) {
+                return Ok(Effect::None);
+            }
             match event.kind {
                 MouseEventKind::ScrollUp => self.scroll_logs(3),
                 MouseEventKind::ScrollDown => self.scroll_logs(-3),
@@ -1475,50 +2025,61 @@ impl App {
             }
             return Ok(Effect::None);
         }
+        if let Some(panel) = &self.style_panel {
+            let geometry = view::StyleGeometry::new(area, self);
+            let cursor = match event.kind {
+                MouseEventKind::Down(MouseButton::Left) => geometry.row_at(point),
+                MouseEventKind::ScrollUp if geometry.panel.contains(point) => {
+                    Some(panel.cursor.saturating_sub(1))
+                }
+                MouseEventKind::ScrollDown if geometry.panel.contains(point) => {
+                    Some((panel.cursor + 1).min(panel.entries.len() - 1))
+                }
+                _ => None,
+            };
+            if let Some(cursor) = cursor {
+                self.preview_style(cursor);
+            }
+            return Ok(Effect::None);
+        }
+        // The same geometry `view::draw` lays out for this area, including each list's scroll
+        // offset, so a click lands on the row drawn under it.
         let layout = view::Regions::new(area, self);
-        let (categories, actions) = (layout.category_rows, layout.action_rows);
-        let scroll = matches!(
-            event.kind,
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-        );
         let down = event.kind == MouseEventKind::ScrollDown;
         match event.kind {
-            MouseEventKind::Down(MouseButton::Left) if categories.contains(point) => {
-                let offset = view::list_offset(
-                    self.category_position(),
-                    self.category_order.len(),
-                    categories.height as usize,
-                );
-                let index = offset + usize::from(event.row - categories.y);
-                if index < self.category_order.len() {
-                    self.group = self.category_order[index];
-                    self.focus = Focus::Categories;
-                }
-            }
-            MouseEventKind::Down(MouseButton::Left) if actions.contains(point) => {
-                let count = self.items().len();
-                let offset = view::list_offset(self.selected(), count, actions.height as usize);
-                let index = offset + usize::from(event.row - actions.y);
-                if index < count {
-                    self.positions[self.group] = index;
-                    self.focus = Focus::Actions;
-                    // The checkbox sits after the two-cell selection marker.
-                    if self.optimization() && self.worker.is_none() && event.column < actions.x + 5
-                    {
-                        self.toggle_selected()?;
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(index) = layout.category_at(point) {
+                    // A click on the rule changes nothing.
+                    if let Some(group) = self.category_rows()[index] {
+                        self.group = group;
+                    }
+                } else if let Some(index) = layout.action_at(point) {
+                    let rows = self.rows(self.group);
+                    // A click on a Section title or the Rule changes nothing.
+                    if let Some(position) = row_position(&rows, index) {
+                        self.positions[self.group] = position;
+                        if matches!(rows[index], Row::Execute) && self.worker.is_none() {
+                            return self.optimization_jobs();
+                        }
+                        // The checkbox sits after the two-cell selection marker.
+                        if matches!(rows[index], Row::Action(_))
+                            && self.optimization()
+                            && self.worker.is_none()
+                            && layout.checkboxes.contains(point)
+                        {
+                            self.toggle_selected()?;
+                        }
                     }
                 }
             }
-            _ if scroll && layout.logs.contains(point) => {
-                self.scroll_logs(if down { -3 } else { 3 })
-            }
-            _ if scroll && layout.categories.contains(point) => {
-                self.focus = Focus::Categories;
-                self.move_selection(down);
-            }
-            _ if scroll && layout.actions.contains(point) => {
-                self.focus = Focus::Actions;
-                self.move_selection(down);
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if layout.logs.contains(point) {
+                    self.scroll_logs(if down { -3 } else { 3 })
+                } else if layout.categories.contains(point) {
+                    self.cycle_category(down)
+                } else if layout.actions.contains(point) {
+                    self.move_row(down)
+                }
             }
             _ => (),
         }
@@ -1528,7 +2089,7 @@ impl App {
     /// ignored, as in other dialogs.
     fn picker_mouse(&mut self, event: MouseEvent, area: Rect) -> Result<Effect> {
         let point: Position = (event.column, event.row).into();
-        let (clicked, count) = {
+        let (clicked, count, over) = {
             let form = self.form.as_ref().expect("active form");
             let picker = form.picker.as_ref().expect("open picker");
             let choices = form.choices(form.index);
@@ -1538,7 +2099,7 @@ impl App {
             let clicked = geometry
                 .row_at(point, matches.len())
                 .map(|row| matches[row].value.clone());
-            (clicked, matches.len())
+            (clicked, matches.len(), geometry.popup.contains(point))
         };
         if event.kind == MouseEventKind::Down(MouseButton::Left) {
             return clicked.map_or(Ok(Effect::None), |value| self.pick(value));
@@ -1549,10 +2110,39 @@ impl App {
             .and_then(|form| form.picker.as_mut())
             .expect("open picker");
         match event.kind {
-            MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollDown if over => {
                 picker.cursor = (picker.cursor + 1).min(count.saturating_sub(1))
             }
-            MouseEventKind::ScrollUp => picker.cursor = picker.cursor.saturating_sub(1),
+            MouseEventKind::ScrollUp if over => picker.cursor = picker.cursor.saturating_sub(1),
+            _ => (),
+        }
+        Ok(Effect::None)
+    }
+    /// A click highlights the result row under it, and a click on the highlighted row's
+    /// "执行 ↵" acts as Enter (Requirement 17.6); the wheel over the palette moves the
+    /// highlight (17.9). Category names and everything outside the rows ignore clicks
+    /// (17.11). Hits come from the geometry the palette is drawn with (17.10).
+    fn palette_mouse(&mut self, event: MouseEvent, area: Rect) -> Result<Effect> {
+        let point: Position = (event.column, event.row).into();
+        let results = self.palette_results();
+        let geometry = view::CommandPaletteGeometry::new(area, self, &results);
+        if event.kind == MouseEventKind::Down(MouseButton::Left) && geometry.exec_at(point) {
+            return self.palette_enter();
+        }
+        let clicked = geometry
+            .row_at(point)
+            .and_then(|index| results.position(index));
+        let over = geometry.popup.contains(point);
+        let last = results.count().saturating_sub(1);
+        let palette = self.command_palette.as_mut().expect("open Command_Palette");
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(position) = clicked {
+                    palette.cursor = position;
+                }
+            }
+            MouseEventKind::ScrollDown if over => palette.cursor = (palette.cursor + 1).min(last),
+            MouseEventKind::ScrollUp if over => palette.cursor = palette.cursor.saturating_sub(1),
             _ => (),
         }
         Ok(Effect::None)
@@ -1576,11 +2166,29 @@ impl App {
         }
     }
 }
-fn perform(ctx: &Context, jobs: &[(Spec, Parameters)]) -> Result<()> {
-    if jobs.len() == 1 {
-        actions::execute(ctx, &jobs[0].0, &jobs[0].1)
-    } else {
-        actions::batch(ctx, jobs)
+/// `error.cancelled` is a cancellation, never a failure (Requirement 11.4).
+fn outcome(result: &Result<()>) -> Outcome {
+    match result {
+        Ok(()) => Outcome::Done,
+        Err(e) if e.key == "error.cancelled" => Outcome::Cancelled,
+        Err(_) => Outcome::Failed,
+    }
+}
+fn perform(ctx: &Context, task: &Task) -> actions::BatchReport {
+    match task {
+        Task::Single {
+            spec,
+            params,
+            reviewed,
+        } => actions::BatchReport {
+            steps: Vec::new(),
+            result: if *reviewed {
+                actions::execute_reviewed(ctx, spec, params)
+            } else {
+                actions::execute(ctx, spec, params)
+            },
+        },
+        Task::Batch(jobs) => actions::batch_report(ctx, jobs),
     }
 }
 fn enter() -> io::Result<()> {
@@ -1608,8 +2216,9 @@ impl Drop for TerminalGuard {
     }
 }
 
-pub fn run(ctx: Context) -> Result<()> {
-    let category_order = load_category_order(&ctx)?;
+pub fn run(ctx: Context, theme_flag: Option<&str>, preferences: &Preferences) -> Result<()> {
+    let category_order = category_order_from_ids(&preferences.category_order)?;
+    let background = detect::detect(preferences.detect_background.unwrap_or(true));
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = leave();
@@ -1617,11 +2226,20 @@ pub fn run(ctx: Context) -> Result<()> {
     }));
     enter()?;
     let _guard = TerminalGuard;
+    while event::poll(Duration::ZERO)? {
+        let _ = event::read()?;
+    }
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
     let monitor = Monitor::start(&ctx);
     let mut app = App::new(ctx);
+    app.configure_theme(
+        theme_flag,
+        std::env::var("CQS_THEME").ok().as_deref(),
+        background,
+        preferences,
+    );
     app.set_category_order(category_order);
     let result = (|| {
         loop {
@@ -1648,7 +2266,7 @@ pub fn run(ctx: Context) -> Result<()> {
             };
             let outcome = match effect {
                 Ok(Effect::Quit) => break,
-                Ok(Effect::Run(jobs)) => app.start(&mut terminal, jobs),
+                Ok(Effect::Run(task)) => app.start(&mut terminal, task),
                 Ok(Effect::Refresh) => {
                     // Marked before signalling, so the next sample always clears it.
                     app.refreshing = Some(Instant::now());
@@ -1678,6 +2296,10 @@ pub fn run(ctx: Context) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn load_category_order(ctx: &Context) -> Result<Vec<usize>> {
+        let preferences = Preferences::read(&ctx.paths.preferences, false)?;
+        category_order_from_ids(&preferences.category_order)
+    }
     fn app() -> App {
         App::new(Context::new(
             crate::config::Paths::from_env().unwrap(),
@@ -1696,6 +2318,7 @@ mod tests {
             language: None,
             locale_dir: Some(temp.path().join("locales")),
             category_order: vec!["kernel".into(), "system".into()],
+            ..Default::default()
         }
         .write(&preferences_path)
         .unwrap();
@@ -1718,6 +2341,14 @@ mod tests {
         assert_eq!(restarted.locale(), "zh-CN");
     }
 
+    /// The 11 Reorderable_Category IDs in their default order.
+    fn reorderable_ids() -> Vec<String> {
+        DEFAULT_CATEGORY_ORDER
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect()
+    }
+
     #[test]
     fn category_order_defaults_for_legacy_preferences_and_rejects_invalid_ids() {
         let temp = tempfile::tempdir().unwrap();
@@ -1725,20 +2356,114 @@ mod tests {
         std::fs::write(&ctx.paths.preferences, "language = \"en-US\"\n").unwrap();
         assert_eq!(load_category_order(&ctx).unwrap(), default_category_order());
         assert_eq!(category_order_from_ids(&["kernel".into()]).unwrap()[0], 2);
+        let mut defaults = default_category_order();
+        defaults.sort_unstable();
+        assert_eq!(
+            defaults,
+            (0..OPTIMIZATION_GROUP).collect::<Vec<_>>(),
+            "every Reorderable_Category once, without optimization"
+        );
 
-        let mut unknown = DEFAULT_CATEGORY_ORDER
-            .iter()
-            .map(|id| (*id).to_owned())
-            .collect::<Vec<_>>();
+        let mut unknown = reorderable_ids();
         unknown[0] = "unknown".into();
-        assert!(category_order_from_ids(&unknown).is_err());
-
-        let mut duplicate = DEFAULT_CATEGORY_ORDER
-            .iter()
-            .map(|id| (*id).to_owned())
-            .collect::<Vec<_>>();
+        let mut duplicate = reorderable_ids();
         duplicate[1] = duplicate[0].clone();
-        assert!(category_order_from_ids(&duplicate).is_err());
+        // Repeated `optimization` entries are dropped; a repeated Reorderable_Category is not.
+        let duplicate_after_optimization = ["optimization", "kernel", "optimization", "kernel"]
+            .map(String::from)
+            .to_vec();
+        for ids in [unknown, duplicate, duplicate_after_optimization] {
+            let error = category_order_from_ids(&ids).unwrap_err();
+            assert_eq!(error.key, "error.config", "{ids:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_category_order_listing_optimization_keeps_it_pinned() {
+        let kernel = GROUPS.iter().position(|group| *group == "kernel").unwrap();
+        let system = GROUPS.iter().position(|group| *group == "system").unwrap();
+        // Older versions saved every category, optimization included, and let it move.
+        let mut saved_default = reorderable_ids();
+        saved_default.push("optimization".into());
+        for (ids, first) in [
+            (saved_default, default_category_order()[..2].to_vec()),
+            (
+                ["kernel", "optimization", "system"]
+                    .map(String::from)
+                    .to_vec(),
+                vec![kernel, system],
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let ctx = crate::tests::context(temp.path());
+            let quoted = ids.iter().map(|id| format!("{id:?}")).collect::<Vec<_>>();
+            std::fs::write(
+                &ctx.paths.preferences,
+                format!("category_order = [{}]\n", quoted.join(", ")),
+            )
+            .unwrap();
+            let mut app = App::new(ctx);
+            app.set_category_order(load_category_order(&app.ctx).unwrap());
+
+            assert_eq!(app.category_order[..2], first[..], "{ids:?}");
+            assert_eq!(app.category_order.len(), DEFAULT_CATEGORY_ORDER.len());
+            assert!(!app.category_order.contains(&OPTIMIZATION_GROUP));
+            let display = app.display_order();
+            assert_eq!(display[0], OPTIMIZATION_GROUP, "{ids:?}");
+            assert_eq!(display[1..], app.category_order[..]);
+        }
+    }
+
+    /// Writes `ids` with `Preferences::write`, reads the file back and loads the order.
+    fn reload_category_order(ids: &[String]) -> Result<Vec<usize>> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("config.toml");
+        crate::config::Preferences {
+            category_order: ids.to_vec(),
+            ..Default::default()
+        }
+        .write(&path)?;
+        category_order_from_ids(&crate::config::Preferences::read(&path, true)?.category_order)
+    }
+
+    /// A permutation of the Reorderable_Category IDs, and the same list with one or more
+    /// `optimization` entries inserted at arbitrary positions.
+    fn permutation_with_optimization()
+    -> impl proptest::strategy::Strategy<Value = (Vec<String>, Vec<String>)> {
+        use proptest::prelude::*;
+        (
+            Just(reorderable_ids()).prop_shuffle(),
+            prop::collection::vec(any::<prop::sample::Index>(), 1..=4),
+        )
+            .prop_map(|(ids, slots)| {
+                let mut listed = ids.clone();
+                for slot in slots {
+                    let at = slot.index(listed.len() + 1);
+                    listed.insert(at, GROUPS[OPTIMIZATION_GROUP].to_owned());
+                }
+                (ids, listed)
+            })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(100))]
+
+        // Feature: tui-redesign, Property 1: category_order 往返
+        /// **Validates: Requirements 3.6, 3.9**
+        #[test]
+        fn category_order_round_trips_through_config_toml(
+            (ids, listed) in permutation_with_optimization()
+        ) {
+            let reloaded = |list: &[String]| {
+                reload_category_order(list)
+                    .unwrap()
+                    .into_iter()
+                    .map(|index| GROUPS[index])
+                    .collect::<Vec<_>>()
+            };
+            proptest::prop_assert_eq!(reloaded(&ids), ids.clone());
+            proptest::prop_assert_eq!(reloaded(&listed), ids);
+        }
     }
 
     #[test]
@@ -1752,6 +2477,7 @@ mod tests {
             language: Some("en-US".into()),
             locale_dir: Some(locale_dir.clone()),
             category_order: Vec::new(),
+            ..Default::default()
         }
         .write(&preferences_path)
         .unwrap();
@@ -1759,9 +2485,13 @@ mod tests {
         let mut app = App::new(ctx);
         let tools = GROUPS.iter().position(|group| *group == "tools").unwrap();
         app.group = tools;
-        app.focus = Focus::Categories;
         app.positions[tools] = 2;
-        assert_eq!(app.category_position(), 6);
+        assert_eq!(app.category_order[6], tools);
+        assert_eq!(
+            app.category_position(),
+            7,
+            "the list starts with the pinned Optimization_Category"
+        );
         assert!(matches!(
             app.key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT))
                 .unwrap(),
@@ -1778,6 +2508,14 @@ mod tests {
             saved.category_order[5], "tools",
             "the moved category is stored by stable ID"
         );
+        assert_eq!(
+            saved.category_order,
+            app.category_order
+                .iter()
+                .map(|index| GROUPS[*index])
+                .collect::<Vec<_>>(),
+            "only the 11 Reorderable_Category IDs are saved"
+        );
 
         let mut restarted = App::new(crate::tests::context(temp.path()));
         restarted.set_category_order(load_category_order(&restarted.ctx).unwrap());
@@ -1785,8 +2523,212 @@ mod tests {
         assert_eq!(restarted.group, app.category_order[0]);
     }
 
+    fn alt(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::ALT)
+    }
+
+    #[test]
+    fn reordering_at_either_end_in_optimization_or_while_busy_writes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        let preferences_path = ctx.paths.preferences.clone();
+        let mut app = App::new(ctx);
+        let order = app.category_order.clone();
+        let (first, last) = (order[0], order[order.len() - 1]);
+        let tools = GROUPS.iter().position(|group| *group == "tools").unwrap();
+        for (group, code, busy) in [
+            (first, KeyCode::Up, false),
+            (last, KeyCode::Down, false),
+            (OPTIMIZATION_GROUP, KeyCode::Up, false),
+            (OPTIMIZATION_GROUP, KeyCode::Down, false),
+            (tools, KeyCode::Up, true),
+        ] {
+            app.group = group;
+            app.positions[group] = 1;
+            if busy {
+                app.worker = Some(thread::spawn(|| {}));
+            }
+            assert!(matches!(app.key(alt(code)).unwrap(), Effect::None));
+            let label = format!("{} {code:?} busy={busy}", GROUPS[group]);
+            assert_eq!(app.category_order, order, "{label}");
+            assert_eq!(app.group, group, "{label}");
+            assert_eq!(
+                app.selected(),
+                1,
+                "the plain arrow does not act instead: {label}"
+            );
+            assert!(app.toast.is_none() && app.notice.is_none(), "{label}");
+            if let Some(worker) = app.worker.take() {
+                worker.join().unwrap();
+            }
+        }
+        assert!(!preferences_path.exists(), "config.toml is never written");
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_previous_order_and_shows_the_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        // config.toml cannot be written below a regular file.
+        let blocker = temp.path().join("blocker");
+        std::fs::write(&blocker, "").unwrap();
+        ctx.paths.preferences = blocker.join("config.toml");
+        let mut app = App::new(ctx);
+        let order = app.category_order.clone();
+        app.group = order[1];
+
+        assert!(matches!(app.key(alt(KeyCode::Up)).unwrap(), Effect::None));
+
+        assert_eq!(app.category_order, order);
+        assert_eq!(app.group, order[1]);
+        assert!(app.notice.is_some(), "the failure is shown");
+        assert!(app.toast.is_none(), "no saved notice");
+        assert_eq!(std::fs::read(&blocker).unwrap(), b"");
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+    /// Comparable identity of a row: its action ID, or a marker for the other kinds.
+    fn row_id(row: &Row) -> &'static str {
+        match row {
+            Row::Action(spec) => spec.id,
+            Row::Execute => "<execute>",
+            Row::Section(_) => "<section>",
+            Row::Rule => "<rule>",
+        }
+    }
+    fn group(id: &str) -> usize {
+        GROUPS.iter().position(|group| *group == id).unwrap()
+    }
+
+    #[test]
+    fn digits_and_o_jump_to_categories_as_numbered_in_the_list() {
+        let mut app = app();
+        for n in 1..=9 {
+            let digit = char::from_digit(n, 10).unwrap();
+            app.key(key(KeyCode::Char(digit))).unwrap();
+            assert_eq!(app.group, app.category_order[n as usize - 1], "{digit}");
+            assert_eq!(app.group, app.display_order()[n as usize], "{digit}");
+        }
+        for code in [KeyCode::Char('o'), KeyCode::Char('O'), KeyCode::Char('0')] {
+            app.key(key(KeyCode::Char('1'))).unwrap();
+            app.key(key(code)).unwrap();
+            assert!(app.optimization(), "{code:?}");
+        }
+        // Digits follow the loaded order, and every category keeps its row.
+        let ids = ["tools", "ai", "system"].map(String::from);
+        app.set_category_order(category_order_from_ids(&ids).unwrap());
+        app.positions[group("ai")] = 2;
+        app.key(key(KeyCode::Char('2'))).unwrap();
+        assert_eq!(app.group, group("ai"));
+        assert_eq!(app.selected(), 2);
+        app.key(key(KeyCode::Char('3'))).unwrap();
+        assert_eq!(app.group, group("system"));
+    }
+
+    #[test]
+    fn esc_only_cancels_a_running_task() {
+        let mut app = app();
+        app.group = group("network");
+        app.positions[app.group] = 2;
+        assert!(matches!(app.key(key(KeyCode::Esc)).unwrap(), Effect::None));
+        assert_eq!((app.group, app.selected()), (group("network"), 2));
+        assert_eq!(app.phase, Phase::Idle);
+        assert!(!app.ctx.cancel.load(Ordering::SeqCst));
+        assert!(app.toast.is_none() && app.notice.is_none() && !app.help);
+
+        app.worker = Some(thread::spawn(|| {}));
+        app.phase = Phase::Running;
+        assert!(matches!(app.key(key(KeyCode::Esc)).unwrap(), Effect::None));
+        assert_eq!(app.phase, Phase::Cancelling);
+        assert!(app.ctx.cancel.load(Ordering::SeqCst));
+        assert!(!app.exit_requested, "Esc cancels without quitting");
+        assert_eq!((app.group, app.selected()), (group("network"), 2));
+        app.worker.take().unwrap().join().unwrap();
+    }
+
+    /// One Action_List movement key of Property 13.
+    #[derive(Debug, Clone, Copy)]
+    enum Move {
+        Up,
+        Down,
+        Home,
+        End,
+    }
+    impl Move {
+        fn code(self) -> KeyCode {
+            match self {
+                Self::Up => KeyCode::Up,
+                Self::Down => KeyCode::Down,
+                Self::Home => KeyCode::Home,
+                Self::End => KeyCode::End,
+            }
+        }
+    }
+    fn moves() -> impl proptest::strategy::Strategy<Value = Vec<Move>> {
+        use proptest::prelude::*;
+        prop::collection::vec(
+            prop_oneof![
+                4 => Just(Move::Up),
+                4 => Just(Move::Down),
+                1 => Just(Move::Home),
+                1 => Just(Move::End),
+            ],
+            0..40,
+        )
+    }
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(100))]
+
+        // Feature: tui-redesign, Property 13: 导航不落在 Section 上且可逆
+        /// **Validates: Requirements 1.1, 1.2, 1.5, 1.6, 5.4**
+        #[test]
+        fn navigation_never_rests_on_a_section_and_is_reversible(
+            // Positions in `display_order()`, so every category, the pinned one included,
+            // can be drawn; B is always a different category from A.
+            a in 0..GROUPS.len(),
+            offset in 1..GROUPS.len(),
+            in_a in moves(),
+            in_b in moves(),
+            forward in proptest::prelude::any::<bool>(),
+        ) {
+            let mut app = app();
+            let order = app.display_order();
+            let (a, b) = (order[a], order[(a + offset) % order.len()]);
+            // Reach `a` by Category keys too, so switching is part of the sequence.
+            while app.group != a {
+                app.key(key(KeyCode::Tab)).unwrap();
+            }
+            for step in &in_a {
+                app.key(key(step.code())).unwrap();
+                let row = app.selected_row();
+                proptest::prop_assert!(row.selectable(), "{} {step:?}: {row:?}", GROUPS[a]);
+                // ↓ then ↑ comes back to the same row, wrapping at either end.
+                let before = (app.selected(), row_id(&row));
+                app.key(key(KeyCode::Down)).unwrap();
+                proptest::prop_assert!(app.selected_row().selectable());
+                app.key(key(KeyCode::Up)).unwrap();
+                proptest::prop_assert_eq!((app.selected(), row_id(&app.selected_row())), before);
+            }
+            let kept = (app.selected(), row_id(&app.selected_row()));
+            let (there, back) = if forward {
+                (KeyCode::Right, KeyCode::Left)
+            } else {
+                (KeyCode::BackTab, KeyCode::Tab)
+            };
+            while app.group != b {
+                app.key(key(there)).unwrap();
+            }
+            for step in &in_b {
+                app.key(key(step.code())).unwrap();
+                proptest::prop_assert!(app.selected_row().selectable());
+            }
+            while app.group != a {
+                app.key(key(back)).unwrap();
+            }
+            proptest::prop_assert_eq!((app.selected(), row_id(&app.selected_row())), kept);
+        }
     }
     #[test]
     fn cancellation_keys_work_while_task_logs_are_open() {
@@ -1814,31 +2756,49 @@ mod tests {
         }
     }
 
+    /// Press the digit that Category_List shows beside category `id`.
+    fn jump(app: &mut App, id: &str) {
+        let n = app
+            .category_order
+            .iter()
+            .position(|g| GROUPS[*g] == id)
+            .unwrap()
+            + 1;
+        app.key(key(KeyCode::Char(char::from_digit(n as u32, 10).unwrap())))
+            .unwrap();
+        assert_eq!(GROUPS[app.group], id);
+    }
     #[test]
     fn common_tools_and_ai_are_reachable_without_a_package_selector() {
         let mut app = app();
         app.platform_error = None;
         app.root = true;
-        app.group = GROUPS.iter().position(|group| *group == "tools").unwrap();
-        for (index, package) in crate::ops::tools::PACKAGES.iter().enumerate() {
-            app.positions[app.group] = index;
-            match app.activate().unwrap() {
-                Effect::Run(jobs) => {
-                    assert_eq!(jobs.len(), 1);
-                    assert_eq!(jobs[0].0.kind, Kind::ToolInstall(package));
-                    assert!(jobs[0].1.is_empty());
+        jump(&mut app, "tools");
+        // From the first row, ↓ walks the single-package installs under their Section title.
+        app.key(key(KeyCode::Home)).unwrap();
+        for package in crate::ops::tools::PACKAGES {
+            match app.key(key(KeyCode::Enter)).unwrap() {
+                Effect::Run(Task::Single {
+                    spec,
+                    params,
+                    reviewed,
+                }) => {
+                    assert_eq!(spec.kind, Kind::ToolInstall(package));
+                    assert!(params.is_empty());
+                    assert!(!reviewed);
                 }
                 other => panic!("expected one package installation, got {other:?}"),
             }
+            app.key(key(KeyCode::Down)).unwrap();
         }
         app.root = false;
-        app.group = GROUPS.iter().position(|group| *group == "ai").unwrap();
-        for index in 0..3 {
-            app.positions[app.group] = index;
-            match app.activate().unwrap() {
-                Effect::Run(jobs) => assert!(!jobs[0].0.external),
+        jump(&mut app, "ai");
+        for _ in 0..3 {
+            match app.key(key(KeyCode::Enter)).unwrap() {
+                Effect::Run(Task::Single { spec, .. }) => assert!(!spec.external),
                 other => panic!("expected a background binary installation, got {other:?}"),
             }
+            app.key(key(KeyCode::Char('j'))).unwrap();
         }
         app.key(key(KeyCode::Char('o'))).unwrap();
         assert!(app.optimization());
@@ -1849,6 +2809,11 @@ mod tests {
         let mut app = app();
         app.platform_error = None;
         app.root = true;
+        // Leave the Optimization_View with the arrows, back on system.info.
+        app.key(key(KeyCode::Char('0'))).unwrap();
+        app.key(key(KeyCode::Right)).unwrap();
+        assert_eq!(GROUPS[app.group], "system");
+        assert!(matches!(app.selected_row(), Row::Action(spec) if spec.id == "system.info"));
         app.key(key(KeyCode::Char(' '))).unwrap();
         assert!(app.marked.is_empty());
         assert!(matches!(app.key(key(KeyCode::F(5))).unwrap(), Effect::None));
@@ -1865,8 +2830,12 @@ mod tests {
         let mut app = app();
         app.platform_error = None;
         app.root = true;
-        app.group = OPTIMIZATION_GROUP;
-        app.positions[app.group] = 3; // BBR has a queue selector.
+        app.key(key(KeyCode::Char('O'))).unwrap();
+        // BBR, the fourth item, has a queue selector.
+        for _ in 0..3 {
+            app.key(key(KeyCode::Down)).unwrap();
+        }
+        assert!(matches!(app.selected_row(), Row::Action(spec) if spec.id == "bbr.enable"));
         assert!(matches!(
             app.key(key(KeyCode::Enter)).unwrap(),
             Effect::None
@@ -1875,7 +2844,7 @@ mod tests {
         assert!(matches!(app.submit_form().unwrap(), Effect::None));
         assert!(app.marked.contains("bbr.enable"));
         match app.key(key(KeyCode::F(5))).unwrap() {
-            Effect::Run(jobs) => {
+            Effect::Run(Task::Batch(jobs)) => {
                 assert_eq!(jobs.len(), 1);
                 assert_eq!(jobs[0].0.id, "bbr.enable");
             }
@@ -1883,21 +2852,113 @@ mod tests {
         }
     }
     #[test]
-    fn category_navigation_has_explicit_focus_and_remembers_positions() {
+    fn arrows_move_actions_and_switch_categories_and_each_category_keeps_its_row() {
         let mut app = app();
-        app.positions[0] = 2;
-        app.key(key(KeyCode::Tab)).unwrap();
-        assert_eq!(app.focus, Focus::Categories);
+        let system = group("system");
+        assert_eq!(app.group, system);
         app.key(key(KeyCode::Down)).unwrap();
-        assert_eq!(
-            app.group,
-            GROUPS.iter().position(|group| *group == "kernel").unwrap()
-        );
-        app.key(key(KeyCode::Enter)).unwrap();
-        assert_eq!(app.focus, Focus::Actions);
-        app.key(key(KeyCode::Esc)).unwrap();
+        app.key(key(KeyCode::Char('j'))).unwrap();
+        assert_eq!(app.selected(), 2, "↓ and j move the Action_List directly");
+        app.key(key(KeyCode::Char('k'))).unwrap();
+        app.key(key(KeyCode::Down)).unwrap();
+        // → and Tab go down the Category_List, ← and Shift+Tab up; ↑/↓ never switch it.
+        app.key(key(KeyCode::Right)).unwrap();
+        assert_eq!(app.group, group("kernel"));
+        app.key(key(KeyCode::End)).unwrap();
+        let last = app.selectable_count(app.group) - 1;
+        assert_eq!(app.selected(), last);
+        app.key(key(KeyCode::Down)).unwrap();
+        assert_eq!(app.selected(), 0, "↓ wraps to the first row");
         app.key(key(KeyCode::Up)).unwrap();
-        assert_eq!(app.selected(), 2);
+        assert_eq!(app.selected(), last, "↑ wraps to the last row");
+        app.key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
+            .unwrap();
+        assert_eq!(app.group, system);
+        assert_eq!(app.selected(), 2, "system kept its row");
+        app.key(key(KeyCode::Tab)).unwrap();
+        assert_eq!(app.selected(), last, "kernel kept its row");
+
+        // Both ends of `display_order()` wrap.
+        app.key(key(KeyCode::Char('0'))).unwrap();
+        app.key(key(KeyCode::Left)).unwrap();
+        assert_eq!(app.group, *app.category_order.last().unwrap());
+        app.key(key(KeyCode::Right)).unwrap();
+        assert!(app.optimization());
+        app.key(key(KeyCode::Right)).unwrap();
+        assert_eq!(app.group, app.category_order[0]);
+        // Home and End move the Action_List, not the Category_List.
+        app.key(key(KeyCode::Home)).unwrap();
+        assert_eq!((app.group, app.selected()), (system, 0));
+    }
+    #[test]
+    fn rows_follow_the_section_table_and_the_selection_is_always_selectable() {
+        let mut app = app();
+        let rows = app.rows(OPTIMIZATION_GROUP);
+        assert_eq!(rows.len(), actions::OPTIMIZATION.len() + 2);
+        for (row, id) in rows.iter().zip(actions::OPTIMIZATION) {
+            assert!(
+                matches!(row, Row::Action(spec) if spec.id == *id),
+                "{row:?}"
+            );
+        }
+        assert!(matches!(&rows[rows.len() - 2..], [Row::Rule, Row::Execute]));
+        // Grouped categories: each Section title, then its actions, in table order.
+        for category in ["system", "clash", "network", "docker", "tools"] {
+            let group = GROUPS.iter().position(|group| *group == category).unwrap();
+            let expected = sections::of(category)
+                .unwrap()
+                .iter()
+                .flat_map(|(section, ids)| std::iter::once(*section).chain(ids.iter().copied()))
+                .collect::<Vec<_>>();
+            let listed = app
+                .rows(group)
+                .into_iter()
+                .map(|row| match row {
+                    Row::Section(id) => id,
+                    Row::Action(spec) => spec.id,
+                    other => panic!("{category}: {other:?}"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(listed, expected);
+        }
+        for category in ["kernel", "ssh", "ai", "terminal", "tests", "app"] {
+            let group = GROUPS.iter().position(|group| *group == category).unwrap();
+            let ids = app
+                .rows(group)
+                .into_iter()
+                .map(|row| match row {
+                    Row::Action(spec) => spec.id,
+                    other => panic!("{category} is not grouped: {other:?}"),
+                })
+                .collect::<Vec<_>>();
+            let specs = actions::specs()
+                .into_iter()
+                .filter(|spec| spec.group == category)
+                .map(|spec| spec.id)
+                .collect::<Vec<_>>();
+            assert_eq!(ids, specs);
+        }
+        for group in app.display_order() {
+            app.group = group;
+            for position in 0..app.selectable_count(group) {
+                app.positions[group] = position;
+                let row = app.selected_row();
+                assert!(row.selectable(), "{} {position}: {row:?}", GROUPS[group]);
+            }
+        }
+
+        // The Execute_Row is the last Selectable_Row; Enter on it runs the Checklist as F5 does.
+        app.platform_error = None;
+        app.root = true;
+        app.group = OPTIMIZATION_GROUP;
+        app.positions[OPTIMIZATION_GROUP] = actions::OPTIMIZATION.len();
+        assert!(matches!(app.selected_row(), Row::Execute));
+        app.marked.insert("bbr.enable".into());
+        match app.key(key(KeyCode::Enter)).unwrap() {
+            Effect::Run(Task::Batch(jobs)) => assert_eq!(jobs[0].0.id, "bbr.enable"),
+            other => panic!("expected the Checklist to run, got {other:?}"),
+        }
+        assert!(app.form.is_none());
     }
     #[test]
     fn timezone_presets_cycle_and_custom_names_remain_editable() {
@@ -2004,7 +3065,7 @@ mod tests {
                 .unwrap(),
         );
         let area = Rect::new(0, 0, 120, 36);
-        let geometry = view::FormGeometry::new(area, app.form.as_ref().unwrap(), &app.ctx.i18n);
+        let geometry = view::FormGeometry::new(area, app.form.as_ref().unwrap(), &app);
         let click = |rect: Rect| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: rect.x + 1,
@@ -2026,7 +3087,7 @@ mod tests {
             app.make_form(actions::find("tcp.tune").unwrap(), FormMode::Optimization)
                 .unwrap(),
         );
-        let geometry = view::FormGeometry::new(area, app.form.as_ref().unwrap(), &app.ctx.i18n);
+        let geometry = view::FormGeometry::new(area, app.form.as_ref().unwrap(), &app);
         app.mouse(click(geometry.buttons[1]), area).unwrap();
         assert!(!app.marked.contains("tcp.tune"));
         assert!(app.form.is_none());
@@ -2088,19 +3149,67 @@ mod tests {
         assert_eq!(app.toast.as_ref().unwrap().tone, Tone::Warning);
     }
     #[test]
+    fn single_task_results_are_recorded_and_cancellation_is_not_a_failure() {
+        let job = |id| (actions::find(id).unwrap(), Parameters::new());
+        let cases = [
+            (Ok(()), Outcome::Done),
+            (Err(Error::new("error.cancelled", "")), Outcome::Cancelled),
+            (Err(Error::new("error.io", "disk full")), Outcome::Failed),
+        ];
+        for (result, expected) in cases {
+            let mut app = app();
+            let (spec, params) = job("tcp.tune");
+            app.record_start(&Task::Single {
+                spec,
+                params,
+                reviewed: false,
+            });
+            assert_eq!(app.records.recent, ["tcp.tune"]);
+            assert!(app.records.last.is_empty());
+            let (sender, receiver) = mpsc::channel();
+            app.receiver = Some(receiver);
+            app.worker = Some(thread::spawn(move || {
+                sender.send(Event::Finished(result)).unwrap();
+            }));
+            while app.worker.is_some() {
+                app.receive();
+                thread::yield_now();
+            }
+            assert_eq!(app.records.last["tcp.tune"].outcome, expected);
+            assert!(app.single_task.is_none());
+        }
+        // A batch is recorded from its Step events, never from Finished.
+        let mut app = app();
+        app.record_start(&Task::Batch(vec![job("tcp.tune"), job("bbr.enable")]));
+        assert!(app.single_task.is_none());
+        app.finish(Ok(()));
+        assert!(app.records.recent.is_empty() && app.records.last.is_empty());
+    }
+    #[test]
     fn help_overlay_swallows_navigation_and_closes_without_side_effects() {
         let mut app = app();
         app.key(key(KeyCode::Char('?'))).unwrap();
         assert!(app.help);
         let group = app.group;
-        for code in [KeyCode::Down, KeyCode::Tab, KeyCode::Char('o')] {
+        let positions = app.positions;
+        for code in [
+            KeyCode::Down,
+            KeyCode::Right,
+            KeyCode::Tab,
+            KeyCode::Char('3'),
+            KeyCode::Char('o'),
+        ] {
             assert!(matches!(app.key(key(code)).unwrap(), Effect::None));
         }
         assert_eq!(app.group, group);
-        assert_eq!(app.focus, Focus::Actions);
+        assert_eq!(app.positions, positions);
         app.key(key(KeyCode::Esc)).unwrap();
         assert!(!app.help);
-        assert_eq!(app.focus, Focus::Actions, "Esc closed help only");
+        assert_eq!(
+            (app.group, app.positions),
+            (group, positions),
+            "Esc closed help only"
+        );
         app.key(key(KeyCode::F(1))).unwrap();
         assert!(app.help);
         let click = MouseEvent {
@@ -2110,10 +3219,12 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         };
         app.mouse(click, Rect::new(0, 0, 120, 36)).unwrap();
+        assert!(app.help);
+        app.key(key(KeyCode::Esc)).unwrap();
         assert!(!app.help);
         assert_eq!(
             app.group, group,
-            "the closing click does not reach the menu"
+            "background clicks and closing help do not reach the menu"
         );
     }
     #[test]
@@ -2123,6 +3234,254 @@ mod tests {
         assert!(matches!(app.key(key(KeyCode::F(5))).unwrap(), Effect::None));
         assert!(app.notice.is_none());
         assert_eq!(app.toast.as_ref().unwrap().tone, Tone::Warning);
+    }
+
+    fn editable_optimization() -> App {
+        let mut app = app();
+        app.group = OPTIMIZATION_GROUP;
+        app.platform_error = None;
+        app.root = true;
+        app
+    }
+
+    #[test]
+    fn optimization_shortcuts_and_execute_row_always_dispatch_a_batch() {
+        for code in [
+            KeyCode::Char('x'),
+            KeyCode::Char('X'),
+            KeyCode::F(5),
+            KeyCode::Enter,
+        ] {
+            let mut app = editable_optimization();
+            app.marked.insert("bbr.enable".into());
+            app.positions[OPTIMIZATION_GROUP] = actions::OPTIMIZATION.len();
+            let Effect::Run(Task::Batch(jobs)) = app.key(key(code)).unwrap() else {
+                panic!("{code:?} must dispatch a batch, even with one item");
+            };
+            assert_eq!(jobs.len(), 1);
+            assert_eq!(jobs[0].0.id, "bbr.enable");
+            assert_eq!(jobs[0].1, jobs[0].0.defaults());
+        }
+        for (width, height) in [(80, 24), (120, 36)] {
+            let mut app = editable_optimization();
+            app.marked.insert("bbr.enable".into());
+            app.positions[OPTIMIZATION_GROUP] = actions::OPTIMIZATION.len();
+            let area = Rect::new(0, 0, width, height);
+            let regions = view::Regions::new(area, &app);
+            let rows = app.rows(OPTIMIZATION_GROUP);
+            let row = row_index(&rows, app.selected());
+            let click = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: regions.action_rows.x + 8,
+                row: regions.action_rows.y + (row - regions.action_offset) as u16,
+                modifiers: KeyModifiers::NONE,
+            };
+            assert!(
+                matches!(app.mouse(click, area).unwrap(), Effect::Run(Task::Batch(jobs)) if jobs.len() == 1)
+            );
+        }
+    }
+
+    #[test]
+    fn recommended_selection_is_exact_and_preserves_other_parameters() {
+        for code in [KeyCode::Char('a'), KeyCode::Char('A')] {
+            let mut app = editable_optimization();
+            app.marked.insert("ssh.key".into());
+            app.parameters.insert(
+                "system.clean".into(),
+                Parameters::from([("scope".into(), "full".into())]),
+            );
+            app.parameters.insert(
+                "tcp.tune".into(),
+                Parameters::from([("rtt".into(), "80".into())]),
+            );
+            app.parameters.insert(
+                "ssh.port".into(),
+                Parameters::from([("port".into(), "2222".into())]),
+            );
+            let mut expected = app.parameters.clone();
+            expected.insert(
+                "system.clean".into(),
+                Parameters::from([("scope".into(), "standard".into())]),
+            );
+            assert!(matches!(app.key(key(code)).unwrap(), Effect::None));
+            assert_eq!(
+                app.marked,
+                RECOMMENDED.iter().map(|id| (*id).to_owned()).collect()
+            );
+            assert_eq!(app.parameters, expected);
+            assert_eq!(app.toast.as_ref().unwrap().tone, Tone::Success);
+            assert!(app.worker.is_none());
+            let Effect::Run(Task::Batch(jobs)) = app.key(key(KeyCode::Char('x'))).unwrap() else {
+                panic!("batch")
+            };
+            assert_eq!(
+                jobs.iter().map(|(spec, _)| spec.id).collect::<Vec<_>>(),
+                RECOMMENDED
+            );
+            assert_eq!(jobs[2].1["rtt"], "80");
+            assert_eq!(jobs[2].1["bandwidth"], "1000");
+        }
+    }
+
+    #[test]
+    fn unavailable_recommendations_leave_the_checklist_and_parameters_untouched() {
+        for platform in [false, true] {
+            let mut app = editable_optimization();
+            if platform {
+                app.platform_error = Some(Error::new("error.platform", "unsupported"));
+            } else {
+                app.root = false;
+            }
+            app.marked.insert("ssh.port".into());
+            app.parameters.insert(
+                "system.clean".into(),
+                Parameters::from([("scope".into(), "full".into())]),
+            );
+            let before = (app.marked.clone(), app.parameters.clone());
+            let error = app.key(key(KeyCode::Char('a'))).unwrap_err();
+            assert_eq!(
+                error.key,
+                if platform {
+                    "error.platform"
+                } else {
+                    "error.root"
+                }
+            );
+            app.fail_ui(error);
+            assert!(app.notice.is_some());
+            assert_eq!((app.marked, app.parameters), before);
+            assert!(app.toast.is_none());
+        }
+    }
+
+    #[test]
+    fn optimization_keys_do_not_act_in_other_categories_or_while_busy() {
+        let keys = [
+            KeyCode::Char(' '),
+            KeyCode::Char('x'),
+            KeyCode::Char('X'),
+            KeyCode::F(5),
+            KeyCode::Char('a'),
+            KeyCode::Char('A'),
+        ];
+        for group in default_category_order() {
+            let mut app = editable_optimization();
+            app.group = group;
+            app.marked.insert("ssh.port".into());
+            for code in keys {
+                assert!(matches!(app.key(key(code)).unwrap(), Effect::None));
+                assert_eq!(app.marked, BTreeSet::from(["ssh.port".into()]));
+                assert!(app.parameters.is_empty() && app.worker.is_none());
+            }
+        }
+        let mut app = editable_optimization();
+        app.worker = Some(thread::spawn(|| {}));
+        for code in keys {
+            assert!(matches!(app.key(key(code)).unwrap(), Effect::None));
+            assert!(app.marked.is_empty() && app.parameters.is_empty());
+        }
+        app.worker.take().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn invalid_optimization_values_open_the_form_without_dispatching() {
+        for (id, params) in [
+            ("ssh.key", Parameters::new()),
+            (
+                "tcp.tune",
+                Parameters::from([("rtt".into(), "invalid".into())]),
+            ),
+        ] {
+            let mut app = editable_optimization();
+            app.marked.insert(id.into());
+            app.parameters.insert(id.into(), params);
+            assert!(matches!(
+                app.key(key(KeyCode::Char('x'))).unwrap(),
+                Effect::None
+            ));
+            let form = app.form.as_ref().unwrap();
+            assert_eq!(form.mode, FormMode::Optimization);
+            assert_eq!(form.spec.id, id);
+            assert!(form.error.is_some());
+            assert!(app.worker.is_none());
+        }
+    }
+
+    #[test]
+    fn a_one_item_task_reaches_batch_confirmation_and_rejection_runs_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        ctx.yes = false;
+        let (sender, receiver) = mpsc::channel();
+        ctx.events = Some(sender);
+        let spec = actions::find("system.update").unwrap();
+        let task = Task::Batch(vec![(spec.clone(), spec.defaults())]);
+        let worker = thread::spawn(move || perform(&ctx, &task));
+        let Event::Confirm { text, token, reply } =
+            receiver.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("batch confirmation must precede any operation or Step event");
+        };
+        assert!(text.contains("1. Update packages"), "{text}");
+        assert_eq!(token, "YES");
+        reply.send(false).unwrap();
+        let report = worker.join().unwrap();
+        assert_eq!(report.result.unwrap_err().key, "error.cancelled");
+        assert_eq!(report.steps.len(), 1);
+        assert!(report.steps[0].outcome.is_none() && report.steps[0].elapsed.is_none());
+        assert!(
+            receiver
+                .try_iter()
+                .all(|event| !matches!(event, Event::Step(_)))
+        );
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn batch_records_follow_step_events_and_handoff_reports_without_inventing_skipped_runs() {
+        use crate::runtime::{Step, StepState};
+        let mut app = editable_optimization();
+        let (sender, receiver) = mpsc::channel();
+        app.receiver = Some(receiver);
+        for state in [
+            StepState::Started,
+            StepState::Finished {
+                outcome: Outcome::Cancelled,
+                elapsed: Duration::from_secs(2),
+            },
+        ] {
+            sender
+                .send(Event::Step(Step {
+                    index: 1,
+                    total: 1,
+                    id: "tcp.tune",
+                    state,
+                }))
+                .unwrap();
+            app.receive();
+        }
+        assert_eq!(app.records.recent, ["tcp.tune"]);
+        assert_eq!(app.records.last["tcp.tune"].outcome, Outcome::Cancelled);
+        let report = actions::BatchReport {
+            steps: vec![
+                actions::StepRecord {
+                    id: "bbr.enable",
+                    outcome: Some(Outcome::Failed),
+                    elapsed: Some(Duration::from_secs(3)),
+                },
+                actions::StepRecord {
+                    id: "ssh.port",
+                    outcome: None,
+                    elapsed: None,
+                },
+            ],
+            result: Err(Error::new("error.batch", "bbr.enable")),
+        };
+        app.record_report(&report);
+        assert_eq!(app.records.recent, ["bbr.enable", "tcp.tune"]);
+        assert_eq!(app.records.last["bbr.enable"].outcome, Outcome::Failed);
+        assert!(!app.records.last.contains_key("ssh.port"));
     }
     #[test]
     fn log_scrolling_is_clamped_to_the_visible_window() {
@@ -2238,7 +3597,12 @@ mod tests {
             .iter()
             .position(|group| *group == spec.group)
             .unwrap();
-        app.positions[app.group] = app.items().iter().position(|s| s.id == id).unwrap();
+        app.positions[app.group] = app
+            .rows(app.group)
+            .iter()
+            .filter(|row| row.selectable())
+            .position(|row| matches!(row, Row::Action(spec) if spec.id == id))
+            .unwrap();
         app
     }
     fn save_profiles(ctx: &Context, names: &[&str], current: &str) {
@@ -2285,9 +3649,9 @@ mod tests {
         );
         app.key(key(KeyCode::Up)).unwrap();
         match app.key(key(KeyCode::Enter)).unwrap() {
-            Effect::Run(jobs) => {
-                assert_eq!(jobs[0].0.id, "clash.sub.use");
-                assert_eq!(jobs[0].1["name"], "home");
+            Effect::Run(Task::Single { spec, params, .. }) => {
+                assert_eq!(spec.id, "clash.sub.use");
+                assert_eq!(params["name"], "home");
             }
             other => panic!("expected the choice to run, got {other:?}"),
         }
@@ -2454,9 +3818,9 @@ mod tests {
         assert_eq!(picker.cursor, 0, "on the group's current node");
         app.key(key(KeyCode::Down)).unwrap();
         match app.key(key(KeyCode::Enter)).unwrap() {
-            Effect::Run(jobs) => {
-                assert_eq!(jobs[0].1["proxy_group"], "Streaming");
-                assert_eq!(jobs[0].1["proxy_node"], "JP");
+            Effect::Run(Task::Single { params, .. }) => {
+                assert_eq!(params["proxy_group"], "Streaming");
+                assert_eq!(params["proxy_node"], "JP");
             }
             other => panic!("expected the choice to run, got {other:?}"),
         }
@@ -2476,7 +3840,7 @@ mod tests {
         ));
         assert_eq!(app.form.as_ref().unwrap().index, 1);
         match app.key(key(KeyCode::Enter)).unwrap() {
-            Effect::Run(jobs) => assert_eq!(jobs[0].0.id, "tcp.tune"),
+            Effect::Run(Task::Single { spec, .. }) => assert_eq!(spec.id, "tcp.tune"),
             other => panic!("expected the form to submit, got {other:?}"),
         }
     }
@@ -2504,5 +3868,347 @@ mod tests {
         let _ = tx.send(Ok(vec![Vec::new()]));
         app.receive();
         assert!(app.form.is_none(), "a late result does not reopen the form");
+    }
+
+    /// An app on a scratch data directory, on a supported platform as root, whose
+    /// Command_Palette is open with `query` typed into it.
+    fn palette_app(root: &std::path::Path, query: &str) -> App {
+        let mut app = App::new(crate::tests::context(root));
+        app.platform_error = None;
+        app.root = true;
+        app.key(key(KeyCode::Char('/'))).unwrap();
+        for c in query.chars() {
+            app.key(key(KeyCode::Char(c))).unwrap();
+        }
+        app
+    }
+    fn highlighted(app: &App) -> Option<&'static str> {
+        app.palette_highlighted().map(|spec| spec.id)
+    }
+    /// The query and its cursor.
+    fn query(app: &App) -> (&str, usize) {
+        let palette = app.command_palette.as_ref().expect("open Command_Palette");
+        (&palette.query.text, palette.query.cursor)
+    }
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn slash_opens_the_palette_and_printable_keys_edit_its_query() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = palette_app(temp.path(), "");
+        assert_eq!(query(&app), ("", 0));
+        assert_eq!(app.command_palette.as_ref().unwrap().cursor, 0);
+        let before = (app.group, app.positions);
+        // Digits and letter shortcuts are text here: none switches category, quits, opens
+        // help, toggles the logs or switches the language.
+        for c in "o1q?/gL ".chars() {
+            let effect = app.key(key(KeyCode::Char(c))).unwrap();
+            assert!(matches!(effect, Effect::None), "{c}: {effect:?}");
+        }
+        assert_eq!(query(&app), ("o1q?/gL ", 8));
+        assert_eq!((app.group, app.positions), before);
+        assert!(!app.help && !app.logs_open && app.notice.is_none());
+        assert_eq!(app.ctx.i18n.locale(), "en-US");
+        assert!(!app.ctx.paths.preferences.exists(), "nothing was saved");
+
+        app.key(ctrl('u')).unwrap();
+        assert_eq!(query(&app), ("", 0));
+        for c in "bbr".chars() {
+            app.key(key(KeyCode::Char(c))).unwrap();
+        }
+        app.key(key(KeyCode::Home)).unwrap();
+        app.key(key(KeyCode::Delete)).unwrap();
+        assert_eq!(query(&app), ("br", 0));
+        app.key(key(KeyCode::Right)).unwrap();
+        app.key(key(KeyCode::Char('x'))).unwrap();
+        assert_eq!(query(&app), ("bxr", 2));
+        app.key(key(KeyCode::Left)).unwrap();
+        app.key(key(KeyCode::Backspace)).unwrap();
+        assert_eq!(query(&app), ("xr", 0));
+        app.key(key(KeyCode::End)).unwrap();
+        app.key(key(KeyCode::Backspace)).unwrap();
+        app.key(key(KeyCode::Backspace)).unwrap();
+        for c in "bbr".chars() {
+            app.key(key(KeyCode::Char(c))).unwrap();
+        }
+        assert_eq!(query(&app), ("bbr", 3));
+
+        // ↑↓ wrap over the hits, kernel.install first; PgUp/PgDn stop at either end.
+        let ids = [
+            "kernel.install",
+            "kernel.remove",
+            "bbr.status",
+            "bbr.enable",
+            "bbr.restore",
+        ];
+        assert_eq!(highlighted(&app), Some(ids[0]));
+        app.key(key(KeyCode::Down)).unwrap();
+        assert_eq!(highlighted(&app), Some(ids[1]));
+        app.key(key(KeyCode::Up)).unwrap();
+        app.key(key(KeyCode::Up)).unwrap();
+        assert_eq!(highlighted(&app), Some(ids[4]), "↑ wraps to the last hit");
+        app.key(key(KeyCode::Down)).unwrap();
+        assert_eq!(highlighted(&app), Some(ids[0]), "↓ wraps to the first hit");
+        app.key(key(KeyCode::PageDown)).unwrap();
+        assert_eq!(highlighted(&app), Some(ids[4]));
+        app.key(key(KeyCode::PageUp)).unwrap();
+        assert_eq!(highlighted(&app), Some(ids[0]));
+        // A new query starts from its first result.
+        app.key(key(KeyCode::Down)).unwrap();
+        app.key(key(KeyCode::Char('.'))).unwrap();
+        assert_eq!(highlighted(&app), Some("bbr.status"));
+        assert_eq!((app.group, app.positions), before);
+    }
+
+    #[test]
+    fn palette_enter_activates_the_highlighted_action_as_the_action_list_does() {
+        let temp = tempfile::tempdir().unwrap();
+        for (id, from) in [
+            ("bbr.status", group("system")),
+            ("system.info", group("network")),
+            ("system.public_ip", group("tools")),
+            ("tcp.tune", OPTIMIZATION_GROUP),
+        ] {
+            let mut app = palette_app(temp.path(), id);
+            app.group = from;
+            app.positions[from] = 1;
+            let before = (app.group, app.positions);
+            assert_eq!(highlighted(&app), Some(id));
+            let effect = app.key(key(KeyCode::Enter)).unwrap();
+            assert!(
+                app.command_palette.is_none(),
+                "{id}: Enter closes the palette"
+            );
+            match (id, effect) {
+                ("bbr.status", Effect::Run(Task::Single { spec, reviewed, .. })) => {
+                    assert_eq!(spec.id, "bbr.status");
+                    assert!(!reviewed);
+                }
+                ("system.info", Effect::Refresh) => assert!(app.overview),
+                ("system.public_ip", Effect::PublicIp) => (),
+                // From the Optimization_Category too, a Form_Action opens its Run-mode form.
+                ("tcp.tune", Effect::None) => {
+                    let form = app.form.as_ref().expect("the Run-mode form");
+                    assert_eq!((form.spec.id, form.mode), ("tcp.tune", FormMode::Run));
+                    assert!(app.marked.is_empty());
+                }
+                (id, effect) => panic!("{id}: {effect:?}"),
+            }
+            assert_eq!(
+                (app.group, app.positions),
+                before,
+                "{id}: Enter leaves Current_Category and its selection alone"
+            );
+            assert!(app.notice.is_none(), "{id}");
+        }
+    }
+
+    #[test]
+    fn palette_enter_while_busy_shows_busy_and_stays_open() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = palette_app(temp.path(), "bbr.status");
+        app.worker = Some(thread::spawn(|| {}));
+        app.phase = Phase::Running;
+        assert!(matches!(
+            app.key(key(KeyCode::Enter)).unwrap(),
+            Effect::None
+        ));
+        let busy = app.ctx.i18n.error(&Error::new("error.busy", ""));
+        assert_eq!(app.notice.as_deref(), Some(busy.as_str()));
+        assert_eq!(query(&app).0, "bbr.status", "the palette stays open");
+        assert_eq!(app.phase, Phase::Running, "the task is not cancelled");
+        // Dismissing the notice returns to the palette.
+        app.key(key(KeyCode::Esc)).unwrap();
+        assert!(app.notice.is_none());
+        assert_eq!(highlighted(&app), Some("bbr.status"));
+        app.worker.take().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn palette_enter_on_an_unavailable_action_explains_without_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = palette_app(temp.path(), "bbr.restore");
+        app.root = false;
+        let reason = app.ctx.i18n.error(
+            &app.available(&actions::find("bbr.restore").unwrap())
+                .unwrap_err(),
+        );
+        assert!(matches!(
+            app.key(key(KeyCode::Enter)).unwrap(),
+            Effect::None
+        ));
+        assert_eq!(app.notice.as_deref(), Some(reason.as_str()));
+        assert_eq!(
+            highlighted(&app),
+            Some("bbr.restore"),
+            "the palette stays open"
+        );
+        assert!(app.form.is_none() && app.worker.is_none() && app.records.recent.is_empty());
+    }
+
+    #[test]
+    fn palette_tab_selects_the_action_in_its_category_and_esc_changes_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = palette_app(temp.path(), "bbr");
+        app.group = OPTIMIZATION_GROUP;
+        app.positions[group("network")] = 0;
+        app.key(key(KeyCode::Down)).unwrap();
+        app.key(key(KeyCode::Down)).unwrap();
+        app.key(key(KeyCode::Down)).unwrap();
+        assert_eq!(highlighted(&app), Some("bbr.enable"));
+        let positions = app.positions;
+        assert!(matches!(app.key(key(KeyCode::Tab)).unwrap(), Effect::None));
+        assert!(app.command_palette.is_none());
+        assert_eq!(app.group, group("network"));
+        assert!(matches!(app.selected_row(), Row::Action(spec) if spec.id == "bbr.enable"));
+        assert!(
+            app.form.is_none() && app.notice.is_none(),
+            "Tab only selects"
+        );
+        let others = |positions: [usize; GROUPS.len()]| {
+            let mut positions = positions;
+            positions[group("network")] = 0;
+            positions
+        };
+        assert_eq!(others(app.positions), others(positions));
+
+        // Esc closes without changing anything, whatever was typed or highlighted.
+        app.group = group("docker");
+        app.positions[app.group] = 2;
+        let before = (app.group, app.positions, app.marked.clone());
+        app.key(key(KeyCode::Char('/'))).unwrap();
+        for c in "tcp".chars() {
+            app.key(key(KeyCode::Char(c))).unwrap();
+        }
+        app.key(key(KeyCode::Down)).unwrap();
+        assert!(matches!(app.key(key(KeyCode::Esc)).unwrap(), Effect::None));
+        assert!(app.command_palette.is_none());
+        assert_eq!((app.group, app.positions, app.marked.clone()), before);
+        assert!(app.form.is_none() && app.notice.is_none() && !app.overview);
+    }
+
+    #[test]
+    fn an_empty_query_lists_recent_use_newest_first() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = palette_app(temp.path(), "");
+        assert_eq!(app.palette_results().count(), 0, "nothing has run yet");
+        assert_eq!(highlighted(&app), None);
+        // Enter and Tab with nothing highlighted keep the palette open.
+        app.key(key(KeyCode::Enter)).unwrap();
+        app.key(key(KeyCode::Tab)).unwrap();
+        assert!(app.command_palette.is_some() && app.notice.is_none());
+
+        app.records.started("tcp.tune");
+        app.records.started("system.info");
+        app.records.started("bbr.status");
+        let ids = |app: &App| {
+            let results = app.palette_results();
+            (0..results.count())
+                .map(|n| results.hit(n).unwrap().spec.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&app), ["bbr.status", "system.info", "tcp.tune"]);
+        assert_eq!(highlighted(&app), Some("bbr.status"), "the newest first");
+        app.key(key(KeyCode::Down)).unwrap();
+        let effect = app.key(key(KeyCode::Enter)).unwrap();
+        assert!(matches!(effect, Effect::Refresh) && app.overview);
+        // A query searches every Action instead.
+        app.overview = false;
+        app.key(key(KeyCode::Char('/'))).unwrap();
+        app.key(key(KeyCode::Char('d'))).unwrap();
+        assert!(app.palette_results().count() > 3);
+    }
+
+    #[test]
+    fn palette_mouse_highlights_rows_runs_from_exec_and_scrolls() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = palette_app(temp.path(), "bbr");
+        let area = Rect::new(0, 0, 120, 36);
+        let mouse = |kind, point: Position| MouseEvent {
+            kind,
+            column: point.x,
+            row: point.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        let click = |point| mouse(MouseEventKind::Down(MouseButton::Left), point);
+        let geometry =
+            |app: &App| view::CommandPaletteGeometry::new(area, app, &app.palette_results());
+        // The point in the middle of result row `index`.
+        let row = |app: &App, index: usize| {
+            let rows = geometry(app).rows;
+            Position::new(rows.x + 4, rows.y + (index - geometry(app).offset) as u16)
+        };
+        let exec = |app: &App| {
+            let geometry = geometry(app);
+            let rows = geometry.rows;
+            (rows.y..rows.bottom())
+                .flat_map(|y| (rows.x..rows.right()).map(move |x| Position::new(x, y)))
+                .find(|point| geometry.exec_at(*point))
+                .expect("the highlighted row's button")
+        };
+        // Rows: <kernel>, kernel.install, kernel.remove, <network>, bbr.status, ...
+        app.mouse(click(row(&app, 4)), area).unwrap();
+        assert_eq!(highlighted(&app), Some("bbr.status"));
+        assert_eq!(
+            exec(&app).y,
+            row(&app, 4).y,
+            "the button follows the highlight"
+        );
+        // A category name, the query row and the screen behind change nothing.
+        for point in [
+            row(&app, 3),
+            geometry(&app).input.as_position(),
+            Position::new(1, 1),
+        ] {
+            assert!(matches!(
+                app.mouse(click(point), area).unwrap(),
+                Effect::None
+            ));
+            assert_eq!(highlighted(&app), Some("bbr.status"), "{point:?}");
+        }
+        assert!(app.command_palette.is_some());
+        // Clicking another row's place for the button only highlights that row.
+        let mut beside = exec(&app);
+        beside.y = row(&app, 1).y;
+        app.mouse(click(beside), area).unwrap();
+        assert_eq!(highlighted(&app), Some("kernel.install"));
+        assert!(app.command_palette.is_some());
+
+        // The wheel over the palette moves the highlight, stopping at either end.
+        let over = row(&app, 1);
+        let wheel = |down| {
+            mouse(
+                if down {
+                    MouseEventKind::ScrollDown
+                } else {
+                    MouseEventKind::ScrollUp
+                },
+                over,
+            )
+        };
+        app.mouse(wheel(true), area).unwrap();
+        assert_eq!(highlighted(&app), Some("kernel.remove"));
+        app.mouse(wheel(false), area).unwrap();
+        app.mouse(wheel(false), area).unwrap();
+        assert_eq!(highlighted(&app), Some("kernel.install"));
+        let outside = mouse(MouseEventKind::ScrollDown, Position::new(1, 1));
+        app.mouse(outside, area).unwrap();
+        assert_eq!(highlighted(&app), Some("kernel.install"));
+
+        // "执行 ↵" acts as Enter: busy keeps the palette open, idle runs the Action.
+        app.mouse(click(row(&app, 4)), area).unwrap();
+        app.worker = Some(thread::spawn(|| {}));
+        app.mouse(click(exec(&app)), area).unwrap();
+        let busy = app.ctx.i18n.error(&Error::new("error.busy", ""));
+        assert_eq!(app.notice.take().as_deref(), Some(busy.as_str()));
+        assert!(app.command_palette.is_some());
+        app.worker.take().unwrap().join().unwrap();
+        match app.mouse(click(exec(&app)), area).unwrap() {
+            Effect::Run(Task::Single { spec, .. }) => assert_eq!(spec.id, "bbr.status"),
+            other => panic!("expected bbr.status to run, got {other:?}"),
+        }
+        assert!(app.command_palette.is_none());
     }
 }

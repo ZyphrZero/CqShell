@@ -1,0 +1,211 @@
+# case final_main_aurora-light_80x24_en-US
+# size 80x24
+# theme aurora
+# background #f6f7f9
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+ System & resources     updated 2s ago │ Network & proxy      looked up 12s ago 
+CPU  ▄▃▂▃▁▁▂▂▁  12%  Memory ━━━━──  63%│BBR   ○ Disabled · available / v3       
+Disk ━━━╸─────  41%  Swap   ╸─────  10%│TCP   ○ not configured · fq_codel       
+Host   vps-sg-01                       │IPv4  203.0.113.24 · AS64500 Example Net
+Kernel 6.12.8-joeyblog-bbrv3 · x86_64  │IPv6  2001:db8:3c4d:15::1a2f            
+Uptime 3d 04h 00m · Asia/Shanghai      │Proxy Mihomo ● Running · v1.19.2        
+                                                                                
+ Categories        │ System                                                1/12 
+  0 Optimization   │  Overview                                                 ┃
+  ─────────────────│▎ System overview                                          ┃
+▎ 1 System         │  Public IP / ISP lookup                            12s ago┃
+  2 Kernel         │  Packages & mirrors                                       ┃
+  3 Network        │  Update packages                                          │
+  4 SSH            │  Benchmark system mirrors                                 │
+  5 Docker         │  Change system mirror · LinuxMirrors…                     │
+  6 Mihomo proxy ● │  Restore previous system sources                          │
+  7 Tools          │ Details                                                    
+  8 Agent tools    │  System overview                                           
+  9 Prompt         │  Read only · Current user                                  
+    Tests          │  Read host, CPU, memory, disk, IP and BBR status.          
+    CqShell        │  cqs run system.info                                       
+                   │                                                            
+  ↑↓  move   ↵  open   /  search actions   ←→  switch category   ?  help        
+---
+0 1 7 #0a6a5e reset bold
+0 9 6 #414242 reset -
+0 17 6 #414242 reset -
+0 23 3 #656566 reset -
+0 26 15 #1a1a1b reset -
+0 51 9 #1a1a1b reset -
+0 60 12 #656566 reset -
+0 72 7 #414242 reset -
+1 0 20 #656566 #ecedef -
+1 20 3 #1a1a1b #ecedef -
+1 23 16 #414242 #ecedef -
+1 39 1 #dddee0 reset -
+1 40 17 #656566 #ecedef -
+1 57 4 #1a1a1b #ecedef -
+1 61 19 #414242 #ecedef -
+2 0 5 #414242 #ecedef -
+2 5 9 #0a6a5e #ecedef -
+2 14 4 #1a1a1b #ecedef bold
+2 18 1 #414242 #ecedef -
+2 19 2 #1a1a1b #ecedef -
+2 21 7 #414242 #ecedef -
+2 28 4 #0a6a5e #ecedef -
+2 32 2 #dddee0 #ecedef -
+2 34 4 #1a1a1b #ecedef bold
+2 38 1 #414242 #ecedef -
+2 39 1 #dddee0 reset -
+2 40 16 #414242 #ecedef -
+2 56 3 #656566 #ecedef -
+2 59 21 #1a1a1b #ecedef -
+3 0 5 #414242 #ecedef -
+3 5 4 #0a6a5e #ecedef -
+3 9 5 #dddee0 #ecedef -
+3 14 4 #1a1a1b #ecedef bold
+3 18 1 #414242 #ecedef -
+3 19 2 #1a1a1b #ecedef -
+3 21 7 #414242 #ecedef -
+3 28 1 #0a6a5e #ecedef -
+3 29 5 #dddee0 #ecedef -
+3 34 4 #1a1a1b #ecedef bold
+3 38 1 #414242 #ecedef -
+3 39 1 #dddee0 reset -
+3 40 22 #414242 #ecedef -
+3 62 3 #656566 #ecedef -
+3 65 15 #1a1a1b #ecedef -
+4 0 7 #414242 #ecedef -
+4 7 32 #1a1a1b #ecedef -
+4 39 1 #dddee0 reset -
+4 40 6 #414242 #ecedef -
+4 46 12 #1a1a1b #ecedef -
+4 58 3 #656566 #ecedef -
+4 61 19 #1a1a1b #ecedef -
+5 0 7 #414242 #ecedef -
+5 7 21 #1a1a1b #ecedef -
+5 28 3 #656566 #ecedef -
+5 31 8 #1a1a1b #ecedef -
+5 39 1 #dddee0 reset -
+5 40 6 #414242 #ecedef -
+5 46 34 #1a1a1b #ecedef -
+6 0 7 #414242 #ecedef -
+6 7 10 #1a1a1b #ecedef -
+6 17 3 #656566 #ecedef -
+6 20 19 #1a1a1b #ecedef -
+6 39 1 #dddee0 reset -
+6 40 6 #414242 #ecedef -
+6 46 16 #1a1a1b #ecedef -
+6 62 3 #656566 #ecedef -
+6 65 15 #1a1a1b #ecedef -
+7 0 39 #1a1a1b #ecedef -
+7 40 40 #1a1a1b #ecedef -
+8 0 12 #656566 #ecedef -
+8 12 7 #1a1a1b #ecedef -
+8 19 1 #dddee0 reset -
+8 20 8 #656566 #ecedef -
+8 28 46 #1a1a1b #ecedef -
+8 74 6 #414242 #ecedef -
+9 0 2 #1a1a1b #ecedef -
+9 2 2 #656566 #ecedef -
+9 4 15 #1a1a1b #ecedef -
+9 19 1 #dddee0 reset -
+9 20 2 #1a1a1b #ecedef -
+9 22 57 #414242 #ecedef bold
+9 79 1 #0a6a5e #ecedef -
+10 0 2 #1a1a1b #ecedef -
+10 2 17 #dddee0 #ecedef -
+10 19 1 #dddee0 reset -
+10 20 1 #0a6a5e #e2e3e5 bold
+10 21 58 #1a1a1b #e2e3e5 bold
+10 79 1 #0a6a5e #ecedef -
+11 0 1 #0a6a5e #e2e3e5 bold
+11 1 1 #1a1a1b #e2e3e5 bold
+11 2 2 #656566 #e2e3e5 bold
+11 4 15 #1a1a1b #e2e3e5 bold
+11 19 1 #dddee0 reset -
+11 20 52 #1a1a1b #ecedef -
+11 72 7 #414242 #ecedef -
+11 79 1 #0a6a5e #ecedef -
+12 0 2 #1a1a1b #ecedef -
+12 2 2 #656566 #ecedef -
+12 4 15 #1a1a1b #ecedef -
+12 19 1 #dddee0 reset -
+12 20 2 #1a1a1b #ecedef -
+12 22 57 #414242 #ecedef bold
+12 79 1 #0a6a5e #ecedef -
+13 0 2 #1a1a1b #ecedef -
+13 2 2 #656566 #ecedef -
+13 4 15 #1a1a1b #ecedef -
+13 19 1 #dddee0 reset -
+13 20 2 #1a1a1b #ecedef -
+13 22 15 #414242 #ecedef -
+13 37 42 #1a1a1b #ecedef -
+13 79 1 #c5c6c7 #ecedef -
+14 0 2 #1a1a1b #ecedef -
+14 2 2 #656566 #ecedef -
+14 4 15 #1a1a1b #ecedef -
+14 19 1 #dddee0 reset -
+14 20 59 #1a1a1b #ecedef -
+14 79 1 #c5c6c7 #ecedef -
+15 0 2 #1a1a1b #ecedef -
+15 2 2 #656566 #ecedef -
+15 4 15 #1a1a1b #ecedef -
+15 19 1 #dddee0 reset -
+15 20 2 #1a1a1b #ecedef -
+15 22 36 #414242 #ecedef -
+15 58 21 #1a1a1b #ecedef -
+15 79 1 #c5c6c7 #ecedef -
+16 0 2 #1a1a1b #ecedef -
+16 2 2 #656566 #ecedef -
+16 4 12 #1a1a1b #ecedef -
+16 16 2 #166c3a #ecedef -
+16 18 1 #1a1a1b #ecedef -
+16 19 1 #dddee0 reset -
+16 20 2 #1a1a1b #ecedef -
+16 22 31 #414242 #ecedef -
+16 53 26 #1a1a1b #ecedef -
+16 79 1 #c5c6c7 #ecedef -
+17 0 2 #1a1a1b #ecedef -
+17 2 2 #656566 #ecedef -
+17 4 15 #1a1a1b #ecedef -
+17 19 1 #dddee0 reset -
+17 20 9 #656566 #ecedef -
+17 29 51 #1a1a1b #ecedef -
+18 0 2 #1a1a1b #ecedef -
+18 2 2 #656566 #ecedef -
+18 4 15 #1a1a1b #ecedef -
+18 19 1 #dddee0 reset -
+18 20 2 #1a1a1b #ecedef -
+18 22 15 #1a1a1b #ecedef bold
+18 37 43 #1a1a1b #ecedef -
+19 0 2 #1a1a1b #ecedef -
+19 2 2 #656566 #ecedef -
+19 4 15 #1a1a1b #ecedef -
+19 19 1 #dddee0 reset -
+19 20 11 #1a1a1b #ecedef -
+19 31 3 #656566 #ecedef -
+19 34 12 #414242 #ecedef -
+19 46 34 #1a1a1b #ecedef -
+20 0 2 #1a1a1b #ecedef -
+20 2 2 #656566 #ecedef -
+20 4 15 #1a1a1b #ecedef -
+20 19 1 #dddee0 reset -
+20 20 60 #1a1a1b #ecedef -
+21 0 2 #1a1a1b #ecedef -
+21 2 2 #656566 #ecedef -
+21 4 15 #1a1a1b #ecedef -
+21 19 1 #dddee0 reset -
+21 20 2 #1a1a1b #ecedef -
+21 22 19 #0a6a5e #ecedef -
+21 41 39 #1a1a1b #ecedef -
+22 0 19 #1a1a1b #ecedef -
+22 19 1 #dddee0 reset -
+22 20 60 #1a1a1b #ecedef -
+23 1 4 #0a6a5e #e2e3e5 bold
+23 5 5 #414242 reset -
+23 12 3 #0a6a5e #e2e3e5 bold
+23 15 5 #414242 reset -
+23 22 3 #0a6a5e #e2e3e5 bold
+23 25 15 #414242 reset -
+23 42 4 #0a6a5e #e2e3e5 bold
+23 46 16 #414242 reset -
+23 64 3 #0a6a5e #e2e3e5 bold
+23 67 5 #414242 reset -

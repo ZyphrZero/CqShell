@@ -1,0 +1,278 @@
+# case final_main_classic-light_120x36_zh-CN
+# size 120x36
+# theme classic
+# background #ffffff
+# locale zh-CN
+ CqShell v0.1.4  系统管理 › 系统概览                        系统修改请使用 sudo cqs · vps-sg-01 · ● 普通用户 · 简体中文 
+╭ 系统与资源 ────────────────────────────── 本机 2s 前更新 ╮╭ 网络与代理 ───────────────────────────── 公网 12s 前查询 ╮
+│ CPU  ▂▃▅▄▃▂▃▁▁▂▂▁  12% 2 核  内存 ━━━━━───  63% 1.2/1.9G ││ BBR  ○ 未启用 · 可用 / v3 · cubic                        │
+│ 磁盘 ━━╸───  41% 16.4/40.0G  交换 ━───────  10% 0.2/2.0G ││ TCP  ○ 未配置 · fq_codel                                 │
+│ 主机 vps-sg-01 · Debian GNU/Linux 12 (bookworm)          ││ IPv4 203.0.113.24 · AS64500 Example Net                  │
+│ 内核 6.12.8-joeyblog-bbrv3 · x86_64 · AMD EPYC 7B13 × 2  ││ IPv6 2001:db8:3c4d:15::1a2f                              │
+│ 运行 3d 04h 00m · Asia/Shanghai                          ││ 代理 Mihomo ● 运行中 · v1.19.2 · 终端 ● 已启用           │
+╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────╯
+╭ 功能分类 ────────╮╭ 系统管理 ────────────────────────── 1/12 ╮╭ 说明 ────────────────────────────────────────────────╮
+│  0 一键优化      ││  概览                                    ││ 系统概览                                             │
+│  ────────────────││› 系统概览                                ││ 只读 · 当前用户                                      │
+│› 1 系统管理      ││  查询公网 IP / ISP                 12s 前││                                                      │
+│  2 内核管理      ││  软件包与软件源                          ││ 读取主机、CPU、内存、磁盘、IP 及 BBR 状态。          │
+│  3 网络调优      ││  更新系统软件包                          ││                                                      │
+│  4 SSH           ││  系统软件源测速                          ││ cqs run system.info                                  │
+│  5 Docker        ││  更换系统软件源 · LinuxMirrors…          ││                                                      │
+│  6 Mihomo 代理 ● ││  恢复上次系统软件源                      ││ 上次结果  本次会话尚未执行                           │
+│  7 常用工具      ││  清理系统…                       磁盘 41%││                                                      │
+│  8 Agent 工具    ││  系统设置                                ││                                                      │
+│  9 终端美化      ││  设置时区…                  Asia/Shanghai││                                                      │
+│    服务器测试    ││  安装 fail2ban                           ││                                                      │
+│    CqShell       ││  SWAP                                    ││                                                      │
+│                  ││  创建 SWAP…                  已有 2.0 GiB││                                                      │
+│                  ││  自动重建 SWAP               已有 2.0 GiB││                                                      │
+│                  ││  删除 SWAP                   已有 2.0 GiB││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││                                                      │
+│                  ││                                          ││ ↵ 打开概览                                           │
+╰──────────────────╯╰──────────────────────────────────────────╯╰──────────────────────────────────────────────────────╯
+ ↑↓ 移动  Enter 打开  / 搜索操作  ←→ 切换分类  O 一键优化  T 界面风格  R 刷新  Q 退出  ? 帮助                           
+---
+0 1 7 #0a7d70 reset bold
+0 9 6 #57606a reset -
+0 17 11 #57606a reset -
+0 60 26 #57606a reset -
+0 95 24 #57606a reset -
+1 0 1 #8c959f reset -
+1 1 12 reset reset bold
+1 13 30 #8c959f reset -
+1 43 16 #57606a reset -
+1 59 2 #8c959f reset -
+1 61 12 reset reset bold
+1 73 29 #8c959f reset -
+1 102 17 #57606a reset -
+1 119 1 #8c959f reset -
+2 0 1 #8c959f reset -
+2 2 5 #57606a reset -
+2 7 17 #1a7f37 reset -
+2 24 5 #57606a reset -
+2 31 5 #57606a reset -
+2 36 5 #1a7f37 reset -
+2 41 3 #d0d7de reset -
+2 44 5 #1a7f37 reset -
+2 49 9 #57606a reset -
+2 59 2 #8c959f reset -
+2 62 16 #57606a reset -
+2 87 3 #57606a reset -
+2 119 1 #8c959f reset -
+3 0 1 #8c959f reset -
+3 2 5 #57606a reset -
+3 7 3 #1a7f37 reset -
+3 10 3 #d0d7de reset -
+3 13 5 #1a7f37 reset -
+3 18 11 #57606a reset -
+3 31 5 #57606a reset -
+3 36 1 #1a7f37 reset -
+3 37 7 #d0d7de reset -
+3 44 5 #1a7f37 reset -
+3 49 9 #57606a reset -
+3 59 2 #8c959f reset -
+3 62 16 #57606a reset -
+3 119 1 #8c959f reset -
+4 0 1 #8c959f reset -
+4 2 5 #57606a reset -
+4 16 3 #57606a reset -
+4 59 2 #8c959f reset -
+4 62 5 #57606a reset -
+4 79 3 #57606a reset -
+4 119 1 #8c959f reset -
+5 0 1 #8c959f reset -
+5 2 5 #57606a reset -
+5 28 3 #57606a reset -
+5 37 3 #57606a reset -
+5 59 2 #8c959f reset -
+5 62 5 #57606a reset -
+5 119 1 #8c959f reset -
+6 0 1 #8c959f reset -
+6 2 5 #57606a reset -
+6 17 3 #57606a reset -
+6 59 2 #8c959f reset -
+6 62 5 #57606a reset -
+6 67 15 #1a7f37 reset -
+6 82 3 #57606a reset -
+6 92 3 #57606a reset -
+6 95 13 #1a7f37 reset -
+6 119 1 #8c959f reset -
+7 0 120 #8c959f reset -
+8 0 1 #8c959f reset -
+8 1 10 reset reset bold
+8 11 10 #8c959f reset -
+8 21 10 reset reset bold
+8 31 26 #8c959f reset -
+8 57 6 #57606a reset -
+8 63 2 #8c959f reset -
+8 65 6 reset reset bold
+8 71 49 #8c959f reset -
+9 0 1 #8c959f reset -
+9 3 2 #57606a reset -
+9 19 2 #8c959f reset -
+9 23 40 #57606a reset bold
+9 63 2 #8c959f reset -
+9 66 8 reset reset bold
+9 119 1 #8c959f reset -
+10 0 1 #8c959f reset -
+10 3 16 #d0d7de reset -
+10 19 2 #8c959f reset -
+10 21 42 #ffffff #0a7d70 bold
+10 63 2 #8c959f reset -
+10 66 4 #1a7f37 reset -
+10 70 11 #57606a reset -
+10 119 1 #8c959f reset -
+11 0 1 #8c959f reset -
+11 1 18 #ffffff #0a7d70 bold
+11 19 2 #8c959f reset -
+11 57 6 #57606a reset -
+11 63 2 #8c959f reset -
+11 119 1 #8c959f reset -
+12 0 1 #8c959f reset -
+12 3 2 #57606a reset -
+12 19 2 #8c959f reset -
+12 23 40 #57606a reset bold
+12 63 2 #8c959f reset -
+12 119 1 #8c959f reset -
+13 0 1 #8c959f reset -
+13 3 2 #57606a reset -
+13 19 2 #8c959f reset -
+13 23 14 #57606a reset -
+13 63 2 #8c959f reset -
+13 119 1 #8c959f reset -
+14 0 1 #8c959f reset -
+14 3 2 #57606a reset -
+14 19 2 #8c959f reset -
+14 63 2 #8c959f reset -
+14 66 19 #0a7d70 reset -
+14 119 1 #8c959f reset -
+15 0 1 #8c959f reset -
+15 3 2 #57606a reset -
+15 19 2 #8c959f reset -
+15 23 30 #57606a reset -
+15 63 2 #8c959f reset -
+15 119 1 #8c959f reset -
+16 0 1 #8c959f reset -
+16 3 2 #57606a reset -
+16 16 2 #1a7f37 reset -
+16 19 2 #8c959f reset -
+16 23 18 #57606a reset -
+16 63 2 #8c959f reset -
+16 66 8 #57606a reset -
+16 76 16 #57606a reset -
+16 119 1 #8c959f reset -
+17 0 1 #8c959f reset -
+17 3 2 #57606a reset -
+17 19 2 #8c959f reset -
+17 23 9 #57606a reset -
+17 55 8 #57606a reset -
+17 63 2 #8c959f reset -
+17 119 1 #8c959f reset -
+18 0 1 #8c959f reset -
+18 3 2 #57606a reset -
+18 19 2 #8c959f reset -
+18 23 40 #57606a reset bold
+18 63 2 #8c959f reset -
+18 119 1 #8c959f reset -
+19 0 1 #8c959f reset -
+19 3 2 #57606a reset -
+19 19 2 #8c959f reset -
+19 23 9 #57606a reset -
+19 50 13 #57606a reset -
+19 63 2 #8c959f reset -
+19 119 1 #8c959f reset -
+20 0 1 #8c959f reset -
+20 3 2 #57606a reset -
+20 19 2 #8c959f reset -
+20 23 13 #57606a reset -
+20 63 2 #8c959f reset -
+20 119 1 #8c959f reset -
+21 0 1 #8c959f reset -
+21 3 2 #57606a reset -
+21 19 2 #8c959f reset -
+21 23 40 #57606a reset bold
+21 63 2 #8c959f reset -
+21 119 1 #8c959f reset -
+22 0 1 #8c959f reset -
+22 19 2 #8c959f reset -
+22 23 10 #57606a reset -
+22 51 12 #57606a reset -
+22 63 2 #8c959f reset -
+22 119 1 #8c959f reset -
+23 0 1 #8c959f reset -
+23 19 2 #8c959f reset -
+23 23 13 #57606a reset -
+23 51 12 #57606a reset -
+23 63 2 #8c959f reset -
+23 119 1 #8c959f reset -
+24 0 1 #8c959f reset -
+24 19 2 #8c959f reset -
+24 23 9 #57606a reset -
+24 51 12 #57606a reset -
+24 63 2 #8c959f reset -
+24 119 1 #8c959f reset -
+25 0 1 #8c959f reset -
+25 19 2 #8c959f reset -
+25 63 2 #8c959f reset -
+25 119 1 #8c959f reset -
+26 0 1 #8c959f reset -
+26 19 2 #8c959f reset -
+26 63 2 #8c959f reset -
+26 119 1 #8c959f reset -
+27 0 1 #8c959f reset -
+27 19 2 #8c959f reset -
+27 63 2 #8c959f reset -
+27 119 1 #8c959f reset -
+28 0 1 #8c959f reset -
+28 19 2 #8c959f reset -
+28 63 2 #8c959f reset -
+28 119 1 #8c959f reset -
+29 0 1 #8c959f reset -
+29 19 2 #8c959f reset -
+29 63 2 #8c959f reset -
+29 119 1 #8c959f reset -
+30 0 1 #8c959f reset -
+30 19 2 #8c959f reset -
+30 63 2 #8c959f reset -
+30 119 1 #8c959f reset -
+31 0 1 #8c959f reset -
+31 19 2 #8c959f reset -
+31 63 2 #8c959f reset -
+31 119 1 #8c959f reset -
+32 0 1 #8c959f reset -
+32 19 2 #8c959f reset -
+32 63 2 #8c959f reset -
+32 119 1 #8c959f reset -
+33 0 1 #8c959f reset -
+33 19 2 #8c959f reset -
+33 63 2 #8c959f reset -
+33 66 1 #0a7d70 reset bold
+33 67 9 #57606a reset -
+33 119 1 #8c959f reset -
+34 0 120 #8c959f reset -
+35 1 2 #0a7d70 reset bold
+35 3 5 #57606a reset -
+35 10 5 #0a7d70 reset bold
+35 15 5 #57606a reset -
+35 22 1 #0a7d70 reset bold
+35 23 9 #57606a reset -
+35 34 2 #0a7d70 reset bold
+35 36 9 #57606a reset -
+35 47 1 #0a7d70 reset bold
+35 48 9 #57606a reset -
+35 59 1 #0a7d70 reset bold
+35 60 9 #57606a reset -
+35 71 1 #0a7d70 reset bold
+35 72 5 #57606a reset -
+35 79 1 #0a7d70 reset bold
+35 80 5 #57606a reset -
+35 87 1 #0a7d70 reset bold
+35 88 5 #57606a reset -

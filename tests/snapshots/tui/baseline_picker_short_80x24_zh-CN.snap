@@ -1,0 +1,91 @@
+# case baseline_picker_short_80x24_zh-CN
+# size 80x24
+# theme classic
+# background unavailable
+# locale zh-CN
+ CqShell v0.1.4  系统管理 › 系统概览          vps-sg-01 · ● 普通用户 · 简体中文 
+╭ 系统与资源 ────────── 本机 2s 前更新 ╮╭ 网络与代理 ───────── 公网 12s 前查询 ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  内存 ━━━━╸──  63% ││ BBR  ○ 未启用 · 可用 / v3 · cubic    │
+│ 磁盘 ━━━────  41%  交换 ╸──────  10% ││ TCP  ○ 未配置 · fq_codel             │
+│ 主机 vps-sg-01                       ││ IPv4 203.0.113.24                    │
+│ 内核 6.12.8-joeyblog-bbrv3 · x86_64  ││ IPv6 2001:db8:3c4d:15::1a2f          │
+│ 运行 3d 04h 00m · Asia/Shanghai      ││ 代理 Mihomo ● 运行中 · v1.19.2       │
+╰╭ 选择订阅 · 订阅名称 ───────────────────────────────────────────────────────╮╯
+╭│                                                                            │╮
+││  › 输入以筛选                                                        2/2   │┃
+││                                                                            │┃
+││  › 订阅-0  host0.example                                                   │┃
+││    订阅-1  host1.example                                                   │┃
+││                                                                            ││
+││  ↑↓ 移动  Enter 选择  Esc 取消                                             ││
+│╰────────────────────────────────────────────────────────────────────────────╯│
+│  6 Mihomo 代理 ● ││  恢复上次系统软件源                                      │
+│  7 常用工具      │├ 说明 ────────────────────────────────────────────────────┤
+│  8 Agent 工具    ││ 系统概览                                                 │
+│  9 终端美化      ││ 只读 · 当前用户                                          │
+│    服务器测试    ││ 读取主机、CPU、内存、磁盘、IP 及 BBR 状态。              │
+│    CqShell       ││ cqs run system.info                                      │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ ↑↓ 移动  Enter 打开  ←→ 切换分类  O 一键优化  R 刷新  Q 退出  ? 帮助           
+---
+0 0 80 #3d5265 reset -
+1 0 80 #3d5265 reset -
+2 0 80 #3d5265 reset -
+3 0 80 #3d5265 reset -
+4 0 80 #3d5265 reset -
+5 0 80 #3d5265 reset -
+6 0 80 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #45cdb6 reset -
+7 2 21 #45cdb6 reset bold
+7 23 56 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #45cdb6 reset -
+8 78 1 #45cdb6 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #45cdb6 reset -
+9 4 2 #45cdb6 reset -
+9 6 69 #91a2b0 reset -
+9 78 1 #45cdb6 reset -
+9 79 1 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #45cdb6 reset -
+10 78 1 #45cdb6 reset -
+10 79 1 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #45cdb6 reset -
+11 4 72 black #45cdb6 bold
+11 78 1 #45cdb6 reset -
+11 79 1 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #45cdb6 reset -
+12 12 15 #91a2b0 reset -
+12 78 1 #45cdb6 reset -
+12 79 1 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #45cdb6 reset -
+13 78 1 #45cdb6 reset -
+13 79 1 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #45cdb6 reset -
+14 4 2 #45cdb6 reset bold
+14 6 5 #91a2b0 reset -
+14 13 5 #45cdb6 reset bold
+14 18 5 #91a2b0 reset -
+14 25 3 #45cdb6 reset bold
+14 28 5 #91a2b0 reset -
+14 78 1 #45cdb6 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 78 #45cdb6 reset -
+15 79 1 #3d5265 reset -
+16 0 80 #3d5265 reset -
+17 0 80 #3d5265 reset -
+18 0 80 #3d5265 reset -
+19 0 80 #3d5265 reset -
+20 0 80 #3d5265 reset -
+21 0 80 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 0 80 #3d5265 reset -

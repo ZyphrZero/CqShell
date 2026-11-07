@@ -1,0 +1,180 @@
+# case classic_plan_recommended_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  Optimization · 4                  vps-sg-01 · ● USER · English 
+╭ System & resources ── updated 2s ago ╮╭ Network & proxy ── looked up 12s ago ╮
+│ CPU  ▂▃▁▁▂▂▁  12%  Memory ━━━──  63% ││ BBR   ○ Disabled · available / v3    │
+│ Disk ━━━────  41%  Swap   ╸────  10% ││ TCP   ○ not configured · fq_codel    │
+│ Host   vps-sg-01                     ││ IPv4  203.0.113.24                   │
+│ Kernel 6.12.8-joeyblog-bbrv3         ││ IPv6  2001:db8:3c4d:15::1a2f         │
+│ Uptime 3d 04h 00m · Asia/Shanghai    ││ Proxy Mihomo ● Running · v1.19.2     │
+╰──────────────────────────────────────╯╰──────────────────────────────────────╯
+╭ Categories ──────╮╭ Optimization · Selected: 4 ──────────────────────── 1/11 ╮
+│› 0 Optimization 4││› [✓] Update packages                                     ┃
+│  ────────────────││  [✓] Clean system…                               standard┃
+│  1 System        ││  [✓] Tune TCP buffers…                1000 Mbit/s · 50 ms┃
+│  2 Kernel        ││  [✓] Enable BBR in the running kernel…                 fq┃
+│  3 Network       ││  [ ] Set timezone…                Asia/Shanghai = current┃
+│  4 SSH           ││  [ ] Rebuild swap automatically                          │
+│  5 Docker        ││  [ ] Install fail2ban                                    │
+│  6 Mihomo proxy ●││  [ ] Install all / choose a package…                  all│
+│  7 Tools         │├ Execution plan ──────────────────────────────────────────┤
+│  8 Agent tools   ││Update packages                                           │
+│  9 Prompt        ││Changes system or user files · Requires root              │
+│    Tests         ││1. Update packages                                        │
+│    CqShell       ││X review and run  A use recommended                       │
+╰──────────────────╯╰──────────────────────────────────────────────────────────╯
+ Space select  Enter configure  F5 review & run  ←→ switch category  ? help     
+---
+0 1 7 #45cdb6 reset bold
+0 9 6 #91a2b0 reset -
+0 17 15 #91a2b0 reset -
+0 32 1 #45cdb6 reset bold
+0 60 19 #91a2b0 reset -
+1 0 1 #3d5265 reset -
+1 1 20 reset reset bold
+1 21 2 #3d5265 reset -
+1 23 16 #91a2b0 reset -
+1 39 2 #3d5265 reset -
+1 41 17 reset reset bold
+1 58 2 #3d5265 reset -
+1 60 19 #91a2b0 reset -
+1 79 1 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 2 5 #91a2b0 reset -
+2 7 12 #5dd888 reset -
+2 21 7 #91a2b0 reset -
+2 28 3 #5dd888 reset -
+2 31 2 #3d5265 reset -
+2 33 5 #5dd888 reset -
+2 39 2 #3d5265 reset -
+2 42 19 #91a2b0 reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 2 5 #91a2b0 reset -
+3 7 3 #5dd888 reset -
+3 10 4 #3d5265 reset -
+3 14 5 #5dd888 reset -
+3 21 7 #91a2b0 reset -
+3 28 1 #5dd888 reset -
+3 29 4 #3d5265 reset -
+3 33 5 #5dd888 reset -
+3 39 2 #3d5265 reset -
+3 42 25 #91a2b0 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 2 7 #91a2b0 reset -
+4 39 2 #3d5265 reset -
+4 42 6 #91a2b0 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 2 7 #91a2b0 reset -
+5 39 2 #3d5265 reset -
+5 42 6 #91a2b0 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 2 7 #91a2b0 reset -
+6 19 3 #91a2b0 reset -
+6 39 2 #3d5265 reset -
+6 42 6 #91a2b0 reset -
+6 48 16 #5dd888 reset -
+6 64 3 #91a2b0 reset -
+6 79 1 #3d5265 reset -
+7 0 80 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 12 reset reset bold
+8 13 8 #3d5265 reset -
+8 21 28 reset reset bold
+8 49 24 #3d5265 reset -
+8 73 6 #91a2b0 reset -
+8 79 1 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 18 black #45cdb6 bold
+9 19 2 #3d5265 reset -
+9 21 58 black #45cdb6 bold
+9 79 1 #45cdb6 reset -
+10 0 1 #3d5265 reset -
+10 3 18 #3d5265 reset -
+10 23 4 #45cdb6 reset -
+10 27 13 #91a2b0 reset -
+10 71 8 #91a2b0 reset -
+10 79 1 #45cdb6 reset -
+11 0 1 #3d5265 reset -
+11 3 2 #91a2b0 reset -
+11 19 2 #3d5265 reset -
+11 23 4 #45cdb6 reset -
+11 27 17 #91a2b0 reset -
+11 60 19 #91a2b0 reset -
+11 79 1 #45cdb6 reset -
+12 0 1 #3d5265 reset -
+12 3 2 #91a2b0 reset -
+12 19 2 #3d5265 reset -
+12 23 4 #45cdb6 reset -
+12 27 33 #91a2b0 reset -
+12 77 2 #91a2b0 reset -
+12 79 1 #45cdb6 reset -
+13 0 1 #3d5265 reset -
+13 3 2 #91a2b0 reset -
+13 19 2 #3d5265 reset -
+13 23 17 #91a2b0 reset -
+13 56 23 #91a2b0 reset -
+13 79 1 #45cdb6 reset -
+14 0 1 #3d5265 reset -
+14 3 2 #91a2b0 reset -
+14 19 2 #3d5265 reset -
+14 23 30 #91a2b0 reset -
+14 79 1 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 3 2 #91a2b0 reset -
+15 19 2 #3d5265 reset -
+15 23 20 #91a2b0 reset -
+15 79 1 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 3 2 #91a2b0 reset -
+16 17 2 #5dd888 reset -
+16 19 2 #3d5265 reset -
+16 23 35 #91a2b0 reset -
+16 76 3 #91a2b0 reset -
+16 79 1 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 3 2 #91a2b0 reset -
+17 19 2 #3d5265 reset -
+17 21 16 reset reset bold
+17 37 43 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 3 2 #91a2b0 reset -
+18 19 2 #3d5265 reset -
+18 79 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 3 2 #91a2b0 reset -
+19 19 2 #3d5265 reset -
+19 21 28 #ffbe5e reset -
+19 49 3 #91a2b0 reset -
+19 52 13 #ffbe5e reset -
+19 79 1 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 3 2 #91a2b0 reset -
+20 19 2 #3d5265 reset -
+20 21 18 reset reset bold
+20 79 1 #3d5265 reset -
+21 0 1 #3d5265 reset -
+21 3 2 #91a2b0 reset -
+21 19 2 #3d5265 reset -
+21 21 1 #45cdb6 reset bold
+21 22 15 #91a2b0 reset -
+21 39 1 #45cdb6 reset bold
+21 40 16 #91a2b0 reset -
+21 79 1 #3d5265 reset -
+22 0 80 #3d5265 reset -
+23 1 5 #45cdb6 reset bold
+23 6 7 #91a2b0 reset -
+23 15 5 #45cdb6 reset bold
+23 20 10 #91a2b0 reset -
+23 32 2 #45cdb6 reset bold
+23 34 13 #91a2b0 reset -
+23 49 2 #45cdb6 reset bold
+23 51 16 #91a2b0 reset -
+23 69 1 #45cdb6 reset bold
+23 70 5 #91a2b0 reset -

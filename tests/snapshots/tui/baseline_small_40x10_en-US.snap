@@ -1,0 +1,19 @@
+# case baseline_small_40x10_en-US
+# size 40x10
+# theme classic
+# background unavailable
+# locale en-US
+                                        
+                                        
+                                        
+    Terminal too small. Resize to at    
+     least 80 × 24, or use the CLI.     
+           Current size 40×10           
+                                        
+                                        
+                                        
+                                        
+---
+3 4 32 #ffbe5e reset -
+4 5 30 #ffbe5e reset -
+5 11 18 #91a2b0 reset -

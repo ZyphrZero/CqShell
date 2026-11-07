@@ -1,0 +1,66 @@
+# case final_main_plain_80x24_en-US
+# size 80x24
+# theme plain
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System > System overview          vps-sg-01 | * USER | English 
++ System & resources -- updated 2s ago ++ Network & proxy -- looked up 12s ago +
+| CPU  :-..::.  12%  Memory ###--  63% || BBR   o Disabled | available / v3    |
+| Disk ###----  41%  Swap   #----  10% || TCP   o not configured | fq_codel    |
+| Host   vps-sg-01                     || IPv4  203.0.113.24                   |
+| Kernel 6.12.8-joeyblog-bbrv3         || IPv6  2001:db8:3c4d:15::1a2f         |
+| Uptime 3d 04h 00m | Asia/Shanghai    || Proxy Mihomo * Running | v1.19.2     |
++--------------------------------------++--------------------------------------+
++ Categories ------++ System -------------------------------------------- 1/12 +
+|  0 Optimization  ||  Overview                                                #
+|  ----------------||> System overview                                         #
+|> 1 System        ||  Public IP / ISP lookup                           12s ago#
+|  2 Kernel        ||  Packages & mirrors                                      #
+|  3 Network       ||  Update packages                                         |
+|  4 SSH           ||  Benchmark system mirrors                                |
+|  5 Docker        ||  Change system mirror · LinuxMirrors...                  |
+|  6 Mihomo proxy *||  Restore previous system sources                         |
+|  7 Tools         |+ Details -------------------------------------------------+
+|  8 Agent tools   || System overview                                          |
+|  9 Prompt        || Read only | Current user                                 |
+|    Tests         || Read host, CPU, memory, disk, IP and BBR status.         |
+|    CqShell       || cqs run system.info                                      |
++------------------++----------------------------------------------------------+
+ [UP/DN] move  [ENTER] open  [/] search actions  [?] help                       
+---
+0 1 7 reset reset bold
+0 23 3 reset reset dim
+0 60 12 reset reset dim
+1 1 20 reset reset bold
+1 41 17 reset reset bold
+2 58 3 reset reset dim
+3 64 3 reset reset dim
+6 19 3 reset reset dim
+6 64 3 reset reset dim
+8 1 12 reset reset bold
+8 21 8 reset reset bold
+9 3 2 reset reset dim
+9 23 56 reset reset bold
+10 21 58 reset reset bold
+11 1 2 reset reset bold
+11 3 2 reset reset bold+dim
+11 5 14 reset reset bold
+12 3 2 reset reset dim
+12 23 56 reset reset bold
+13 3 2 reset reset dim
+14 3 2 reset reset dim
+15 3 2 reset reset dim
+16 3 2 reset reset dim
+16 17 2 green reset -
+17 3 2 reset reset dim
+17 21 9 reset reset bold
+18 3 2 reset reset dim
+18 22 15 reset reset bold
+19 3 2 reset reset dim
+19 31 3 reset reset dim
+20 3 2 reset reset dim
+21 3 2 reset reset dim
+23 1 7 reset reset bold
+23 15 7 reset reset bold
+23 29 3 reset reset bold
+23 49 3 reset reset bold

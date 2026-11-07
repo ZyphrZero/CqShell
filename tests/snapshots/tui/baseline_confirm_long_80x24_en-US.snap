@@ -1,0 +1,123 @@
+# case baseline_confirm_long_80x24_en-US
+# size 80x24
+# theme classic
+# background unavailable
+# locale en-US
+ CqShell v0.1.4  System › System overview          vps-sg-01 · ● USER · English 
+╭╭ ! Confirm operation ───────────────────────────────────────────────────────╮╮
+││                                                                            ││
+││  item 0                                                                    ┃│
+││                                                                            ┃│
+││  item 1                                                                    ┃│
+││  item 2                                                                    ┃│
+╰│  item 3                                                                    ┃╯
+╭│  item 4                                                                    │╮
+││  item 5                                                                    │┃
+││  item 6                                                                    │┃
+││  item 7                                                                    │┃
+││  item 8                                                                    │┃
+││  item 9                                                                    ││
+││  item 10                                                                   ││
+││  item 11                                                                   ││
+││  item 12                                                                   ││
+││  item 13                                                                   │┤
+││                                                                            ││
+││  [ Cancel ]  [ Confirm execution ]                                         ││
+││                                                                            ││
+││  ←→ switch  Enter confirm  Y run  PgUp/PgDn scroll  Esc Cancel             ││
+╰╰────────────────────────────────────────────────────────────────────────────╯╯
+ ↑↓ move  Enter open  ←→ switch category  O optimize  R refresh  Q quit  ? help 
+---
+0 0 80 #3d5265 reset -
+1 0 1 #3d5265 reset -
+1 1 1 #ffbe5e reset -
+1 2 21 #ffbe5e reset bold
+1 23 56 #ffbe5e reset -
+1 79 1 #3d5265 reset -
+2 0 1 #3d5265 reset -
+2 1 1 #ffbe5e reset -
+2 78 1 #ffbe5e reset -
+2 79 1 #3d5265 reset -
+3 0 1 #3d5265 reset -
+3 1 1 #ffbe5e reset -
+3 4 6 reset reset bold
+3 78 1 #45cdb6 reset -
+3 79 1 #3d5265 reset -
+4 0 1 #3d5265 reset -
+4 1 1 #ffbe5e reset -
+4 78 1 #45cdb6 reset -
+4 79 1 #3d5265 reset -
+5 0 1 #3d5265 reset -
+5 1 1 #ffbe5e reset -
+5 78 1 #45cdb6 reset -
+5 79 1 #3d5265 reset -
+6 0 1 #3d5265 reset -
+6 1 1 #ffbe5e reset -
+6 78 1 #45cdb6 reset -
+6 79 1 #3d5265 reset -
+7 0 1 #3d5265 reset -
+7 1 1 #ffbe5e reset -
+7 78 1 #45cdb6 reset -
+7 79 1 #3d5265 reset -
+8 0 1 #3d5265 reset -
+8 1 1 #ffbe5e reset -
+8 78 2 #3d5265 reset -
+9 0 1 #3d5265 reset -
+9 1 1 #ffbe5e reset -
+9 78 2 #3d5265 reset -
+10 0 1 #3d5265 reset -
+10 1 1 #ffbe5e reset -
+10 78 2 #3d5265 reset -
+11 0 1 #3d5265 reset -
+11 1 1 #ffbe5e reset -
+11 78 2 #3d5265 reset -
+12 0 1 #3d5265 reset -
+12 1 1 #ffbe5e reset -
+12 78 2 #3d5265 reset -
+13 0 1 #3d5265 reset -
+13 1 1 #ffbe5e reset -
+13 78 2 #3d5265 reset -
+14 0 1 #3d5265 reset -
+14 1 1 #ffbe5e reset -
+14 78 2 #3d5265 reset -
+15 0 1 #3d5265 reset -
+15 1 1 #ffbe5e reset -
+15 78 2 #3d5265 reset -
+16 0 1 #3d5265 reset -
+16 1 1 #ffbe5e reset -
+16 78 2 #3d5265 reset -
+17 0 1 #3d5265 reset -
+17 1 1 #ffbe5e reset -
+17 78 2 #3d5265 reset -
+18 0 1 #3d5265 reset -
+18 1 1 #ffbe5e reset -
+18 78 1 #ffbe5e reset -
+18 79 1 #3d5265 reset -
+19 0 1 #3d5265 reset -
+19 1 1 #ffbe5e reset -
+19 4 10 black #45cdb6 bold
+19 16 21 #ffbe5e reset -
+19 78 1 #ffbe5e reset -
+19 79 1 #3d5265 reset -
+20 0 1 #3d5265 reset -
+20 1 1 #ffbe5e reset -
+20 78 1 #ffbe5e reset -
+20 79 1 #3d5265 reset -
+21 0 1 #3d5265 reset -
+21 1 1 #ffbe5e reset -
+21 4 2 #45cdb6 reset bold
+21 6 7 #91a2b0 reset -
+21 15 5 #45cdb6 reset bold
+21 20 8 #91a2b0 reset -
+21 30 1 #45cdb6 reset bold
+21 31 4 #91a2b0 reset -
+21 37 9 #45cdb6 reset bold
+21 46 7 #91a2b0 reset -
+21 55 3 #45cdb6 reset bold
+21 58 7 #91a2b0 reset -
+21 78 1 #ffbe5e reset -
+21 79 1 #3d5265 reset -
+22 0 1 #3d5265 reset -
+22 1 78 #ffbe5e reset -
+22 79 1 #3d5265 reset -
+23 0 80 #3d5265 reset -
