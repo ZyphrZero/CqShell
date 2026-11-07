@@ -388,7 +388,7 @@ fn themes(ctx: &Context, json: bool) -> Result<()> {
             ctx.i18n
                 .format("ui.theme_error", &[("detail", &error.to_string())])
         });
-        rows.push(serde_json::json!({"id": custom.id, "name": custom.result.as_ref().map(&name).unwrap_or_else(|_| custom.id.clone()), "builtin": false, "path": custom.path, "valid": error.is_none(), "error": error}));
+        rows.push(serde_json::json!({"id": custom.id, "name": custom.result.as_ref().map(name).unwrap_or_else(|_| custom.id.clone()), "builtin": false, "path": custom.path, "valid": error.is_none(), "error": error}));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
