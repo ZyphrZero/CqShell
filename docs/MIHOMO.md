@@ -193,4 +193,6 @@ CQS_PANEL_SMOKE_MIHOMO=/absolute/path/to/mihomo \
 
 2026-11-03 修复验收：Windows 全量测试与 WSL Linux 全量测试、格式检查及 Clippy 均通过。Debian 12 amd64 上使用已校验的真实 Mihomo v1.19.33，通过 8 项本轮回归测试、真实控制器与启动取消测试、systemd 静态解析，以及 11 项公开 CLI 隔离验收；后者包含真实 HTTP/SOCKS 请求、本地可信 HTTPS 订阅 add/use/update、失败配置保持不变、进程身份恢复和崩溃重启。控制器通配监听测试在只有回环接口的独立网络命名空间中执行，没有开放宿主机控制器端口。
 
-该 Debian 12 环境的完整 Mihomo 专项仍有一项原有失败：curl 7.88.1 对分块响应没有及时执行 `--max-filesize`，`release_asset_download_limit_applies_to_chunked_responses` 检测到超限文件已经写入。程序最终会拒绝大小不匹配的资产，但不能据此认为下载期间的落盘上限已得到保证。该兼容性问题不属于本轮四项修复，测试断言和服务器 curl 均未被放宽或替换；不能将本轮结果视为全功能验收完成。
+当时该 Debian 12 环境的完整 Mihomo 专项仍有一项原有失败：curl 7.88.1 对分块响应没有及时执行 `--max-filesize`，`release_asset_download_limit_applies_to_chunked_responses` 检测到超限文件已经写入。程序最终会拒绝大小不匹配的资产，但不能据此认为下载期间的落盘上限已得到保证；该兼容性问题不属于上述四项修复。
+
+2026-11-06 下载限额修复：引擎与面板发布资产改为在应用侧按声明大小有界读取 curl 的 stdout，只将限额内的字节写入临时文件；发现额外字节或 I/O 错误时中断并回收子进程。curl 成功退出且实际大小完全匹配后才发布到目标路径，失败时清理临时文件并保留原目标。在未升级 curl 7.88.1 的日本 Debian 12 主机上，原分块 HTTPS 回归、精确/不足长度、原文件保留、限额读取与写入、取消和进程回收测试均通过；完整 `cargo test --locked` 通过 375 项，0 失败，11 项按原配置忽略。运行测试的是本地编译后上传的隔离产物，未替换正式安装，也不代表已验收原生 TUN 路由、开机恢复、ARM64 或默认忽略的外部资源测试。

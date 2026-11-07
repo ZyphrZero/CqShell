@@ -1319,35 +1319,7 @@ fn validate_new_profile(profiles: &ProfilesFile, name: &str, url: &str) -> Resul
 }
 
 fn download_release_asset(ctx: &Context, url: &str, target: &Path, size: u64) -> Result<()> {
-    let target = path_string(target)?;
-    let max_size = size.to_string();
-    ctx.run(
-        "curl",
-        &[
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "-fSL",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "300",
-            "--max-filesize",
-            &max_size,
-            "--output",
-            &target,
-            url,
-        ],
-    )?;
-    let actual_size = fs::metadata(&target)?.len();
-    if actual_size != size {
-        return Err(Error::new(
-            "error.release",
-            format!("asset size: expected {size}, received {actual_size}"),
-        ));
-    }
-    Ok(())
+    ctx.download_exact(url, target, 300, size)
 }
 
 fn version_banner_matches(banner: &str, version: &str) -> bool {
@@ -1833,11 +1805,20 @@ server.serve_forever()
         let url = format!("https://localhost:{}/asset", port.trim());
 
         assert!(download_release_asset(&ctx, &url, &target, 16).is_err());
-        assert!(fs::metadata(target).map_or(true, |metadata| metadata.len() <= 16));
+        assert!(fs::metadata(&target).map_or(true, |metadata| metadata.len() <= 16));
+        assert!(!target.exists());
+
+        fs::write(&target, b"previous asset").unwrap();
+        let files_before = fs::read_dir(temp.path()).unwrap().count();
+        for size in [16, 513] {
+            assert!(download_release_asset(&ctx, &url, &target, size).is_err());
+            assert_eq!(fs::read(&target).unwrap(), b"previous asset");
+            assert_eq!(fs::read_dir(temp.path()).unwrap().count(), files_before);
+        }
 
         let valid_target = temp.path().join("valid.gz");
         download_release_asset(&ctx, &url, &valid_target, 512).unwrap();
-        assert_eq!(fs::metadata(valid_target).unwrap().len(), 512);
+        assert_eq!(fs::read(valid_target).unwrap(), vec![b'x'; 512]);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, IsTerminal, Read, Write},
     path::Path,
-    process::{Command, Output, Stdio},
+    process::{ChildStdout, Command, Output, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -195,6 +195,17 @@ impl Context {
         }
     }
     pub fn command(&self, program: &str, args: &[&str], stream: bool) -> Result<Output> {
+        self.command_with_stdout(program, args, stream, move |stdout, ctx| {
+            read_output(stdout, ctx, stream)
+        })
+    }
+    fn command_with_stdout(
+        &self,
+        program: &str,
+        args: &[&str],
+        stream: bool,
+        read_stdout: impl FnOnce(ChildStdout, &Self) -> Result<Vec<u8>> + Send + 'static,
+    ) -> Result<Output> {
         self.check()?;
         let mut command = Command::new(program);
         command
@@ -227,14 +238,23 @@ impl Context {
         let stderr = child.stderr.take().expect("piped stderr");
         let ctx1 = self.clone();
         let ctx2 = self.clone();
-        let a = thread::spawn(move || read_output(stdout, &ctx1, stream));
+        let read_failed = Arc::new(AtomicBool::new(false));
+        let stdout_failed = read_failed.clone();
+        let a = thread::spawn(move || {
+            let result = read_stdout(stdout, &ctx1);
+            stdout_failed.store(result.is_err(), Ordering::SeqCst);
+            result
+        });
         let b = thread::spawn(move || read_output(stderr, &ctx2, stream));
         let mut interrupted = false;
         let status = loop {
             if let Some(status) = child.try_wait()? {
                 break status;
             }
-            if !self.recovering && self.cancel.load(Ordering::SeqCst) && !interrupted {
+            if (!self.recovering && self.cancel.load(Ordering::SeqCst)
+                || read_failed.load(Ordering::SeqCst))
+                && !interrupted
+            {
                 interrupted = true;
                 // SIGINT lets package managers finish their own cleanup. Never escalate to SIGKILL.
                 #[cfg(unix)]
@@ -246,12 +266,10 @@ impl Context {
             }
             thread::sleep(Duration::from_millis(50));
         };
-        let stdout = a
-            .join()
-            .map_err(|_| Error::new("error.io", "stdout reader panicked"))??;
-        let stderr = b
-            .join()
-            .map_err(|_| Error::new("error.io", "stderr reader panicked"))??;
+        let stdout = a.join();
+        let stderr = b.join();
+        let stdout = stdout.map_err(|_| Error::new("error.io", "stdout reader panicked"))??;
+        let stderr = stderr.map_err(|_| Error::new("error.io", "stderr reader panicked"))??;
         if interrupted {
             return Err(Error::new("error.cancelled", program));
         }
@@ -282,6 +300,64 @@ impl Context {
     }
     pub fn download(&self, url: &str, target: &Path, seconds: u32) -> Result<()> {
         self.download_as(url, target, seconds, None)
+    }
+    pub(crate) fn download_exact(
+        &self,
+        url: &str,
+        target: &Path,
+        seconds: u32,
+        size: u64,
+    ) -> Result<()> {
+        self.check()?;
+        let parsed = url::Url::parse(url).map_err(|error| Error::new("error.url", error))?;
+        if parsed.scheme() != "https"
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err(Error::new("error.url", url));
+        }
+        let parent = target
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let download = tempfile::NamedTempFile::new_in(parent)?;
+        let output = download.reopen()?;
+        let seconds = seconds.to_string();
+        let max_size = size.to_string();
+        let args = [
+            "-q",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "-fSL",
+            "--connect-timeout",
+            "15",
+            "--max-time",
+            &seconds,
+            "--max-filesize",
+            &max_size,
+            "--output",
+            "-",
+            url,
+        ];
+        let result = self.command_with_stdout("curl", &args, true, move |stdout, _| {
+            copy_bounded(stdout, output, size)?;
+            Ok(Vec::new())
+        })?;
+        self.success("curl", &args, &result)?;
+        self.check()?;
+        let actual_size = download.as_file().metadata()?.len();
+        if actual_size != size {
+            return Err(Error::new(
+                "error.release",
+                format!("asset size: expected {size}, received {actual_size}"),
+            ));
+        }
+        download
+            .persist(target)
+            .map_err(|error| Error::from(error.error))?;
+        Ok(())
     }
     /// Like [`Self::download`], identifying the client to servers that pick the response
     /// format by User-Agent. `None` keeps curl's own identity.
@@ -321,6 +397,17 @@ impl Context {
         }
         Ok(())
     }
+}
+
+fn copy_bounded(mut input: impl Read, mut output: impl Write, limit: u64) -> Result<()> {
+    std::io::copy(&mut input.by_ref().take(limit), &mut output)?;
+    if std::io::copy(&mut input.take(1), &mut std::io::sink())? != 0 {
+        return Err(Error::new(
+            "error.release",
+            format!("asset exceeds expected size of {limit} bytes"),
+        ));
+    }
+    Ok(())
 }
 
 fn read_output(input: impl Read, ctx: &Context, stream: bool) -> Result<Vec<u8>> {
@@ -462,4 +549,103 @@ pub fn sha256(path: &Path) -> Result<String> {
         hash.update(&buffer[..n]);
     }
     Ok(format!("{:x}", hash.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_copy_never_writes_or_reads_past_its_budget() {
+        for limit in [0, 1, 16, 65536, 65537] {
+            let bytes = vec![0x5a; limit + 512];
+            let mut input = std::io::Cursor::new(&bytes);
+            let mut output = Vec::new();
+            let error = copy_bounded(&mut input, &mut output, limit as u64).unwrap_err();
+            assert_eq!(error.key, "error.release");
+            assert_eq!(output, bytes[..limit]);
+            assert_eq!(input.position(), limit as u64 + 1);
+        }
+    }
+
+    #[test]
+    fn bounded_copy_preserves_exact_and_short_payloads() {
+        for length in [0, 15, 16] {
+            let bytes = (0..length).map(|index| index * 17).collect::<Vec<u8>>();
+            let mut output = Vec::new();
+            copy_bounded(bytes.as_slice(), &mut output, 16).unwrap();
+            assert_eq!(output, bytes);
+        }
+    }
+
+    #[test]
+    fn bounded_copy_propagates_io_errors() {
+        let error = copy_bounded(b"bytes".as_slice(), [].as_mut_slice(), 16).unwrap_err();
+        assert_eq!(error.key, "error.io");
+        struct FailedReader;
+        impl Read for FailedReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture read failure"))
+            }
+        }
+        let error = copy_bounded(FailedReader, std::io::sink(), 16).unwrap_err();
+        assert_eq!(error.key, "error.io");
+        assert!(error.detail.contains("fixture read failure"));
+    }
+
+    #[test]
+    fn cancelled_download_preserves_the_target_without_creating_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        let target = temp.path().join("asset");
+        std::fs::write(&target, b"previous asset").unwrap();
+        let files_before = std::fs::read_dir(temp.path()).unwrap().count();
+        ctx.cancel.store(true, Ordering::SeqCst);
+        let error = ctx
+            .download_exact("https://example.invalid/asset", &target, 30, 16)
+            .unwrap_err();
+        assert_eq!(error.key, "error.cancelled");
+        assert_eq!(std::fs::read(target).unwrap(), b"previous asset");
+        assert_eq!(
+            std::fs::read_dir(temp.path()).unwrap().count(),
+            files_before
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_copy_failure_stops_and_reaps_the_process() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        let pid_path = temp.path().join("pid");
+        let started = std::time::Instant::now();
+        let error = ctx
+            .command_with_stdout(
+                "sh",
+                &[
+                    "-c",
+                    "echo $$ > \"$1\"; printf 'too much data'; exec sleep 30",
+                    "fixture",
+                    path(&pid_path).unwrap(),
+                ],
+                false,
+                |stdout, _| {
+                    copy_bounded(stdout, std::io::sink(), 1)?;
+                    Ok(Vec::new())
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.key, "error.release");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let pid: i32 = std::fs::read_to_string(pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
 }
