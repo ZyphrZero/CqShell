@@ -73,7 +73,7 @@ sudo cqs --uninstall      # 卸载默认命令（保留配置与恢复基线）
 
 | 用途 | 追加参数 |
 | --- | --- |
-| 指定版本（网关不支持 API、限流或需安装旧版/预发布版时） | `--version v0.1.5` |
+| 指定版本（网关不支持 API、限流或需安装旧版/预发布版时） | `--version v0.1.6` |
 | 安装到自定义绝对路径 | `--install-dir /opt/cqs` |
 | 安装到当前用户目录（同时去掉 `sudo`） | `--install-dir "$HOME/.local/bin"` |
 
@@ -139,7 +139,7 @@ cargo build --release --locked
 - **全栈运维闭环**：
   - **容器**：`s` 启停、`u` 重启、`p` 暂停、`e` / `Shift+E` 进入原生 `docker exec -it` 交互终端、`Space` 多选批量操作、`l` 实时流式/全屏日志、`m` 实时 CPU/内存 Sparkline 与 `docker top`、`v` 环境与挂载检查（敏感凭据默认脱敏，`Shift+S` 临时显隐）。
   - **Compose**：项目与服务拓扑、关联容器联动、聚合日志、YAML 只读预览及 `Up / Stop / Restart / Pull / Down`。
-  - **镜像 / 卷 / 网络 / 守护进程**：镜像拉取与层级历史、卷与网络引用保护、可视化空间回收 Prune 向导（`Shift+P`），并将安装、镜像源、IPv6、清理与卸载统一整合至「守护进程」页。
+  - **镜像 / 卷 / 网络 / 守护进程**：镜像拉取与层级历史、`g` 快捷键一键配置镜像加速源（内置常用预设 / 逗号分隔多源故障转移 / `clear` 恢复直连）、卷与网络引用保护、可视化空间回收 Prune 向导（`Shift+P`），并将安装、镜像源、IPv6、清理与卸载统一整合至「守护进程」页。
 - **零重依赖与分级确认**：全程基于原生 `docker` / `docker compose` JSON 输出（天然兼容 Rootless、`DOCKER_HOST` 与 Context），离开 10 秒后后台监控自动休眠；卷删除、批量删除 ≥3 项与含卷 Prune 均需输入口令（`REMOVE` / `PRUNE`）确认。
 
 ---

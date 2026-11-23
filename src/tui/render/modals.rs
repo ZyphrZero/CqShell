@@ -548,6 +548,50 @@ pub(super) fn draw_form(app: &App, frame: &mut Frame, area: Rect, form: &Form, a
                     );
                 }
             }
+            if form.preset_chips(idx) {
+                for (fi, ci, chip_rect) in &geom.chips {
+                    if *fi != idx {
+                        continue;
+                    }
+                    let choice = field.choices[*ci];
+                    let selected = form.values[idx].text.eq_ignore_ascii_case(choice);
+                    let hovered = app.hover.is_some_and(|p| chip_rect.contains(p));
+                    let (c_fg, c_bg) = if selected {
+                        (
+                            tokens::color(theme, Role::OnAccent),
+                            tokens::color(theme, Role::Accent),
+                        )
+                    } else if hovered {
+                        (
+                            tokens::color(theme, Role::Text1),
+                            tokens::color(theme, Role::Selection),
+                        )
+                    } else {
+                        (
+                            tokens::color(theme, Role::Text2),
+                            if theme.flags.paint_bg {
+                                tokens::color(theme, Role::SurfaceAlt)
+                            } else {
+                                bg
+                            },
+                        )
+                    };
+                    buf.set_stringn(
+                        chip_rect.x,
+                        chip_rect.y,
+                        format!(" {choice} "),
+                        chip_rect.width as usize,
+                        Style::default()
+                            .fg(c_fg)
+                            .bg(c_bg)
+                            .add_modifier(if selected {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
+                    );
+                }
+            }
         }
     }
 

@@ -260,6 +260,11 @@ impl Form {
         !field.choices.is_empty() && !field.allow_custom
     }
 
+    pub fn preset_chips(&self, index: usize) -> bool {
+        let field = &self.spec.fields[index];
+        !field.choices.is_empty() && field.allow_custom
+    }
+
     pub fn listed(&self, index: usize) -> bool {
         self.spec.fields[index].source.is_some()
     }
@@ -1834,6 +1839,19 @@ impl App {
                 ("time".into(), options.time),
                 ("git".into(), options.git),
             ]);
+        }
+        if spec.id == "docker.mirror" && !self.parameters.contains_key(spec.id) {
+            let existing = self
+                .docker
+                .snapshot
+                .engine
+                .as_ref()
+                .map(|e| e.daemon_mirrors.clone())
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| crate::ops::docker::configured_mirrors(&self.ctx.paths.docker));
+            if !existing.is_empty() {
+                values.insert("mirror".into(), existing.join(", "));
+            }
         }
         if spec.id == "github.proxy" {
             let saved_url = self.ctx.github_proxy.clone().unwrap_or_else(|| {

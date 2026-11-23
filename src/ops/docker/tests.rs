@@ -254,3 +254,66 @@ fn confirmation_policies_and_argument_validation_enforce_safety_tiers() {
     };
     assert!(build_exec_args(&exec_bad, "/bin/sh").is_err());
 }
+
+#[test]
+fn mirror_presets_multi_mirrors_clear_and_validation_work() {
+    use super::{Change, PRESET_RECOMMENDED, candidate, configured_mirrors, parse_mirrors};
+
+    // Recommended preset expands to all curated China mirrors in failover order.
+    let rec = parse_mirrors("recommended").unwrap();
+    assert_eq!(rec.len(), PRESET_RECOMMENDED.len());
+    assert_eq!(rec[0], "https://docker.1ms.run");
+    assert_eq!(parse_mirrors("china").unwrap(), rec);
+
+    // Individual presets & mixed comma/whitespace multi-mirror with deduplication.
+    let mixed = parse_mirrors("1ms, daocloud, https://mirror.example.com, https://docker.1ms.run/")
+        .unwrap();
+    assert_eq!(
+        mixed,
+        vec![
+            "https://docker.1ms.run",
+            "https://docker.m.daocloud.io",
+            "https://mirror.example.com",
+        ]
+    );
+
+    // Candidate writes array cleanly and preserves other daemon.json keys.
+    let updated = candidate(
+        r#"{"data-root":"/srv/docker","log-driver":"journald"}"#,
+        Change::Mirror("1ms,xuanyuan"),
+        "",
+    )
+    .unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&updated).unwrap();
+    assert_eq!(parsed["data-root"], "/srv/docker");
+    assert_eq!(
+        parsed["registry-mirrors"],
+        serde_json::json!(["https://docker.1ms.run", "https://docker.xuanyuan.me"])
+    );
+
+    // Clear keywords remove registry-mirrors while keeping all other keys intact.
+    for kw in ["clear", "off", "none", "direct"] {
+        assert!(parse_mirrors(kw).unwrap().is_empty(), "{kw}");
+        let cleared = candidate(&updated, Change::Mirror(kw), "").unwrap();
+        let val: serde_json::Value = serde_json::from_str(&cleared).unwrap();
+        assert!(val.get("registry-mirrors").is_none(), "{kw}");
+        assert_eq!(val["data-root"], "/srv/docker");
+    }
+
+    // Cannot combine clear with URLs; invalid or credentialed URLs fail without leaking secrets.
+    assert!(parse_mirrors("clear,https://docker.1ms.run").is_err());
+    assert!(parse_mirrors("").is_err());
+    assert!(parse_mirrors("   ").is_err());
+    let err = parse_mirrors("https://user:top-secret@example.com").unwrap_err();
+    assert!(!err.to_string().contains("top-secret"));
+
+    // configured_mirrors reads existing daemon.json safely.
+    let temp = tempfile::tempdir().unwrap();
+    let cfg = temp.path().join("daemon.json");
+    assert!(configured_mirrors(&cfg).is_empty());
+    std::fs::write(&cfg, &updated).unwrap();
+    assert_eq!(
+        configured_mirrors(&cfg),
+        vec!["https://docker.1ms.run", "https://docker.xuanyuan.me"]
+    );
+}

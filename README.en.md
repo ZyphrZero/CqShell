@@ -73,7 +73,7 @@ Append options after `bash -s --`:
 
 | Purpose | Append |
 | --- | --- |
-| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.1.5` |
+| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.1.6` |
 | Install into a custom absolute directory | `--install-dir /opt/cqs` |
 | Install for the current user (also omit `sudo`) | `--install-dir "$HOME/.local/bin"` |
 
@@ -139,7 +139,7 @@ Select **Docker** in the sidebar or launch directly with `cqs docker [--tab cont
 - **End-to-End Operations**:
   - **Containers**: `s` start/stop, `u` restart, `p` pause, `e` / `Shift+E` interactive `docker exec -it`, `Space` multi-select batch actions, `l` live streaming & fullscreen logs, `m` live CPU/memory sparklines & `docker top`, `v` env/mounts with masked secrets (`Shift+S` to reveal).
   - **Compose**: Project/service topology, linked containers, aggregated logs, read-only YAML preview, and `Up / Stop / Restart / Pull / Down`.
-  - **Images / Volumes / Networks / Daemon**: Image pull & layer history, built-in network and mounted-volume guards, interactive tiered Prune wizard (`Shift+P`), and unified daemon controls alongside all transactional `docker.*` actions.
+  - **Images / Volumes / Networks / Daemon**: Image pull & layer history, one-key `g` registry mirror setup (curated presets, comma-separated multi-mirror failover, or `clear` to restore direct pulls), built-in network and mounted-volume guards, interactive tiered Prune wizard (`Shift+P`), and unified daemon controls alongside all transactional `docker.*` actions.
 - **Zero Heavy Dependencies & Tiered Confirmations**: Built strictly on native `docker` / `docker compose` JSON output (compatible with Rootless Docker, `DOCKER_HOST`, and Contexts), sleeping background monitors automatically after 10 seconds idle. Volume removal, bulk deletes (≥3 items), and volume-including Prunes enforce typed confirmation (`REMOVE` / `PRUNE`).
 
 ---

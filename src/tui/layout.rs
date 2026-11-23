@@ -1107,6 +1107,8 @@ impl FormGeometry {
         for (idx, field) in form.spec.fields.iter().enumerate() {
             let rows = if form.chip_field(idx) {
                 layout_chips(field.choices, 0, chip_budget, 0, u16::MAX).1
+            } else if form.preset_chips(idx) {
+                1 + layout_chips(field.choices, 0, chip_budget, 0, u16::MAX).1
             } else {
                 1
             };
@@ -1189,6 +1191,17 @@ impl FormGeometry {
                     modal.x + 4,
                     field_right,
                     y + 1,
+                    preview_limit,
+                );
+                for (c_idx, chip_rect) in placed {
+                    chips.push((idx, c_idx, chip_rect));
+                }
+            } else if form.preset_chips(idx) && y + 2 < preview_limit {
+                let (placed, _) = layout_chips(
+                    field.choices,
+                    modal.x + 4,
+                    field_right,
+                    y + 2,
                     preview_limit,
                 );
                 for (c_idx, chip_rect) in placed {

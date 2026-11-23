@@ -236,8 +236,8 @@ docker.status          Docker status
 docker.clean           Prune Docker data
   Irreversibly remove unused images, stopped containers, networks and eligible volumes.
 docker.mirror          Set registry mirror
-  Merge the mirror into daemon.json, validate and restart Docker; restore configuration and service state on failure.
-  mirror= []
+  Configure Docker Hub registry mirrors (built-in presets recommended/1ms/xuanyuan/daocloud/1panel, comma-separated failover URLs, or clear to restore direct pulls); merges into daemon.json, validates, restarts Docker, and rolls back on failure.
+  mirror=recommended ["recommended", "1ms", "xuanyuan", "daocloud", "1panel", "clear"]
 docker.ipv6            Configure Docker IPv6
   Merge IPv6 settings and restart Docker. A generated ULA subnet does not provide public IPv6 routing.
   enabled=on ["on", "off"]

@@ -888,12 +888,35 @@ fn draw_daemon_list(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Col
                     .map(|s| i.text(&s.label()).to_owned())
                     .unwrap_or_else(|_| id.to_owned());
                 let is_danger = matches!(id, "docker.clean" | "docker.uninstall");
-                (
-                    tokens::glyph(theme, Glyph::Chevron),
-                    spec_lbl,
-                    id.to_owned(),
-                    if is_danger { Tone::Danger } else { Tone::Plain },
-                )
+                let (tag, tone) = if id == "docker.mirror" {
+                    let count = app
+                        .docker
+                        .snapshot
+                        .engine
+                        .as_ref()
+                        .map(|e| e.daemon_mirrors.len())
+                        .unwrap_or(0);
+                    if count > 0 {
+                        (
+                            i.format(
+                                "docker.daemon.mirrors_count",
+                                &[("count", &count.to_string())],
+                            ),
+                            Tone::Accent,
+                        )
+                    } else {
+                        (
+                            i.text("docker.daemon.mirrors_direct").to_owned(),
+                            Tone::Plain,
+                        )
+                    }
+                } else {
+                    (
+                        id.to_owned(),
+                        if is_danger { Tone::Danger } else { Tone::Plain },
+                    )
+                };
+                (tokens::glyph(theme, Glyph::Chevron), spec_lbl, tag, tone)
             }
         };
 

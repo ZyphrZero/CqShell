@@ -27,6 +27,7 @@ pub(in crate::tui) enum QuickBtnKind {
     Pause,
     Delete,
     Pull,
+    Mirror,
     CreateNetwork,
     Prune,
     JumpProject,
@@ -672,6 +673,7 @@ fn build_quick_buttons(area: Rect, dk: &DockerState, i: &I18n) -> Vec<QuickBtn> 
         }
         DockerTab::Images => vec![
             ("p", i.text("docker.key.pull"), QuickBtnKind::Pull),
+            ("g", i.text("docker.key.mirror"), QuickBtnKind::Mirror),
             ("d", i.text("docker.key.delete"), QuickBtnKind::Delete),
             ("P", i.text("docker.key.prune"), QuickBtnKind::Prune),
         ],
@@ -688,7 +690,10 @@ fn build_quick_buttons(area: Rect, dk: &DockerState, i: &I18n) -> Vec<QuickBtn> 
             ("d", i.text("docker.key.delete"), QuickBtnKind::Delete),
             ("P", i.text("docker.key.prune"), QuickBtnKind::Prune),
         ],
-        DockerTab::Daemon => vec![("P", i.text("docker.key.prune"), QuickBtnKind::Prune)],
+        DockerTab::Daemon => vec![
+            ("g", i.text("docker.key.mirror"), QuickBtnKind::Mirror),
+            ("P", i.text("docker.key.prune"), QuickBtnKind::Prune),
+        ],
     };
 
     let mut out = Vec::new();

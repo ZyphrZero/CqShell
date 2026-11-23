@@ -1557,3 +1557,54 @@ fn mobile_viewports_including_59x24_and_40x16_render_and_interact_cleanly() {
         }
     }
 }
+
+#[test]
+fn docker_mirror_form_prefills_existing_mirrors_and_exposes_clickable_preset_chips() {
+    use super::docker::fixture::fixture_docker_state;
+    use crate::ops::docker::model::DockerTab;
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.platform_error = None;
+    app.root = true;
+    app.docker = fixture_docker_state(app.now);
+    app.open_docker(DockerTab::Images, true, false);
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+
+    // Pressing `g` on Images tab opens the `docker.mirror` form pre-filled from daemon.json snapshot.
+    app.handle_key(key(KeyCode::Char('g'))).unwrap();
+    let form = app
+        .form
+        .as_ref()
+        .expect("docker.mirror form should open via `g`");
+    assert_eq!(form.spec.id, "docker.mirror");
+    assert_eq!(form.values[0].text, "https://docker.m.daocloud.io");
+    assert!(form.preset_chips(0));
+
+    let geom = layout::FormGeometry::compute(area, form, &app);
+    assert_eq!(
+        geom.chips.len(),
+        crate::ops::docker::MIRROR_PRESET_CHOICES.len()
+    );
+    let mut term = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    term.draw(|f| app.draw(f)).unwrap();
+
+    // Clicking the `clear` chip replaces the field text with `clear`.
+    let clear_chip = geom
+        .chips
+        .iter()
+        .find(|(_, ci, _)| crate::ops::docker::MIRROR_PRESET_CHOICES[*ci] == "clear")
+        .expect("clear preset chip")
+        .2;
+    app.handle_mouse(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: clear_chip.x + 1,
+            row: clear_chip.y,
+            modifiers: KeyModifiers::NONE,
+        },
+        area,
+    )
+    .unwrap();
+    assert_eq!(app.form.as_ref().unwrap().values[0].text, "clear");
+}

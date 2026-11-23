@@ -360,6 +360,11 @@ impl App {
                 self.docker.logs.scroll = 0;
                 self.toast_key("docker.toast.logs_cleared", Tone::Info);
             }
+            KeyCode::Char('g')
+                if idle && matches!(self.docker.tab, DockerTab::Images | DockerTab::Daemon) =>
+            {
+                return self.trigger_cqs_action_by_id("docker.mirror");
+            }
             KeyCode::Char('P') if idle => {
                 self.docker.modal = Some(DockerModal::prune_default());
             }
@@ -1218,6 +1223,7 @@ impl App {
                             self.docker.modal = Some(DockerModal::pull_default());
                             Ok(Effect::None)
                         }
+                        QuickBtnKind::Mirror => self.trigger_cqs_action_by_id("docker.mirror"),
                         QuickBtnKind::CreateNetwork => {
                             self.docker.modal = Some(DockerModal::network_default());
                             Ok(Effect::None)

@@ -1654,7 +1654,7 @@
   },
   {
     "available": true,
-    "description": "Merge the mirror into daemon.json, validate and restart Docker; restore configuration and service state on failure.",
+    "description": "Configure Docker Hub registry mirrors (built-in presets recommended/1ms/xuanyuan/daocloud/1panel, comma-separated failover URLs, or clear to restore direct pulls); merges into daemon.json, validates, restarts Docker, and rolls back on failure.",
     "group": "docker",
     "id": "docker.mirror",
     "interactive": false,
@@ -1662,8 +1662,16 @@
     "mutates": true,
     "parameters": [
       {
-        "choices": [],
-        "default": "",
+        "allow_custom": true,
+        "choices": [
+          "recommended",
+          "1ms",
+          "xuanyuan",
+          "daocloud",
+          "1panel",
+          "clear"
+        ],
+        "default": "recommended",
         "name": "mirror",
         "required": true
       }

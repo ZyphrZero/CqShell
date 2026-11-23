@@ -1122,7 +1122,15 @@ pub fn specs() -> Vec<Spec> {
         true,
         true,
         false,
-        vec![field("mirror", "", &[], true)],
+        vec![Field {
+            allow_custom: true,
+            ..field(
+                "mirror",
+                "recommended",
+                ops::docker::MIRROR_PRESET_CHOICES,
+                true,
+            )
+        }],
     );
     add(
         "docker.ipv6",

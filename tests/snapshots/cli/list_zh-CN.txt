@@ -236,8 +236,8 @@ docker.status          查看 Docker 状态
 docker.clean           清理 Docker 数据
   不可逆地删除未使用的镜像、已停止容器、网络和符合清理条件的卷。
 docker.mirror          设置 Docker 镜像源
-  合并镜像源到 daemon.json，验证并重启 Docker，失败时恢复配置和服务状态。
-  mirror= []
+  配置 Docker Hub 加速镜像源（支持内置预设 recommended/1ms/xuanyuan/daocloud/1panel、逗号分隔多源故障转移，或 clear 清空恢复直连），合并写入 daemon.json 并校验后重启 Docker；失败自动回滚。
+  mirror=recommended ["recommended", "1ms", "xuanyuan", "daocloud", "1panel", "clear"]
 docker.ipv6            配置 Docker IPv6
   合并 IPv6 设置并重启 Docker；生成 ULA 子网不代表具备公网 IPv6 路由。
   enabled=on ["on", "off"]
