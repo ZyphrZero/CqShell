@@ -1,47 +1,85 @@
+<div align="center">
+
 # CqShell
 
-[English](README.en.md)
+**面向 Debian / Ubuntu 的现代化 Rust 终端服务器工具箱（TUI & CLI）**
 
-面向 Debian / Ubuntu 的 Rust / Ratatui 服务器工具箱，集成系统维护、网络调优、内核管理、服务器测试、终端美化与 Docker 管理。
+[![Release](https://img.shields.io/github/v/release/ZyphrZero/CqShell?style=flat-square&color=5eead4)](https://github.com/ZyphrZero/CqShell/releases/latest)
+[![Platform](https://img.shields.io/badge/Debian%20%7C%20Ubuntu-x86__64%20%26%20ARM64-7dd3fc?style=flat-square)](https://github.com/ZyphrZero/CqShell/releases)
+[![Rust](https://img.shields.io/badge/Rust-1.88%2B%20%C2%B7%20Ratatui-f97316?style=flat-square)](Cargo.toml)
+[![License](https://img.shields.io/github/license/ZyphrZero/CqShell?style=flat-square&color=a78bfa)](LICENSE)
 
-界面、操作说明、确认提示和应用错误使用 TOML 语言文件，内置 **简体中文与英语**。系统工具和明确选择的第三方脚本仍是外部依赖。
+简体中文 | [English](README.en.md)
 
-`install.sh` 负责下载并安装 Rust 二进制。
+[快速安装](#快速安装) · [功能一览](#功能一览) · [Docker 工作台](#docker-专属-tui-工作台) · [TUI 交互与主题](#tui-交互与主题) · [CLI 编排](#cli-与自动化编排) · [友情链接](#友情链接)
 
-## 下载与安装
+</div>
 
-普通用户无需安装 Rust。发布版提供 Debian / Ubuntu 使用的 **x86_64（AMD64）和 ARM64** Linux 可执行文件，安装器自动选择架构、通过 HTTPS 下载并校验 SHA-256。有可用终端时可以选择 `/usr/local/bin`、`$HOME/.local/bin` 或自定义目录，直接回车保持 `/usr/local/bin`；没有可用终端时默认使用 `/usr/local/bin`，也可用 `--install-dir` 直接指定目录。
+---
 
-在目标服务器执行以下两行，安装最新稳定版。**更换加速网关时，只需修改第一行的地址**：
+**CqShell（`cqs`）** 是一个单二进制分发的 Rust / Ratatui 服务器运维工具箱，将系统维护、软件源测速换源、BBRv3 内核管理、TCP 调优、SSH 加固、专属 Docker 工作台、Mihomo 全栈代理、AI Agent 工具安装、终端美化与服务器体检收拢于一套高响应、可回滚的双语终端界面与自动化 CLI 中。
+
+## 核心特性
+
+- **开箱即用，零运行时依赖**：发布版提供 **Linux x86_64 / ARM64** 静态 musl 可执行文件，无需安装 Rust、Python 或 Node.js，内置完整简体中文与英语词典。
+- **现代侧边栏工作台 TUI**：独立 Bento 概览仪表盘、可折叠导航栏、增强命令面板（`/` / `Ctrl+K`）、无边框纯文本复制视图（`V`）与完整键鼠操作；4 档响应式布局最低兼容 **`40×16`**（含 iOS Termius 等移动端窄屏 SSH）。
+- **配色 × UI 样式双维解耦**：内置 **8 套配色方案 × 8 套 UI 设计语言**，支持自动探测终端深浅色、实时预览抽屉（`T`）、透明背景（`B`）、减弱动效（`M`）与自定义 TOML 主题。
+- **专属 Docker 6 标签工作台**：内置 `cqs docker` 全屏聚焦 / 侧栏嵌入双态管理界面，覆盖容器、Compose、镜像、卷、网络与守护进程；纯原生 CLI JSON 采集，零后台驻留开销。
+- **97 项结构化运维动作**：11 大功能模块 + 固定置顶的「一键优化」批处理清单，CLI 与 TUI 共用同一套参数校验、权限检查与执行引擎。
+- **事务化安全边界**：全链路 HTTPS + SHA-256 校验、文件锁（`flock`）、配置预检、原子替换、before-image 恢复基线、非交互 `apt` 保护与分级口令确认；任何场景下均不会静默重启系统。
+
+---
+
+## 快速安装
+
+普通用户无需安装 Rust。安装脚本会自动识别架构、通过 HTTPS 下载并校验 SHA-256 与二进制版本，默认提供交互式目录选择（`/usr/local/bin`、`$HOME/.local/bin` 或自定义路径，直接回车保持 `/usr/local/bin`）。
+
+### 方式一：国内加速网关安装（推荐国内服务器）
+
+更换加速网关时，只需修改第一行的 `GH_PROXY` 地址（末尾有无 `/` 均可；已是 root 用户时去掉 `sudo`）：
 
 ```bash
 GH_PROXY="https://gh-proxy.org"
 curl -fsSL "${GH_PROXY%/}/https://raw.githubusercontent.com/ZyphrZero/CqShell/main/install.sh" | sudo bash -s -- --gh-proxy "$GH_PROXY"
 ```
 
-网关地址末尾有无 `/` 都可以；已经是 root 用户时，去掉 `sudo`。请选择你信任的 HTTPS 网关，安装器的版本查询、安装包和校验文件下载也会经过它。代理参数只用于安装阶段，不配置系统代理。
+> [!NOTE]
+> 请选择你信任的 HTTPS 网关。`--gh-proxy` 覆盖安装阶段的版本查询、安装包与校验文件下载，不修改系统代理；也可传入 `--gh-proxy default` 使用内置预设 `https://gh-proxy.com/`。
 
-安装完成后启动：
+### 方式二：GitHub 直连安装
 
 ```bash
-cqs --lang zh-CN
+curl -fsSL https://github.com/ZyphrZero/CqShell/releases/latest/download/install.sh | sudo bash
 ```
 
-服务器需要 Bash、curl、CA 证书、tar、gzip 和 coreutils。缺少下载依赖时先执行 `sudo apt-get update && sudo apt-get install -y curl ca-certificates tar gzip coreutils`。
+### 启动、升级与卸载
 
-需要指定版本或安装目录时，将参数追加到上面的安装命令末尾：
+```bash
+cqs --lang zh-CN          # 启动交互式 TUI（只读浏览 / 用户级操作）
+sudo cqs --lang zh-CN     # 以 root 权限管理整机系统操作
+cqs docker                # 直接进入全屏 Docker 管理工作台
+sudo cqs update           # 校验并原子自更新到最新稳定版
+sudo cqs --uninstall      # 卸载默认命令（保留配置与恢复基线）
+```
+
+<details>
+<summary>安装器进阶参数、手动下载与从源码构建</summary>
+
+#### 安装器依赖与进阶参数
+
+目标主机需具备 `bash`、`curl`、`ca-certificates`、`tar`、`gzip` 与 `coreutils`（缺失时可执行 `sudo apt-get update && sudo apt-get install -y curl ca-certificates tar gzip coreutils`）。
+
+将下列参数追加到安装命令末尾（位于 `bash -s --` 之后）：
 
 | 用途 | 追加参数 |
 | --- | --- |
-| 安装指定版本；网关不支持 API 或缓存未更新时也可使用 | `--version v0.1.5` |
-| 安装到指定目录 | `--install-dir /opt/cqs` |
+| 指定版本（网关不支持 API、限流或需安装旧版/预发布版时） | `--version v0.1.5` |
+| 安装到自定义绝对路径 | `--install-dir /opt/cqs` |
 | 安装到当前用户目录（同时去掉 `sudo`） | `--install-dir "$HOME/.local/bin"` |
 
-安装到用户目录后，可通过 `export PATH="$HOME/.local/bin:$PATH"` 将其加入 PATH。
+安装到用户目录后，可执行 `export PATH="$HOME/.local/bin:$PATH"` 加入 `PATH`。重复执行安装命令或运行 `sudo cqs update` 均可平滑升级，失败时保留原有程序，配置与恢复记录不受影响。
 
-预发布版本的安装器可从对应 Release 手动下载；默认安装仅选择最新稳定版。重复执行安装命令即可升级，也可用 `--version` 安装指定旧版本。安装器只替换 `cqs` 程序，不修改应用配置、不执行系统优化；下载、校验或版本检查失败时保留原有程序。内置中英文翻译随程序分发，无需额外安装语言文件。
-
-默认安装后直接运行 `cqs`；需要系统写操作时使用 `sudo cqs`。卸载默认命令可执行 `sudo cqs --uninstall`；指定目录安装则删除该目录下的 `cqs`，保留配置与恢复材料。程序自身的 `--install` / `--uninstall` 也管理 `/usr/local/bin/cqs`，见下方源码构建说明。也可以直接在 GitHub Releases 下载对应架构的 `.tar.gz` 和 `.sha256` 文件：
+#### 从 GitHub Releases 手动校验安装
 
 ```bash
 sha256sum --check cqs-x86_64-unknown-linux-musl.tar.gz.sha256
@@ -49,225 +87,256 @@ tar -xzf cqs-x86_64-unknown-linux-musl.tar.gz
 ./cqs/cqs --lang zh-CN
 ```
 
-构建、发布和镜像配置见 [发布说明](docs/RELEASING.md)。
+#### 从源码构建（Linux / Windows）
 
-## 从源码构建与启动
-
-在 Debian / Ubuntu 中安装 Rust 1.88+ 及 C 编译工具链：
+在 Debian / Ubuntu 上使用 **Rust 1.88+** 及 C 编译工具链构建：
 
 ```bash
 cargo build --release --locked
 ./target/release/cqs --lang zh-CN
-./target/release/cqs --lang en-US
+sudo ./target/release/cqs --install   # 显式安装到 /usr/local/bin/cqs
 ```
 
-启动界面不会自动安装命令。需要安装到 `/usr/local/bin/cqs` 时显式执行：
-
-```bash
-sudo ./target/release/cqs --install
-cqs
-sudo cqs --uninstall
-```
-
-卸载命令保留软件、配置及恢复材料。普通用户可以浏览菜单、读取状态和配置自己 HOME 下的提示符；系统写操作要求 root。服务器通常通过 `sudo cqs --lang zh-CN` 管理。
-
-Windows PowerShell 中也可以构建并查看界面。`cargo build` 只生成程序，不会自动启动：
+Windows PowerShell 也可直接编译并运行界面预览与 CLI 元数据检查（系统写操作仍仅限 Debian / Ubuntu；重编译遇到文件锁定时请先在旧界面按 `Q` 退出）：
 
 ```powershell
 cargo build --release --locked
 .\target\release\cqs.exe --lang zh-CN
 ```
 
-Windows 构建产物是 `cqs.exe`，不能作为 Linux 二进制部署。系统操作仍仅支持 Debian / Ubuntu；需要执行这些操作时，请在目标 Linux 或 WSL 中编译并运行。Windows 版本可用于界面开发和 CLI 元数据检查。
+更多发布与镜像源规范见 [docs/RELEASING.md](docs/RELEASING.md)。
 
-Windows 会锁住正在运行的可执行文件。重新构建同一输出目录时，如遇到删除 `cqs.exe` 被拒绝，请先在旧界面按 Q 退出。调试版位于 `target\debug`，release 版位于 `target\release`。
+</details>
 
-## TUI 操作
+---
 
-顶部常驻两个并排面板：“系统与资源”显示 CPU、内存、系统盘、SWAP 仪表及主机、系统、当前运行内核、运行时间、时区；“网络与代理”显示 BBR/TCP 状态、公网 IPv4/IPv6 与 ISP、终端代理、Mihomo 状态与版本。本机指标每 3 秒后台刷新，也可按 R 手动刷新。终端代理状态读取当前进程的 `http_proxy` / `https_proxy` / `all_proxy` 及大写环境变量；这是启动 CqShell 时继承的 Shell 代理环境状态，不代表 Mihomo 进程是否运行，也不保证代理连通。Mihomo 状态独立显示“未安装 / 已停止 / 运行中（PID）/ 未知”，仅识别当前 CqShell 数据目录管理的进程；版本读取已安装二进制的 `-v` 输出，不联网查询，使用 coreutils `timeout` 限时 2 秒。读取失败显示“未知”并保留诊断，不冒充已停止或未安装。公网 IPv4/IPv6 和 ISP 按 N 查询，查询结果在切换页面后继续保留；启动时不联网查询。Windows 会显示真实本机资源，Mihomo 等 Linux 专属字段标为“不适用”，不可执行的操作提前置灰。
+## 功能一览
 
-| 按键 | 操作 |
+侧边栏顶部固定 **概览仪表盘（`H`）** 与 **一键优化（`O`）**，下方包含 11 个可自由调整顺序的功能模块（共 **97 项** CLI/TUI 操作）：
+
+| 模块 | 覆盖能力 |
 | --- | --- |
-| ↑↓ / j / k、Home / End | 移动操作或到首末项；跳过分节标题，各分类保留位置 |
-| ←→ / Tab / Shift+Tab | 切换分类，不需要先切换焦点 |
-| 1–9、O / 0 | 跳转编号分类 / 固定在首位的一键优化 |
-| Alt+↑↓ | 空闲时调整普通分类顺序，立即保存；一键优化不可移动 |
-| Enter（普通操作） | 打开详情、配置参数或单项执行 |
-| / | 搜索操作；↑↓/PgUp/PgDn 选择，Enter 激活，Tab 跳转，Esc 关闭 |
-| 空格（仅一键优化） | 勾选 / 取消勾选，默认全部不选 |
-| Enter（一键优化） | 配置项目并保存到清单；无参数项目切换勾选 |
-| X / F5（仅一键优化） | 核对并执行整份清单，只有一项时也按批量处理 |
-| A（仅一键优化） | 套用更新、标准清理、TCP 调优和 BBR 的推荐组合 |
-| T | 打开风格面板；↑↓/j/k/Home/End 或鼠标预览，Enter 保存，Esc 还原 |
-| R / N | 刷新本机指标 / 后台查询公网 IP 与 ISP |
-| G / F2 | 显示或收起最近任务日志 / 打开完整日志 |
-| L | 切换并保存界面语言 |
-| ? / F1 | 打开完整快捷键说明；底栏只显示当前可用的按键 |
-| PgUp / PgDn | 滚动日志、确认说明或系统概览 |
-| Esc | 执行中请求取消，等待清理后留在界面；弹窗中先关闭；空闲主界面不操作 |
-| Q / Ctrl+C | 运行中请求取消，清理完成后退出；完整日志窗口也可使用 |
+| **一键优化** | 勾选式批量配置清单；按 `A` 一键套用「系统更新 + 标准清理 + TCP 调优 + BBR」推荐组合，统一核对并逐项展示进度与用时 |
+| **系统管理** | 系统概览、按需公网 IP/ISP 查询、非交互 apt 更新与清理、**LinuxMirrors 测速换源与还原**、时区设置、SWAP 管理、`fail2ban` |
+| **网络调优** | BBR 状态检测、4 种队列调度（`fq` / `fq_codel` / `fq_pie` / `cake`）、带宽/RTT/cgroup 内存感知 TCP 调优与撤销、**GitHub 国内加速代理** |
+| **内核管理** | BBRv3 Standard / Max 内核安装（最新匹配或指定 `x.y.z`）、已安装内核列表、**GRUB 单次切核启动**、安全卸载未运行第三方内核 |
+| **SSH** | 端口修改与真实监听校验（兼容 `Match`/`Include`）、导入公钥并关闭密码认证 |
+| **Docker** | **专属 6 标签 TUI 管理工作台**（容器/Compose/镜像/卷/网络/守护进程）+ 安装、镜像源、IPv6、清理与卸载 |
+| **常用工具** | `curl`、`wget`、`nano`、`unzip`、`tar`、`tmux`、`iftop`、`btop`、`gdu`、`fzf` 独立入口与一键全装 |
+| **Agent 工具** | **Pi（`pi.dev`）**、**Claude Code**、**Codex CLI** 官方独立二进制安装/更新与版本巡检（零 Node.js/npm） |
+| **终端美化** | Starship + Bash/Zsh 提示符配置，7 种样式 × 9 套配色，TUI/CLI 只读效果预览、TOML 查看与首次基线还原 |
+| **Mihomo 代理** | 37 项全栈动作：核心、在线/本地订阅、4 款 Web 面板、GeoData 规则库、热重载/模式/测速/连接管理、DNS/TUN/systemd 与 `clashctl` 兼容 |
+| **服务器测试** | Speedtest、**xykt/IPQuality**（默认隐私模式）、NextTrace、YABS、网络连通性与磁盘 I/O 测试 |
+| **CqShell** | 在线版本检查、校验式原子自更新、`cqs` 系统命令安装与卸载 |
 
-界面采用无焦点导航：上下移动操作，左右切换分类。分节标题和分隔线不参与选择。只有“一键优化”使用复选框；鼠标精确点击勾选框切换选择，滚轮操作其所在区域，弹层和风格面板不会把输入穿透到后台菜单。计划面板显示当前读数、预期变化和批量命令，执行后显示每一步结果与用时；修改清单或开始新任务才清除进度。
-
-表单使用 Tab / 上下键切换字段，左右键选择枚举或移动文本光标，Home/End、Delete、Backspace 和 Ctrl+U 支持编辑。Enter 移到下一项，在最后一项按 Enter 或选择“继续/保存到清单”即提交，也可用 Ctrl+Enter。取消不会执行或保存参数。需要填写已有对象的参数（订阅、策略组及节点、要切换或删除的内核）不再手动输入：打开操作时先读取本机现有项目并直接弹出列表，上下键移动，输入文字即时筛选，Enter 选定；最后一项选定后直接进入确认。左右键也可在现有项目间轮换。读取较慢时显示可用 Esc 取消的等待框；没有可选项目时提示原因，不打开空表单。普通确认默认选择“取消”，可用方向键、鼠标或 Y/N 操作；RESTORE、REMOVE、KEY-TESTED 等特定确认仍要求准确输入文字。交互式第三方工具暂时接管终端，退出后返回 TUI。
-
-日志只在执行任务后展开，取消与失败分别显示；常驻指标不进入执行日志。响应式布局最低兼容 40×16（含 iOS Termius 59×24 等移动端窄屏，自动切换堆叠视图、单列快捷操作卡与浮层导航抽屉），80×24 以上保留完整桌面紧凑与双栏工作台布局；较高窗口提供内嵌日志，也可按 G / F2 查看完整日志。仪表低于 70% 使用主题常规颜色，70% 起警告、90% 起危险。可逆操作的参数表单提交后直接执行，不可逆操作继续通用确认，操作专有确认仍保留。可用 `cargo run --release --example tui_snapshot -- target/previews/status.json 120 36 zh-CN aurora '#0b1119'` 生成 JSON 与 HTML 快照；背景也接受 `unavailable` 或 `disabled`。
-
-`v0.1.1` 修复了系统升级期间 debconf/ucf 隐藏对话框导致的卡住问题。内置 apt 操作使用非交互模式、保留本机修改过的配置并关闭 dpkg 独立伪终端；needrestart 仅列出服务重启需求。后台命令无法读取界面的控制终端，日志中的 ANSI 控制序列会被完整清除。如果旧版本的升级曾被中断，先在独立 SSH 会话确认 apt/dpkg 已退出并执行 `dpkg --audit`，再处理未完成的软件包配置；不要删除锁文件。
-
-## 界面主题
-
-默认 `aurora` 按终端深浅背景派生配色；探测不可用时使用 classic 深色外观。`cqs themes` / `cqs themes --json` 列出八款内置主题及自定义主题。
-选择优先级为 `cqs --theme nord` > 环境变量 `CQS_THEME` > `config.toml` 中的 `theme` > aurora。`--theme` 只影响 TUI。
-T 面板的 Enter 保存 `theme`，Esc 取消预览；保存保留其他配置，失败会恢复原风格并显示错误。可设置 `detect_background = false` 关闭背景查询。
-自定义主题放在 `$XDG_CONFIG_HOME/cqs/themes`，默认 `$HOME/.config/cqs/themes`；格式、颜色角色与校验见 [主题指南](docs/THEMES.md)。
-东亚宽度不明确字符在某些终端可能错位，IPMI/串口建议同时使用 `--theme plain --lang en-US`。旧版本会拒绝 `theme` 与 `detect_background`，降级前先移除这两个配置键。
-
-## CLI
-
-`cqs batch` 开始前只统一确认一次，交互模式下各操作的专用确认仍逐项询问；`--yes` 的既有行为保持不变。批量按给定顺序执行，取消或停止后的步骤不会伪报成功。
-
-```bash
-cqs --help
-cqs update --check
-cqs update --check --json
-sudo cqs update
-sudo cqs update --version v0.1.5
-sudo cqs --gh-proxy default update
-cqs list
-cqs list --json
-cqs run bbr.status
-sudo cqs run bbr.enable --set qdisc=fq
-sudo cqs run tcp.tune --set bandwidth=1000 --set rtt=80
-sudo cqs run kernel.install --set profile=standard
-cqs run kernel.list
-cqs run terminal.preview --set style=all --set color=tokyo-night
-cqs run terminal.apply --set shell=bash --set style=box --set color=tokyo-night
-sudo cqs batch tcp.tune bbr.enable --set tcp.tune.rtt=80
-cqs run clash.status
-cqs run clash.start
-cqs run clash.sub.add --set name=home --set url=https://example.invalid/sub --set use=on
-cqs run clash.sub.list
-cqs run clash.sub.update --set name=home
-cqs run clash.sub.use --set name=home
-cqs run clash.sub.remove --set name=home
-eval "$(cqs proxy-env on --shell bash)"
-eval "$(cqs proxy-env off --shell bash)"
-```
-
-### Mihomo 核心
-
-Rust 版在 **Mihomo 代理** 分类集成 Mihomo 官方二进制安装/更新、配置校验、启动/停止/状态，以及订阅添加、选择、更新和删除。默认数据目录为 `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`，可通过 `CQS_CLASH_HOME`、`CQS_CLASH_DATA_DIR`、`CQS_CLASH_BINARY` 等 `CQS_CLASH_*` 环境变量覆盖。运行 YAML、PID/进程启动时间记录和事务恢复文件保存在该目录。
-
-现已补齐控制器配置、策略组/节点切换、密钥管理、MetaCubeXD Web 控制台、日志查看/跟随、TUN 配置和 systemd 用户/系统托管，共 24 个 CLI/TUI 操作。面板可用 `cqs --yes run clash.panel.install` 安装，启动后用 `cqs run clash.panel.status` 查看地址。持久设置要求先停止 Mihomo；TUN 和 systemd 有明确的平台/权限边界，详见 [Mihomo 集成说明](docs/MIHOMO.md)。
-
-`cqs proxy-env` 输出供当前父 Shell 执行的环境变量命令。Bash/Zsh 可用 `eval "$(cqs proxy-env on)"`，Fish 可用 `source (cqs proxy-env on --shell fish | psub)`。`on` 会在 Mihomo 未运行时先启动；`off` 仅清理当前 Shell 代理变量，不停止 Mihomo。订阅 URL 必须是无凭据 HTTPS；下载内容需通过 YAML 结构检查以及已安装 Mihomo 的 `-t` 校验。订阅多文件提交使用恢复记录，失败时恢复 before-image。
-
-习惯 `nelvko/clashctl` 命令的用户，可先在 Bash 执行 `eval "$(cqs clashctl shell-init --shell bash)"`，随后直接使用 `clashctl on/off/start/stop/status`、`clashctl sub add/use/update/del/rename`、`clashctl node use`，以及 `clashon`、`clashoff` 等快捷函数。Zsh 将参数改为 `--shell zsh`；Fish 使用 `cqs clashctl shell-init --shell fish | source`。脚本中也可使用 `cqs clashctl ...`；只有 on/off 需要加载父 Shell 函数。初始化不会修改 Shell 配置或接管原项目的数据目录。兼容命令复用 Rust 后端，但不等于全功能等价，支持列表和差异见 [兼容说明](docs/MIHOMO.md#clashctl-兼容命令)。
-
-启用已有内核的 BBR / BBRv3：进入 **网络优化 → 启用当前内核的 BBR**，选择 `fq` 等队列并执行；需要调整 TCP 缓冲区时使用同页的 TCP 调优。安装 BBRv3：进入 **内核管理 → 安装 BBRv3 内核**，可选 `standard` / `max`，版本留空使用最新匹配版本，也可填写 `x.y.z`；重启进入新内核后再查看 BBR 状态及配置队列。
-
-Rust 版在内核安装及引导检查成功后，会显示当前内核、目标内核及重连后的验证步骤，并询问是否立即重启。取消或留空会保留安装结果，可稍后执行 `sudo reboot`。`--yes` 不会自动同意重启；非交互运行只输出手动重启指引。重连后用 `uname -r` 核对目标内核，若仍运行旧内核，请检查 GRUB 启动选择。
-
-IP 质量检测使用 [xykt/IPQuality](https://github.com/xykt/IPQuality)，入口为 **服务器测试 → IP 质量体检 · xykt/IPQuality**。支持双栈、仅 IPv4、仅 IPv6，输出语言跟随中英文界面；它检测的是目标机器的 IP，不是状态栏的公网地址查询。
-
-```bash
-cqs run test.ip
-cqs run test.ip --set ip_family=ipv4
-cqs --lang en-US run test.ip --set ip_family=ipv6 --set full_ip=on
-```
-
-默认传入上游的 `-p`，禁用在线报告上传，默认不显示完整 IP；检测本身仍会访问外部数据库和服务。依赖缺失时由上游询问安装，CqShell 的 `--yes` 不会转成上游的自动安装参数。脚本完整下载并通过固定版本 SHA-256 和 Bash 语法检查后才执行，退出后返回 TUI。当前接入在 Debian / Ubuntu 的交互终端运行，详见 [接入说明](docs/IPQUALITY.md)。
-
-`list` 列出全部操作、默认值和枚举；操作 ID 不随语言改变。JSON 中 `available` 表示已提供该操作，具体执行仍检查平台、权限及参数。无终端时必须使用 CLI，`--yes` 可自动确认操作提示。
-
-## 系统软件源
-
-系统管理新增 **系统软件源测速 / 更换系统软件源 · LinuxMirrors / 恢复上次系统软件源**。支持官方、清华、中科大和阿里云；`auto` 在服务器上进行真实下载测速，显示推荐后确认换源。固定上游版本并校验摘要，保留官方安全更新源，失败恢复配置，不升级软件。支持范围、自定义配置限制和恢复说明见 [软件源说明](docs/MIRRORS.md)。
-
-```bash
-cqs run system.mirror.test
-sudo cqs run system.mirror.apply --set mirror_site=auto
-sudo cqs run system.mirror.restore
-```
-
-## 常用工具与 Agent 工具
-
-**常用工具**恢复旧版的十个独立安装入口：curl、wget、nano、unzip、tar、tmux、iftop、btop、gdu、fzf。选择条目即可安装对应软件；“全部安装 / 自选软件”默认选择 `all`，同时安装 zsh / Starship 组件。提示符配置、实时预览和还原位于独立的**终端美化**分类，提供 7 种样式（`full`、`compact`、`box`、`ribbon`、`powerline`、`minimal`、`brackets`）与 9 套配色方案（`cyan`、`green`、`magenta`、`tokyo-night`、`catppuccin`、`rose-pine`、`nord`、`gruvbox`、`dracula`），在 TUI 与 CLI 均支持只读效果预览及 Starship TOML 查看。
-
-```bash
-sudo cqs run tools.tmux
-sudo cqs run tools.btop
-sudo cqs run tools.install                         # 全部常用工具及终端组件
-sudo cqs run tools.install --set package=fzf       # 保留原来的 CLI 用法
-```
-
-新增独立的 **Agent 工具**分类，提供 Pi（pi.dev）、Claude Code、Codex CLI 的安装 / 更新与版本检查：
-
-```bash
-cqs run ai.pi.install
-cqs run ai.claude.install
-cqs run ai.codex.install
-cqs run ai.status
-```
-
-三款工具统一直接安装官方 **Linux x86_64 / ARM64 独立二进制**，不需要 Node.js/npm，也不执行远程安装脚本。Pi 下载完整独立包并保留主题、WASM 和其他资源；Codex 下载完整 `codex-package`，保留辅助程序、沙箱组件和资源；Claude Code 下载官方平台二进制。
-
-以实际使用这些工具的用户运行命令，不加 `sudo`。直接以 root 登录的服务器可为 root 安装；从普通用户 `sudo cqs` 进入时，AI 安装会要求退出 sudo 后重试。安装只需 curl、CA 证书及网络连接，TUI 内显示下载和校验日志；CLI 可通过 `cqs --yes run ai.pi.install` 在无交互终端中安装。
-
-安装前解析官方稳定版元数据，显示版本、下载地址、SHA-256 和目标命令；校验下载大小、摘要、ELF 架构、包结构以及实际 `--version` 后才切换入口。摘要缺失、不匹配或下载失败会明确报错，不回退到 npm。Pi / Codex 使用 GitHub Release 资产摘要，Claude Code 使用官方 `manifest.json`。归档解压拒绝路径越界、链接和特殊文件。
-
-版本文件保存到 `~/.local/share/cqs/ai/<工具>/` 的独立目录，三个命令默认位于 `~/.local/bin`；Codex 也支持 `CODEX_INSTALL_DIR`。不会修改 Shell 配置；可使用安装日志中的完整路径，或执行 `export PATH="$HOME/.local/bin:$PATH"`。已有入口备份到命令目录下的 `.cqs-ai-backup-*/previous`；切换后检查失败会还原，旧版本及备份不会自动删除。后续更新使用相同安装入口。状态检查优先读取这些入口，也兼容 Pi 的 `PI_CODING_AGENT_DIR` / `~/.pi/agent/bin` 旧入口及 PATH。
-
-登录凭据、会话和项目配置保留，首次使用按工具提示登录。工具本体无需 Node；项目、扩展或 MCP 服务有各自的依赖。
-
-分发方式依据 [Pi 官方 Releases](https://github.com/earendil-works/pi/releases)、[Claude Code 二进制说明](https://code.claude.com/docs/en/setup#binary-integrity-and-code-signing) 和 [OpenAI Codex CLI 文档](https://developers.openai.com/codex/cli)，核对日期为 2026-10-27。
-
-## TOML 多语言
-
-偏好配置默认位于 `${XDG_CONFIG_HOME:-$HOME/.config}/cqs/config.toml`：
-
-```toml
-language = "zh-CN"
-# locale_dir = "/absolute/path/to/locales"
-```
-
-语言优先级：`--lang` → `CQS_LANG` → 配置文件 → `LC_ALL` / `LC_MESSAGES` / `LANG` → 英语。未支持的系统 locale 使用英语；显式指定不存在的语言会报错。
-
-```bash
-cqs --config /path/to/config.toml
-cqs --locale-dir ./locales languages
-```
-
-新增语言时复制完整的 [locales/en-US.toml](locales/en-US.toml)，修改文件名、`locale`、`name` 和译文，再通过 `locale_dir` 加载。语言文件的键和命名占位符必须一致；缺键、额外键、空译文和占位符不一致都会报错。内置译文已编译进二进制。详见 [多语言说明](docs/I18N.md)。
-
-## 功能与使用边界
-
-| 功能 | 内容 |
-| --- | --- |
-| 系统管理 | 概览、按需公网 IP / ISP 查询、更新、清理、时区、SWAP、fail2ban |
-| BBR / TCP | 状态、四种默认队列、带宽与 RTT 调优、cgroup 内存约束、撤销 |
-| 内核管理 | BBRv3 标准版 / Max、最新或指定版本安装、内核查看、卸载未运行内核 |
-| SSH | 端口修改与监听验证、公钥导入和关闭密码认证 |
-| 服务器测试 | Speedtest、IP 质量、NextTrace、YABS、连通性、磁盘 I/O |
-| 常用工具 | 十种工具独立安装、全部安装、Bash / zsh 提示符配置与首次基线还原 |
-| Agent 工具 | Pi（pi.dev）、Claude Code、Codex CLI 安装 / 更新与版本检查 |
-| Mihomo 代理 | 官方 Mihomo 二进制、运行配置、启动/停止/状态、订阅管理和 Shell 代理环境输出 |
-| Docker | 专属 6 标签 TUI 管理工作台（容器/Compose/镜像/卷/网络/守护进程）、实时日志与指标、`exec` 交互终端、分级 Prune、安装/镜像源/IPv6/卸载 |
+---
 
 ### Docker 专属 TUI 工作台
 
-在主界面选择侧边栏 **5 Docker**，或直接执行 `cqs docker`（支持 `--tab containers|compose|images|volumes|networks|daemon` 与 `--embedded`）即可打开专属 Docker 管理工作台：
+在主界面选择侧边栏 **Docker**，或直接运行 `cqs docker [--tab containers|compose|images|volumes|networks|daemon] [--embedded]`：
 
-- **混合双态与聚焦模式**：嵌入式模式保留侧边栏与全局工具箱；按 `z` / `F`（或 `cqs docker` 默认启动）进入全屏聚焦态，释放全部宽度展示完整列、`1–6` 直达 6 个资源标签页，按 `[` 随时拉出侧边栏。
-- **全栈运维闭环**：容器全生命周期（`s` 启停、`u` 重启、`p` 暂停、`e`/`Shift+E` 进入 `docker exec -it` 交互终端、`Space` 多选批量、`l` 实时日志与全屏沉浸日志、`m` 实时 CPU/内存 Sparkline 与 `docker top`、`v` 环境与挂载且敏感凭据默认脱敏）、Compose 编排（服务拓扑/容器联动/聚合日志/YAML 只读预览/Up·Stop·Restart·Pull·Down）、镜像拉取与层级历史、卷与网络拓扑、可视化分级 Prune 向导（`Shift+P`），并将原有安装/镜像源/IPv6/清理/卸载整合在「守护进程」页。
-- **零重依赖与分级确认**：全程采用原生 `docker` / `docker compose` CLI JSON 采集（天然兼容 Rootless、`DOCKER_HOST` 与 Context），不访问 Docker 时零后台进程开销；系统内置网络与挂载中卷受保护，卷删除 / 批量删除 ≥3 项 / 含卷 Prune 要求输入确认口令（`REMOVE` / `PRUNE`）。
+- **双态与全屏聚焦**：支持侧栏嵌入与全屏聚焦（`z` / `F`）无缝切换，聚焦态 `1–6` 直达 6 个资源标签页，按 `[` 随时呼出侧栏。
+- **全栈运维闭环**：
+  - **容器**：`s` 启停、`u` 重启、`p` 暂停、`e` / `Shift+E` 进入原生 `docker exec -it` 交互终端、`Space` 多选批量操作、`l` 实时流式/全屏日志、`m` 实时 CPU/内存 Sparkline 与 `docker top`、`v` 环境与挂载检查（敏感凭据默认脱敏，`Shift+S` 临时显隐）。
+  - **Compose**：项目与服务拓扑、关联容器联动、聚合日志、YAML 只读预览及 `Up / Stop / Restart / Pull / Down`。
+  - **镜像 / 卷 / 网络 / 守护进程**：镜像拉取与层级历史、卷与网络引用保护、可视化空间回收 Prune 向导（`Shift+P`），并将安装、镜像源、IPv6、清理与卸载统一整合至「守护进程」页。
+- **零重依赖与分级确认**：全程基于原生 `docker` / `docker compose` JSON 输出（天然兼容 Rootless、`DOCKER_HOST` 与 Context），离开 10 秒后后台监控自动休眠；卷删除、批量删除 ≥3 项与含卷 Prune 均需输入口令（`REMOVE` / `PRUNE`）确认。
 
-内核安装支持 Debian 12+ / Ubuntu 24.04+ 的 amd64 / arm64 主机，需要独立内核环境和 GRUB。安装后可确认立即重启或稍后手动重启进入新内核；状态页读取实际运行的 BBR 版本。WSL / 容器不支持更换宿主内核，卸载入口仅处理未运行的指定内核。
+---
 
-网络和提示符的旧恢复基线可继续读取；不要删除未完成操作的恢复记录。
+### Mihomo 代理与 `clashctl` 兼容
 
-## 开发与验证
+**Mihomo 代理**模块纯 Rust 实现 37 项操作，默认数据目录位于 `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`（支持 `CQS_CLASH_*` 环境变量覆盖）：
+
+- **核心与订阅事务**：官方二进制校验安装、HTTPS 在线订阅与本地 YAML 导入（`clash.sub.import`），提交前自动合并 Mixin 并执行 `mihomo -t` 校验，多文件事务保留 before-image 回滚。
+- **4 款 Web 控制台**：内置 **Zashboard**（默认）、**MetaCubeXD**、**Yacd-Meta** 与 **Razord-Meta** 的签名/摘要校验安装与切换卸载；默认绑定回环地址，推荐通过 SSH 端口转发访问。
+- **实时控制器与 GeoData**：零外部进程直连控制器，支持配置热重载（失败回滚）、`rule/global/direct` 模式切换、策略组并发测速排序、活跃连接巡检与断开，以及 `MetaCubeX/meta-rules-dat`（`standard`/`lite`/`full`）规则库校验更新。
+- **高级配置与托管**：事务化管理核心端口/嗅探/日志级别、DNS（`fake-ip`/`redir-host` 与国内外 DoH 预设）、Mixin 脱敏查看与重置、TUN 模式与 systemd 用户/系统服务托管。
+- **Shell 代理与 `clashctl` 兼容**：
+
+```bash
+# 当前 Shell 注入 / 清理代理环境变量（支持 bash / zsh / fish）
+eval "$(cqs proxy-env on --shell bash)"
+eval "$(cqs proxy-env off --shell bash)"
+
+# 兼容 nelvko/clashctl 常用命令习惯（不修改 Shell 配置文件）
+eval "$(cqs clashctl shell-init --shell bash)"
+clashctl on && clashctl status
+clashctl node use 'Proxy' 'Node A'
+```
+
+完整命令、权限边界与恢复说明见 [docs/MIHOMO.md](docs/MIHOMO.md)。
+
+---
+
+### Agent 工具、常用工具与终端美化
+
+- **Agent 工具（零 Node.js / npm）**：统一直接安装 **Pi（`pi.dev`）**、**Claude Code**、**Codex CLI** 的官方 Linux x86_64 / ARM64 独立二进制，不执行远程安装脚本。安装前展示目标版本与 SHA-256，校验摘要、ELF 架构、包结构及实际 `--version` 后原子切换至 `~/.local/bin`（版本文件存于 `~/.local/share/cqs/ai/<tool>/`，自动备份旧入口且不修改 Shell 配置）。请以实际使用用户直接执行（**不加 `sudo`**，直接 root 登录除外）：
+
+  ```bash
+  cqs run ai.pi.install
+  cqs run ai.claude.install
+  cqs run ai.codex.install
+  cqs run ai.status
+  ```
+
+- **常用工具与终端美化**：10 个常用工具支持独立入口或 `tools.install` 全量安装；**终端美化**基于 Starship，提供 7 种样式（`full`、`compact`、`box`、`ribbon`、`powerline`、`minimal`、`brackets`）与 9 套配色（`cyan`、`green`、`magenta`、`tokyo-night`、`catppuccin`、`rose-pine`、`nord`、`gruvbox`、`dracula`），在 TUI 与 CLI 均支持实时效果预览、Starship TOML 检视与首次基线还原。
+
+---
+
+### 系统换源、内核调优与服务器体检
+
+- **系统软件源（LinuxMirrors）**：支持官方源、清华（`tuna`）、中科大（`ustc`）、阿里云（`aliyun`）及 `auto` 真实下载测速推荐；固定上游脚本版本并校验摘要，保留官方安全更新源，支持一键还原（详见 [docs/MIRRORS.md](docs/MIRRORS.md)）。
+- **BBR / BBRv3 与 TCP 调优**：在当前内核直接启用 BBR 及队列算法，或安装 BBRv3 Standard / Max 内核；安装后展示目标内核与验证步骤，由用户决定是否手动重启，支持 GRUB 单次切核与未运行内核卸载。
+- **GitHub 国内加速代理**：默认关闭；可通过 TUI 快捷键 `P`、`cqs run github.proxy`、`--gh-proxy` 或 `CQS_GH_PROXY` / `GH_PROXY` 开启（预设 `https://gh-proxy.com/`）。仅重写官方 HTTPS GitHub 域名，`api.github.com` 遇限流时自动回退直连，不转发非 GitHub 域名与订阅链接。
+- **IP 质量体检（xykt/IPQuality）**：支持双栈 / 仅 IPv4 / 仅 IPv6，跟随中英文界面语言；默认传入 `-p` 关闭在线报告上传并隐藏完整 IP，脚本经固定版本 SHA-256 与语法检查后执行（详见 [docs/IPQUALITY.md](docs/IPQUALITY.md)）。
+
+---
+
+## TUI 交互与主题
+
+### 界面交互特点
+
+- **独立概览仪表盘（`H`）**：顶部保留 1 行微状态条，主区域 Bento 卡片呈现本机 CPU / 内存 / 磁盘 / SWAP、内核、BBR/TCP、终端代理与 Mihomo 状态（每 3 秒后台自动刷新；公网 IP/ISP 仅在按 `N` 时按需查询，启动不联网）。
+- **无需手敲已有对象**：选择订阅、策略组与节点、待切换或删除的内核时，表单自动读取本机现状并弹出支持即时打字筛选的选择器列表。
+- **高效文本复制**：所有信息、确认与日志面板均支持鼠标拖选复制，也可按 `C` / `Y` 一键复制命令或日志，或按 `V` 打开无边框纯文本视图直接原生选中。
+
+### 主界面快捷键
+
+| 按键 | 功能 |
+| --- | --- |
+| `↑↓` / `j k` / `Home` / `End` | 在当前模块的操作列表中移动 |
+| `←→` / `PgUp` / `PgDn` | 切换模块内分区 / 滚动详情与日志 |
+| `Tab` / `1–9` / `H` / `O` | 切换功能模块 / 跳转编号模块 / 返回概览 / 进入一键优化 |
+| `[` | 展开或折叠左侧导航栏（窄屏下切换浮层抽屉） |
+| `/` 或 `Ctrl+K` | 打开全局增强命令面板（模糊搜索操作、最近使用与界面指令） |
+| `Enter` | 查看详情、配置参数或执行操作 |
+| `Space` / `X` / `A` | 一键优化页：勾选项目 / 核对并执行清单 / 套用推荐优化组合 |
+| `Alt+↑` / `Alt+↓` | 空闲时调整普通功能模块排序并自动持久化 |
+| `T`（抽屉内 `B` / `M`） | 打开右侧「外观与主题」双标签预览抽屉（切换透明背景 / 减弱动效） |
+| `P` | 快捷配置 GitHub 国内加速代理 |
+| `R` / `N` | 手动刷新本机指标 / 按需后台查询公网 IP 与 ISP |
+| `C` / `Y` / `V` | 复制命令或日志 / 打开无边框纯文本视图 |
+| `G` / `F2` | 展开或收起底部任务日志 / 打开全屏完整日志 |
+| `L` | 切换并保存界面语言（简体中文 / English） |
+| `?` / `F1` | 打开上下文快捷键速查 |
+| `Esc` / `Q` / `Ctrl+C` | 关闭弹层或取消运行中任务 / 清理后安全退出 |
+
+<details>
+<summary>Docker 专属工作台快捷键</summary>
+
+| 按键 | 功能 |
+| --- | --- |
+| `←→` 或聚焦态 `1–6` | 切换 容器 / Compose / 镜像 / 卷 / 网络 / 守护进程 6 大标签页 |
+| `j k` / `Space` / `/` / `a` / `o` | 移动选择 / 多选 / 过滤 / 切换显示全部 / 轮换排序 |
+| `Enter` / `s` / `u` / `p` / `e` / `d` / `Shift+P` | 动作菜单 / 启停 / 重启 / 暂停或拉取 / `exec` 终端 / 删除 / Prune 向导 |
+| `i` / `l` / `m` / `v` / `J` / `Shift+S` | 概览 / 实时日志 / 指标与 `top` / 环境与挂载 / 切 JSON / 显隐敏感凭据 |
+| `f` / `t` / `w` / `c` / `Shift+M` / `y` | 日志内：跟随 / 时间戳 / 软换行 / 清屏 / 划选模式 / 复制 |
+| `z` / `[` / `Ctrl+K` / `Shift+T` / `Shift+L` | 全屏聚焦切换 / 侧栏抽屉 / 全局搜索 / 主题 / 语言 |
+
+</details>
+
+### 解耦配色与 UI 设计样式
+
+CqShell 将外观拆分为 **`theme`（配色方案）** 与 **`style`（UI 设计语言）** 两个独立维度。将 `style` 设为 `auto` 时会随配色自动启用专属推荐样式，也可随时在 `T` 抽屉或 CLI 中自由混搭：
+
+| 配色 ID | 名称 | 默认推荐样式 | 风格特点 |
+| --- | --- | --- | --- |
+| `auto` | 自动适配 | `rounded` 现代圆角 | 自动探测终端深浅背景并派生满足 WCAG 对比度的多层色阶 |
+| `obsidian` | 曜石 | `bento` 悬浮层叠 | 深邃暗黑 Bento 无硬外框，纯靠多层表面色阶与呼吸条分层 |
+| `daylight` | 澄明 | `editorial` 极简杂志 | 洁净浅色瑞士排印，留白克制、顶部粗体标题与精致横线 |
+| `tokyo-night` | 东京夜 | `hud` 精密角框 | 赛博 HUD 四角角标、菱形状态符、分段刻度进度条与流光 |
+| `catppuccin` | 摩卡 | `studio` 柔光顶栏 | 柔润暖暗灰表面与卡片顶部柔光标题色带 |
+| `rose-pine` | 玫瑰松 | `atelier` 锐角书斋 | 利落直角框、`[ 标题 ]` 标头与点线分隔 |
+| `high-contrast` | 高对比 | `heavy` 粗框反色 | 纯黑底、加粗边框与高对比反色选中（无障碍友好） |
+| `plain` | 朴素 | `ascii` 纯文本 ASCII | 终端默认色与纯 ASCII 字形，适用于 IPMI / 串口控制台 |
+
+- **优先级**：`--theme` > `CQS_THEME` > `config.toml` > `auto`；`--style` > `CQS_STYLE` > `config.toml` > `auto`。
+- **串口 / IPMI 安全模式**：`cqs --theme plain --lang en-US`。
+- **自定义主题**：将 `*.toml` 置于 `$XDG_CONFIG_HOME/cqs/themes`（默认 `~/.config/cqs/themes`），颜色角色与完整格式见 [docs/THEMES.md](docs/THEMES.md)。
+
+### 配置文件与多语言
+
+配置文件默认位于 `${XDG_CONFIG_HOME:-$HOME/.config}/cqs/config.toml`（完整模板见 [config.example.toml](config.example.toml)）：
+
+```toml
+language = "zh-CN"
+theme = "auto"
+style = "auto"
+transparent_bg = false
+reduced_motion = false
+sidebar_collapsed = false
+detect_background = true
+# locale_dir = "/absolute/path/to/locales"
+# github_proxy_enabled = false
+# github_proxy = "https://gh-proxy.com/"
+```
+
+语言优先级：`--lang` > `CQS_LANG` > `config.toml` > `LC_ALL` / `LC_MESSAGES` / `LANG` > 英语。内置中英文翻译已编译进二进制，扩展第三方翻译见 [docs/I18N.md](docs/I18N.md)。
+
+---
+
+## CLI 与自动化编排
+
+所有操作 ID 不随语言变化，无终端环境下可直接使用 CLI，配合 `--yes` / `-y` 自动确认通用提示：
+
+```bash
+# 查看元数据、主题与版本更新
+cqs list --json
+cqs themes && cqs styles
+cqs update --check --json
+sudo cqs --gh-proxy default update
+
+# 系统换源、BBR 与 TCP 调优
+cqs run system.mirror.test
+sudo cqs run system.mirror.apply --set mirror_site=auto
+sudo cqs run bbr.enable --set qdisc=fq
+sudo cqs run tcp.tune --set bandwidth=1000 --set rtt=80
+
+# 批量编排（统一确认一次，按顺序执行）
+sudo cqs batch system.update tcp.tune bbr.enable --set tcp.tune.rtt=80
+
+# 内核管理与服务器体检
+cqs run kernel.list
+sudo cqs run kernel.install --set profile=standard
+cqs run test.ip --set ip_family=ipv4
+
+# 常用工具与终端美化
+sudo cqs run tools.tmux
+cqs run terminal.preview --set style=all --set color=tokyo-night
+cqs run terminal.apply --set shell=bash --set style=box --set color=tokyo-night
+
+# Mihomo 代理核心与面板
+cqs run clash.status
+cqs --yes run clash.sub.add --set name=home --set url=https://example.invalid/sub --set use=on
+cqs --yes run clash.panel.install --set panel=zashboard
+cqs --yes run clash.start
+```
+
+---
+
+## 安全与使用边界
+
+- **平台范围**：系统运维动作仅支持 **Debian / Ubuntu Linux**；BBRv3 内核安装要求 Debian 12+ / Ubuntu 24.04+（amd64 / arm64）、独立内核环境与 GRUB，WSL / 容器不支持更换宿主内核。Windows 构建仅用于 TUI 开发与 CLI 元数据检查。
+- **非交互 `apt` 保护**：所有内置软件包操作统一启用 `DEBIAN_FRONTEND=noninteractive` 与 `UCF_FORCE_CONFFOLD=1`，保留本地修改配置并关闭 dpkg 独立伪终端，避免升级期间被隐藏对话框阻塞；若外部升级曾异常中断，请先执行 `dpkg --audit` 排查，切勿手动删除锁文件。
+- **可追溯的恢复机制**：网络、SSH、Docker、SWAP、软件源、Mihomo 与终端提示符的写操作均持有 `flock` 锁并保存恢复记录（before-image / pending journal）；遇异常中断时请保留恢复材料以便回滚，不要直接删文件重试。
+- **无隐式重启**：内核安装成功后的重启始终由用户确认，`--yes` 与非交互模式绝不会自动执行重启。
+
+---
+
+## 文档与开发
+
+| 文档 | 内容 |
+| --- | --- |
+| [docs/TECHNICAL.md](docs/TECHNICAL.md) | 系统架构、权限与锁、事务恢复机制及测试验收说明 |
+| [docs/THEMES.md](docs/THEMES.md) | 配色与 UI 样式双维系统、20 项颜色角色与自定义主题编写 |
+| [docs/MIHOMO.md](docs/MIHOMO.md) | Mihomo 全量命令、多面板、控制器、TUN/systemd 与 `clashctl` 兼容说明 |
+| [docs/MIRRORS.md](docs/MIRRORS.md) | LinuxMirrors Lite 软件源接入范围与恢复策略 |
+| [docs/IPQUALITY.md](docs/IPQUALITY.md) | xykt/IPQuality 接入边界、隐私模式与脚本校验说明 |
+| [docs/I18N.md](docs/I18N.md) | TOML 多语言词典结构与新增翻译指南 |
+| [docs/RELEASING.md](docs/RELEASING.md) | 安装器参数、GitHub 下载代理、CI 构建与发布流程 |
+
+### 本地开发与验证
 
 ```bash
 cargo fmt --all --check
@@ -276,15 +345,28 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-Linux 测试需要 Bash、curl、openssl、Python 3（本地 TLS / 下载路由夹具）、cc（编译 ELF 测试夹具）、dpkg-deb、sysctl。测试不安装内核、不修改宿主 sysctl、不重载 SSH / Docker。真实 sshd / dockerd 解析测试需显式运行，见 [技术文档](docs/TECHNICAL.md)。
+生成 TUI 真实渲染缓冲区的 JSON / HTML 视觉检视快照：
 
-GitHub Actions 在分支推送和 PR 时运行 Rust 检查与安装器测试；推送与 `Cargo.toml` 版本一致的 `v*` 标签后，检查通过才构建 amd64 / arm64 musl 安装包并发布 GitHub Release。手动运行构建工作流只上传 Actions 产物。详见 [发布说明](docs/RELEASING.md)。
+```bash
+cargo run --release --example tui_snapshot -- target/previews/status.json 120 36 zh-CN obsidian '#0b1119' auto
+```
 
-## 许可证与参考
+---
 
-沿用 [LICENSE](LICENSE) 中的 GNU GPL v3 文本。Rust 迁移版本：2026-10-26。
+## 致谢与许可证
 
-- [yuju520/YujuToolBox](https://github.com/yuju520/YujuToolBox)：基础上游项目。
-- [byJoey/Actions-bbr-v3](https://github.com/byJoey/Actions-bbr-v3)：BBRv3 功能参考及第三方内核包来源。
-- [kejilion/sh](https://github.com/kejilion/sh)：系统管理工具参考。
-- [xykt/IPQuality](https://github.com/xykt/IPQuality)：IP 质量体检的实际执行项目。
+本项目采用 [GNU General Public License v3.0](LICENSE) 开源许可。
+
+感谢以下优秀开源项目的启发与集成支持：
+
+- [yuju520/YujuToolBox](https://github.com/yuju520/YujuToolBox) — 基础上游灵感项目
+- [byJoey/Actions-bbr-v3](https://github.com/byJoey/Actions-bbr-v3) — BBRv3 功能参考与第三方内核包来源
+- [kejilion/sh](https://github.com/kejilion/sh) — 系统管理工具参考
+- [nelvko/clashctl](https://github.com/nelvko/clashctl) — Mihomo 代理管理与命令交互参考
+- [xykt/IPQuality](https://github.com/xykt/IPQuality) — IP 质量体检执行项目
+
+---
+
+## 友情链接
+
+- [**LINUX DO**](https://linux.do/) — 新的理想型社区，真诚、友善、团结、专业，欢迎一起交流 Linux、开源项目与开发技术。
