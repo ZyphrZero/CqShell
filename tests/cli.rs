@@ -11,6 +11,8 @@ fn cli(home: &std::path::Path) -> Command {
         .env("XDG_CONFIG_HOME", home.join("config"))
         .env("XDG_STATE_HOME", home.join("state"))
         .env_remove("CQS_LANG")
+        .env_remove("CQS_GH_PROXY")
+        .env_remove("GH_PROXY")
         .stdin(Stdio::null());
     command
 }
@@ -359,9 +361,9 @@ sys.exit(23)
                 .contains("功能分类")
         {
             if exit_key.is_some() {
-                // The fixture starts on Agent tools; run its first user action
-                // and open the logs before requesting cancellation.
-                master.write_all(b"\r\x1bOQ").unwrap();
+                // Jump from Overview to the first category (Agent tools via '1'),
+                // run its first user action, and open the full logs before cancelling.
+                master.write_all(b"1\r\x1bOQ").unwrap();
                 started_task = true;
             } else {
                 master.write_all(b"q").unwrap();
@@ -417,4 +419,240 @@ sys.exit(23)
         after.c_lflag & (libc::ICANON | libc::ECHO),
         before.c_lflag & (libc::ICANON | libc::ECHO)
     );
+}
+
+#[test]
+fn github_proxy_action_and_cli_overrides_validate_and_persist() {
+    let temp = tempfile::tempdir().unwrap();
+    let help = cli(temp.path()).arg("--help").output().unwrap();
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--gh-proxy"));
+
+    // Invalid overrides fail with exit code 2 without creating any files.
+    for args in [
+        &["--gh-proxy", "http://gh-proxy.com/", "list"][..],
+        &["--gh-proxy", "https://user@gh-proxy.com/", "list"],
+        &["--gh-proxy", "https://gh-proxy.com/?k=v", "list"],
+        &["--gh-proxy", "https:///gh-proxy.com/", "list"],
+        &[
+            "run",
+            "github.proxy",
+            "--yes",
+            "--set",
+            "gh_proxy_url=http://insecure.example/",
+        ],
+    ] {
+        let out = cli(temp.path()).args(args).output().unwrap();
+        assert!(!out.status.success(), "{args:?}");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    // Invalid env vars are also rejected unless overridden by `--gh-proxy off`.
+    let bad_env = cli(temp.path())
+        .env("GH_PROXY", "http://bad.example/")
+        .arg("list")
+        .output()
+        .unwrap();
+    assert_eq!(bad_env.status.code(), Some(2));
+    let overridden = cli(temp.path())
+        .env("GH_PROXY", "http://bad.example/")
+        .args(["--gh-proxy", "off", "list"])
+        .output()
+        .unwrap();
+    assert!(overridden.status.success());
+
+    // Enabling `github.proxy` with defaults writes https://gh-proxy.com/ to config.toml.
+    let enable = cli(temp.path())
+        .args(["run", "github.proxy", "--yes"])
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+    let config_path = temp.path().join("config/cqs/config.toml");
+    let saved = fs::read_to_string(&config_path).unwrap();
+    assert!(saved.contains("github_proxy_enabled = true"), "{saved}");
+    assert!(
+        saved.contains("github_proxy = \"https://gh-proxy.com/\""),
+        "{saved}"
+    );
+
+    // Disabling keeps the normalized custom URL for future re-enabling.
+    let disable = cli(temp.path())
+        .args([
+            "run",
+            "github.proxy",
+            "--yes",
+            "--set",
+            "gh_proxy_state=off",
+            "--set",
+            "gh_proxy_url=https://mirror.example/gh",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        disable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disable.stderr)
+    );
+    let saved = fs::read_to_string(&config_path).unwrap();
+    assert!(saved.contains("github_proxy_enabled = false"), "{saved}");
+    assert!(
+        saved.contains("github_proxy = \"https://mirror.example/gh/\""),
+        "{saved}"
+    );
+}
+
+#[test]
+fn terminal_preview_runs_read_only_across_single_and_gallery_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    for (locale, expected_title, args) in [
+        (
+            "zh-CN",
+            "终端提示符预览",
+            &[
+                "run",
+                "terminal.preview",
+                "--set",
+                "style=box",
+                "--set",
+                "color=tokyo-night",
+            ][..],
+        ),
+        (
+            "en-US",
+            "Terminal prompt style gallery",
+            &[
+                "run",
+                "terminal.preview",
+                "--set",
+                "style=all",
+                "--set",
+                "color=catppuccin",
+            ][..],
+        ),
+        (
+            "en-US",
+            "Terminal prompt palette gallery",
+            &[
+                "run",
+                "terminal.preview",
+                "--set",
+                "style=ribbon",
+                "--set",
+                "color=all",
+            ][..],
+        ),
+    ] {
+        let out = cli(temp.path())
+            .args(["--lang", locale])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert!(stdout.contains(expected_title), "{stdout}");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+    let bad = cli(temp.path())
+        .args(["run", "terminal.preview", "--set", "style=nonexistent"])
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(2));
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn docker_subcommand_help_is_bilingual_and_requires_tty_without_side_effects() {
+    let temp = tempfile::tempdir().unwrap();
+    for (locale, expected) in [("zh-CN", "Docker TUI"), ("en-US", "Docker TUI")] {
+        let out = cli(temp.path())
+            .args(["--lang", locale, "docker", "--help"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert!(stdout.contains(expected), "{stdout}");
+        assert!(stdout.contains("--tab"), "{stdout}");
+        assert!(stdout.contains("--embedded"), "{stdout}");
+    }
+    let no_tty = cli(temp.path())
+        .args(["--lang", "en-US", "docker", "--tab", "compose"])
+        .output()
+        .unwrap();
+    assert_eq!(no_tty.status.code(), Some(1));
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn update_subcommand_help_aliases_and_argument_validation_have_no_side_effects() {
+    let temp = tempfile::tempdir().unwrap();
+    for (locale, expected) in [
+        ("zh-CN", "ZyphrZero/CqShell"),
+        ("en-US", "ZyphrZero/CqShell"),
+    ] {
+        for sub in ["update", "self-update"] {
+            let out = cli(temp.path())
+                .args(["--lang", locale, sub, "--help"])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let stdout = String::from_utf8(out.stdout).unwrap();
+            assert!(stdout.contains(expected), "{stdout}");
+            assert!(stdout.contains("--check"), "{stdout}");
+            assert!(stdout.contains("--version"), "{stdout}");
+            assert!(stdout.contains("--force"), "{stdout}");
+        }
+    }
+
+    // --json requires --check on update; --check conflicts with --force; invalid tags fail offline
+    for args in [
+        &["--json", "update"][..],
+        &["update", "--check", "--force"],
+        &["update", "--check", "--version", "not-a-semver"],
+        &["run", "app.update", "--set", "version=v1.2.3/../bad"],
+    ] {
+        let out = cli(temp.path()).args(args).output().unwrap();
+        assert!(!out.status.success(), "{args:?} should fail");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    // Both update actions appear in `cqs list --json` with bilingual metadata
+    for locale in ["zh-CN", "en-US"] {
+        let out = cli(temp.path())
+            .args(["--lang", locale, "list", "--json"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let rows = rows.as_array().unwrap();
+        let check = rows
+            .iter()
+            .find(|r| r["id"] == "app.check_update")
+            .expect("app.check_update");
+        assert_eq!(check["group"], "app");
+        assert_eq!(check["root"], false);
+        assert_eq!(check["mutates"], false);
+        let update = rows
+            .iter()
+            .find(|r| r["id"] == "app.update")
+            .expect("app.update");
+        assert_eq!(update["group"], "app");
+        assert_eq!(update["root"], false);
+        assert_eq!(update["mutates"], true);
+    }
 }

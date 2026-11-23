@@ -45,6 +45,10 @@ tcp.tune               Tune TCP buffers
   rtt=50 []
 tcp.restore            Restore TCP settings
   Restore the first recorded TCP runtime values and configuration.
+github.proxy           GitHub acceleration proxy
+  Configure and toggle an HTTPS GitHub acceleration proxy prefix (default https://gh-proxy.com/) for Mihomo, BBRv3 kernels, Agent tools, Starship, and pinned GitHub scripts. Applies only to canonical GitHub hosts while keeping strict HTTPS and SHA-256 verification.
+  gh_proxy_state=on ["on", "off"]
+  gh_proxy_url=https://gh-proxy.com/ []
 clash.install          Install / update Mihomo
   Download the official Mihomo Linux binary for this architecture, verify its release metadata, SHA-256, ELF architecture and reported version, then atomically install it for the current user.
   version= []
@@ -54,6 +58,12 @@ clash.start            Start Mihomo
   Validate the base and Mixin YAML, publish a runtime configuration atomically, then start Mihomo with an ownership-checked PID record.
 clash.stop             Stop Mihomo
   Send SIGTERM to the CqShell-owned Mihomo process and wait for it to exit.
+clash.reload           Hot-reload configuration
+  Rebuild and validate the runtime YAML with Mihomo, atomically publish it, and trigger PUT /configs?force=true without restarting the running process. Rolls back on failure.
+clash.mode             Switch routing mode
+  Switch Mihomo between rule, global and direct routing modes through the controller, with optional persistence to Mixin.
+  proxy_mode=rule ["rule", "global", "direct"]
+  persist=off ["off", "on"]
 clash.sub.list         List subscriptions
   Show saved subscriptions and the selected profile without downloading or changing the running process.
 clash.sub.add          Add subscription
@@ -61,6 +71,12 @@ clash.sub.add          Add subscription
   name= []
   url= []
   use=off ["on", "off"]
+clash.sub.import       Import local YAML subscription
+  Import a Clash / Mihomo subscription from a local YAML file without network access, validate structure and proxies, and commit atomically with mode 0600. Optionally store an HTTPS update URL for future updates.
+  name= []
+  subscription_file= []
+  subscription_url= []
+  use=on ["on", "off"]
 clash.sub.use          Select subscription
   Atomically copy a saved subscription into the base configuration; restart Mihomo separately to apply it.
   name= []
@@ -81,6 +97,14 @@ clash.proxy.select     Select proxy node
   Validate the group and its member, then select it through the controller.
   proxy_group= []
   proxy_node= []
+clash.proxy.delay      Test proxy group delay
+  Run a group latency check through Mihomo's controller and list reachable nodes fastest-first alongside timed-out nodes.
+  proxy_group= []
+  delay_url=https://www.gstatic.com/generate_204 []
+  delay_timeout=5000 []
+clash.connections      Inspect / close connections
+  Show active connection count, upload/download totals, memory and top active sessions; optionally close all active connections.
+  close_all=off ["off", "on"]
 clash.secret.generate  Generate controller secret
   While stopped, generate a random controller secret and save it in the private Mixin without displaying it.
 clash.secret.set       Set secret from private file
@@ -90,9 +114,35 @@ clash.secret.clear     Clear controller secret
   While stopped, clear authentication; only a loopback controller may be used without a secret.
 clash.panel.status     Web dashboard status and URL
   Check dashboard resources and show its URL without a secret. Loopback endpoints require local access or an SSH tunnel.
-clash.panel.install    Install / update Web dashboard
-  Download official stable MetaCubeXD assets, verify SHA-256 and safely extract them, then validate external-ui while Mihomo is stopped.
+clash.panel.install    Install / switch Web dashboard
+  Download a verified Web dashboard (Zashboard default, MetaCubeXD, Yacd-Meta or Razord-Meta), check SHA-256 and safely extract it, then validate external-ui while Mihomo is stopped.
+  panel=zashboard ["zashboard", "metacubexd", "yacd", "razord"]
   version= []
+clash.panel.remove     Uninstall Web dashboard
+  While Mihomo is stopped, clear external-ui from Mixin and delete CqShell-managed dashboard files under resources/ui.
+clash.geodata.status   GeoData database status
+  Inspect installed geoip.metadb, geosite.dat, country.mmdb, geoip.dat and GeoLite2-ASN.mmdb files and sizes in Mihomo resources.
+clash.geodata.update   Update GeoData databases
+  Download official MetaCubeX/meta-rules-dat files (standard, lite or full preset), verify exact size and SHA-256, and replace them atomically. Respects the GitHub acceleration proxy.
+  geodata_preset=standard ["standard", "lite", "full"]
+clash.settings.configure Core proxy settings
+  While Mihomo is stopped, configure mixed-port, LAN access, IPv6, HTTP/TLS/QUIC domain sniffing and log level in Mixin with Mihomo validation.
+  mixed_port=7890 []
+  allow_lan=off ["off", "on"]
+  clash_ipv6=off ["off", "on"]
+  sniffer=on ["on", "off"]
+  log_level=info ["info", "warning", "error", "debug", "silent"]
+clash.dns.status       DNS configuration status
+  Read the effective Mihomo DNS state, enhanced-mode, IPv6 toggle, nameservers and fallback count.
+clash.dns.configure    Configure DNS preset
+  While Mihomo is stopped, configure fake-ip, redir-host or off with China DoH (Alibaba/DNSPod + Cloudflare/Google fallback) or Global DoH presets and standard fake-ip-filter.
+  dns_mode=fake-ip ["fake-ip", "redir-host", "off"]
+  dns_preset=china ["china", "global"]
+  dns_ipv6=off ["off", "on"]
+clash.mixin.status     View Mixin overrides
+  Display persistent Mixin overrides with controller secrets and proxy authentication credentials redacted.
+clash.mixin.reset      Reset Mixin overrides
+  While Mihomo is stopped, remove persistent Mixin overrides and rebuild the runtime config while preserving subscriptions and resources.
 clash.tun.status       TUN configuration and ownership
   Read TUN settings, link state and process ownership.
 clash.tun.configure    Configure TUN mode
@@ -160,11 +210,18 @@ ai.status              Agent tool versions
   Check common user installation directories and PATH for Pi, Claude Code and Codex, then read --version. Distinguish missing commands from execution failures. Does not sign in.
 terminal.install       Install zsh / Starship
   Install zsh and a checksum-verified Starship release. Keep the login shell unchanged.
+terminal.preview       Preview prompt styles
+  Interactively preview 7 prompt styles and 9 color palettes across normal Git, failed-command and root sessions, and inspect the generated Starship TOML without changing any files.
+  style=box ["full", "compact", "box", "ribbon", "powerline", "minimal", "brackets", "all"]
+  color=tokyo-night ["cyan", "green", "magenta", "tokyo-night", "catppuccin", "rose-pine", "nord", "gruvbox", "dracula", "all"]
+  time=on ["on", "off"]
+  git=on ["on", "off"]
+  shell=bash ["bash", "zsh", "both"]
 terminal.apply         Configure prompt
   Update only managed shell initialization blocks and a dedicated Starship TOML file. Preserve a first-use baseline.
   shell=bash ["bash", "zsh", "both"]
-  style=full ["compact", "full"]
-  color=cyan ["cyan", "green", "magenta"]
+  style=full ["full", "compact", "box", "ribbon", "powerline", "minimal", "brackets"]
+  color=cyan ["cyan", "green", "magenta", "tokyo-night", "catppuccin", "rose-pine", "nord", "gruvbox", "dracula"]
   time=off ["on", "off"]
   git=on ["on", "off"]
 terminal.status        Prompt status
@@ -202,6 +259,12 @@ test.connectivity      IPv4 / IPv6 connectivity
 test.io                Disk I/O benchmark
   Write and sync a 1 GiB temporary file three times in the selected directory; remove it afterward.
   directory=/var/tmp []
+app.check_update       Check for CqShell updates
+  Query GitHub repository ZyphrZero/CqShell for the latest stable release and compare with the running version (respects GitHub acceleration proxy; read-only).
+app.update             Update CqShell
+  Download the Linux x86_64/ARM64 release from GitHub repository ZyphrZero/CqShell, verify SHA-256, ELF architecture and --version, then atomically replace the installed cqs binary.
+  version= []
+  force=off ["off", "on"]
 app.install            Install cqs command
   Atomically install this executable at CQS_INSTALL_PATH (default /usr/local/bin/cqs).
 app.uninstall          Uninstall cqs command

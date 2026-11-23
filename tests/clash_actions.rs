@@ -29,11 +29,23 @@ fn clash_controls_have_bilingual_cli_metadata_without_writing_state() {
             ("controller.configure", true),
             ("proxies", false),
             ("proxy.select", true),
+            ("proxy.delay", false),
+            ("connections", true),
+            ("mode", true),
+            ("reload", true),
             ("secret.generate", true),
             ("secret.set", true),
             ("secret.clear", true),
             ("panel.status", false),
             ("panel.install", true),
+            ("panel.remove", true),
+            ("geodata.status", false),
+            ("geodata.update", true),
+            ("settings.configure", true),
+            ("dns.status", false),
+            ("dns.configure", true),
+            ("mixin.status", false),
+            ("mixin.reset", true),
             ("tun.status", false),
             ("tun.configure", true),
             ("logs", false),
@@ -61,6 +73,18 @@ fn clash_controls_have_bilingual_cli_metadata_without_writing_state() {
                 .find(|field| field["name"] == name)
                 .unwrap()
         };
+        assert_eq!(
+            field("clash.panel.install", "panel")["default"],
+            "zashboard"
+        );
+        assert_eq!(
+            field("clash.panel.install", "panel")["choices"],
+            serde_json::json!(["zashboard", "metacubexd", "yacd", "razord"])
+        );
+        assert_eq!(
+            field("clash.geodata.update", "geodata_preset")["choices"],
+            serde_json::json!(["standard", "lite", "full"])
+        );
         assert_eq!(field("clash.tun.configure", "enabled")["default"], "off");
         assert_eq!(
             field("clash.tun.configure", "tun_stack")["choices"],

@@ -11,9 +11,11 @@ main → cli → actions → ops/{system,network,kernel,ssh,docker,terminal,tool
 ```
 
 - `actions` 定义固定 ID、分类、参数、默认值、权限和交互属性，CLI / TUI 共用解析和执行逻辑。参数可声明来源（`Source`）：订阅、Selector 策略组、可启动内核、可删除的 BBRv3 内核等现有项目由 `actions::choices` 读取，依赖字段（节点）取所选策略组的成员。来源只服务 TUI 选择，CLI 仍接受文本，操作本身照常校验；无法通过参数校验的值（如含控制字符的名称）不进入列表。
-- `tui` 处理无焦点导航、普通单项操作和独立的优化多选模式；`tui/view.rs` 负责响应式布局、信息层级及鼠标命中区域（绘制与命中共用同一份几何），子模块 `theme` 定义语义色与样式原语（配色与图案由活动主题提供，面板按主题保留或绘制背景），`dashboard` 绘制并排的两个状态面板（“系统与资源”：2×2 资源仪表与主机信息；“网络与代理”：拥塞 / 队列、TCP、公网地址、终端代理与 Mihomo），`dialogs` 绘制按内容定高的表单、可筛选的选择列表、读取等待框、确认、错误、概览、快捷键与提示层，`logs` 绘制带色调的任务日志；`tui/motion.rs` 提供动画原语（转圈、仪表缓动、提示淡出），主循环每帧注入一次时钟，绘制本身不读系统时间，帧间隔按状态在 33 ms（动画中）、80 ms（转圈）与 250 ms（空闲）之间切换。`tui/input.rs` 维护 UTF-8 光标和宽字符裁剪。键盘输入返回动作意图，再由主循环执行，界面测试不会触发系统修改。含来源参数的表单先在独立线程读取现有项目（控制器查询可能等待网络），读取超过 150 ms 才显示等待框，Esc 放弃读取；读取失败显示错误，列表为空时以提示说明原因。普通操作在工作线程运行；交互工具先退出 raw mode / alternate screen，再继承终端，返回后恢复界面。
+- `tui` 采用现代「侧边栏工作台（Sidebar Shell）」架构与分层模块化结构：`tui/state.rs` 维护主界面状态机（独立概览仪表盘 `Overview`、一键优化清单 `Optimization`、11 个功能模块、异步表单与选择器、确认、进度与会话记录）；`tui/events.rs` 按覆盖层优先级栈（确认 → 异步加载 → 选择器/表单 → 提示/帮助/全屏日志 → 增强命令面板 → 窄屏侧栏抽屉 → 外观抽屉 → 主工作区）统一路由键盘与完整鼠标交互（Hover 高亮、单击/双击、顶栏热区、独立滚轮与模态外部关闭保护）；`tui/layout.rs` 实现 Wide（`≥112`）、Medium（`92–111`）、Compact（`80–91`）与 Mobile（`40–79`，最低支持 `40×16`，兼容 iOS Termius `59×24` 等移动端窄屏，自动折叠侧栏为 `[` 浮层抽屉、堆叠指标/工作台/Docker/提示符预览并启用表单与帮助滚动）四档响应式几何，绘制与鼠标命中共用同一份区域定义；`tui/fx.rs` 提供纯 `ratatui` Buffer 级微动效与视觉质感原语（Backdrop Scrim 压暗、1-cell 投影、120ms 弹窗渐显、90ms 切页淡入、450ms 仪表缓动与渐变色阶、运行呼吸灯与进度流光，支持 `reduced_motion` 降级）；`tui/palette.rs` 提供支持最近使用、界面快捷指令与多词模糊匹配的增强命令面板（`/` / `Ctrl+K`）；`tui/render/*` 将顶栏、侧栏、概览 Bento 仪表盘、模块工作台/检查器、右侧外观抽屉、底部/全屏日志与居中悬浮弹层解耦渲染。帧间隔按状态在 33 ms（动画中）、80 ms（转圈/呼吸）与 250 ms（空闲）之间按需切换。`tui/input.rs` 维护 UTF-8 光标和宽字符裁剪。含来源参数的表单先在独立线程读取现有项目，读取超过 150 ms 才显示等待框，Esc 放弃读取；普通操作在工作线程运行；交互工具先退出 raw mode / alternate screen，再继承终端，返回后恢复界面。
 - `dashboard` 通过 sysinfo 和 Linux 只读 proc/sysfs 读取常驻指标。独立线程每 3 秒更新本机数据；CPU 首次采样显示“采集中”，达到最小采样间隔才显示占用率。公网查询只有显式 N/查询操作触发，使用另一线程和连接/总超时，结果保存在会话内。数据分别标记采集中、未查询、有效、未知及不适用，不用零值代替读取失败，也不因单个探测失败清空整个面板。
 - `runtime` 用参数数组调用系统工具，不拼接 `sh -c`，并发读取 stdout / stderr，检查真实退出状态。解析环境固定 `LC_ALL=C`，外部原始诊断不翻译。
+- `github_proxy` 管理 GitHub 国内加速代理：默认关闭，开启时预设前缀为 `https://gh-proxy.com/`，优先级为 `--gh-proxy` > `CQS_GH_PROXY` > `GH_PROXY` > `config.toml`（`github_proxy_enabled` / `github_proxy`），支持 `default` 与 `off`/`none` 覆盖；仅对官方 HTTPS GitHub 域名（`github.com`、`api.github.com`、`raw.githubusercontent.com`、`gist.githubusercontent.com`、`codeload.github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`）重写下载和 API 地址，不转发非 GitHub 域名及 Clash 订阅链接，且所有资产 URL 规范校验、HTTPS-only 与 SHA-256 完整性校验不变。对 `api.github.com` 元数据请求，若加速代理返回 403 限流或不支持 API，自动记录日志并回退直连 `api.github.com`，而实际资产与脚本下载仍走代理。可通过 CLI `cqs run github.proxy`、全局 `--gh-proxy` 或 TUI 快捷键 `P` / 网络模块「GitHub 国内加速代理」即时配置并持久化。
+- `ops/docker/` 与 `tui/docker/` 实现专属 Docker TUI 管理工作台与 `cqs docker [--tab TAB] [--embedded]` 直达入口：后端全部使用原生 `docker` / `docker compose` CLI（`--format json` / NDJSON，双路径兼容 JSON 数组与 NDJSON，无 `tokio` 异步依赖，天然支持 Rootless、`DOCKER_HOST` 与 Context），配合按需唤醒 / 离开 10 秒自动休眠的后台 `DockerMonitor` 线程、单飞防堆积限时查询、120 ms 防抖 Inspect 懒加载、带 `setsid` 进程组回收的有界 `LogStreamer`（上限 5,000 行、单行 4 KiB 截断与控制序列净化），以及基于纯 `test -x` 静态探测（零 `sh -c`）的交互式 `docker exec -it` TTY 交接；前端在侧边栏 `5 Docker` 嵌入与全屏聚焦（`z` / `F`）双态间无缝切换，覆盖容器、Compose、镜像、卷、网络与守护进程 6 大标签页、多选批量操作、敏感环境变量默认脱敏（`Shift+S` 显隐且切容器重置）、L0–L3 分级确认（卷删除/大批量删除/含卷 Prune 强制口令确认）与原有 6 项 `docker.*` 事务动作的完整兼容。
 - `storage` 管理锁、路径检查、同目录临时文件、权限与所有者保留、fsync、原子替换和文件事务日志。
 - `i18n` 加载 TOML，严格校验键集合与占位符。操作 ID、枚举值和恢复记录不受语言影响。
 - `ops` 中的 JSON、cgroup、发布元数据、配置合并、SHA-256 和提示符生成均由 Rust 实现。`ops/ip_quality.rs` 专门接入 xykt/IPQuality，参数使用固定枚举，语言随界面，默认隐私模式；入口脚本固定版本并校验摘要/语法后交还终端执行。其外部数据源、依赖询问及更新流程见 [IPQuality 接入](IPQUALITY.md)。Python 仅用于测试中的本地 TLS 服务。
@@ -21,7 +23,12 @@ main → cli → actions → ops/{system,network,kernel,ssh,docker,terminal,tool
 
 默认分发一个二进制，无数据库或后台 daemon。语言文件可选外置；apt/dpkg、systemd、sysctl、OpenSSH 和 Docker 仍负责各自的原生操作。
 
-`ops/clash.rs` 用 Rust 实现 `E:\clashctl` 的首期核心流程：GitHub Release 安装 Mihomo 时验证 HTTPS 资产 URL、SHA-256、大小、gzip 解压上限、ELF 架构和 `-v` 结果，再原子替换当前用户的二进制；启动流程结构化解析主配置和 Mixin，支持 rules/proxies/proxy-groups 的 prepend/append/override/inject，先用临时 YAML 运行 Mihomo `-t`，再原子发布 runtime 配置。PID 记录包括 `/proc/<pid>/stat` 启动时间；停止前还会精确匹配 `/proc/<pid>/cmdline` 的二进制、resources 和 runtime 参数。订阅元数据沿用 `use` / `profiles` 并保留未知字段；新增、更新、选择和删除使用 pending before-image 事务。`proxy-env` 只输出给父 Shell 执行的命令。
+`ops/clash.rs` 及其子模块用 Rust 实现 Mihomo 管理全流程：
+- 核心与订阅（`ops/clash.rs`）：GitHub Release 安装 Mihomo 时验证 HTTPS 资产 URL、SHA-256、大小、gzip 解压上限、ELF 架构和 `-v` 结果，再原子替换当前用户的二进制；启动流程结构化解析主配置和 Mixin，支持 rules/proxies/proxy-groups 的 prepend/append/override/inject，先用临时 YAML 运行 Mihomo `-t`，再原子发布 runtime 配置。PID 记录包括 `/proc/<pid>/stat` 启动时间；停止前还会精确匹配 `/proc/<pid>/cmdline` 的二进制、resources 和 runtime 参数。订阅元数据沿用 `use` / `profiles` 并保留未知字段；支持在线 HTTPS 订阅与本地 YAML 导入（`clash.sub.import`），新增、更新、选择和删除均使用 pending before-image 事务。`proxy-env` 只输出给父 Shell 执行的命令。
+- 多面板 Web UI（`ops/clash/panel.rs`）：支持 **Zashboard**（默认，内置纯 Rust 有界 ZIP/Deflate 解压与 IEEE CRC-32 校验）、**MetaCubeXD**、**Yacd-Meta** 与 **Razord-Meta**。Release 面板严格校验官方 Release 元数据、精确大小与 SHA-256，固定 `gh-pages` 面板校验固定 commit 归档大小与 SHA-256；支持跨面板切换与卸载（`clash.panel.remove`），旧标记向后兼容。
+- GeoData 规则库（`ops/clash/geodata.rs`）：对接官方 `MetaCubeX/meta-rules-dat`（`latest`），提供 `standard` / `lite` / `full` 三档预设与本地状态巡检；校验规范 URL、大小与 SHA-256 后以 0600 原子替换，并自动复用 GitHub 加速代理。
+- 控制器实时控制（`ops/clash/controller.rs`）：零外部进程直连 HTTP/1.1 控制器并严格防密钥泄露，支持策略组切换、运行模式即时切换与可选 Mixin 持久化（`clash.mode`）、校验热重载及失败回滚（`clash.reload`）、策略组并发测速排序（`clash.proxy.delay`）与活跃连接统计/全量断开（`clash.connections`）。
+- 核心设置、DNS 与 Mixin（`ops/clash/settings.rs`）：在停止状态下事务化管理 `mixed-port`、`allow-lan`、`ipv6`、HTTP/TLS/QUIC 域名嗅探（`sniffer`）与 `log-level`，支持 `fake-ip` / `redir-host` / `off` 及国内外 DoH 预设与标准 `fake-ip-filter`，并提供密钥脱敏的 Mixin 查看（`clash.mixin.status`）与安全重置（`clash.mixin.reset`）。
 
 默认数据目录为 `$XDG_DATA_HOME/cqs/clash`，未设置 `XDG_DATA_HOME` 时为 `$HOME/.local/share/cqs/clash`；数据路径可通过对应 `CQS_CLASH_*` 变量覆盖。下载只接受无凭据 HTTPS，订阅须含 `proxies` 或 `proxy-providers`。
 
@@ -29,21 +36,19 @@ main → cli → actions → ops/{system,network,kernel,ssh,docker,terminal,tool
 
 ### TUI 状态与主题
 
-主界面没有可切换的列表焦点：上下遍历可选择操作，左右/Tab 切换分类，Section/Rule 不参与选择。一键优化固定在分类首位，普通分类顺序持久化。Command_Palette 是独占输入的覆盖层；Style_Panel 不是覆盖层，它替换说明区域并独占输入。绘制和命中共享 Regions、FormGeometry、CommandPaletteGeometry、StyleGeometry。
+启动默认进入独立「概览仪表盘」（`H` 随时回位），顶部保留 1 行微状态条（品牌、面包屑、紧凑指标胶囊/运行任务胶囊、主机、权限与语言切换），左侧为可折叠导航栏（`[` 切换，置顶概览与一键优化，下方 11 个功能模块按分组呈现并持久化顺序）。在功能页中采用混合直觉导航：`↑↓/j k` 控操作列表，`←→/Tab/1-9` 秒切模块，`/` 或 `Ctrl+K` 唤起增强命令面板，`T` 在右侧打开实时外观抽屉（含透明背景 `B` 与减弱动效 `M` 开关）。
 
-`src/theme` 不依赖 ratatui，定义颜色、24 个角色、13 个图案字段、主题文件、选择优先级和调色板派生。aurora 从背景选择黑/白端点，用对比度余量缩小 Surface 偏移，再以 14 步二分生成文字和状态颜色；classic 使用深浅两套调色板。其余主题为固定配色。无效主题回退 aurora，错误保留在 ThemeState，并在启动提示与风格摘要中显示；不把无效文件当作有效主题。
+`src/theme` 不依赖 ratatui，定义颜色、20 个表面与语义色角色、精简 `StyleFlags`、自定义主题文件读写、选择优先级和 WCAG 自适应色阶派生。内置 8 套主题：`auto`、`obsidian`、`daylight`、`tokyo-night`、`catppuccin`、`rose-pine`、`high-contrast`、`plain`。`auto` 根据终端背景自动派生满足对比度要求的 5 层表面色阶；不可探测时回退 `obsidian`。旧版配置中的主题 ID 自动平滑迁移；无效主题回退 `auto` 并在提示与外观抽屉中保留诊断信息。
 
-背景查询使用 terminal-colorsaurus 1.0.3，在进入 raw mode/alternate screen、读取键盘事件之前仅执行一次。关闭检测返回 Disabled；非终端返回 Unavailable；TTY 查询超时为 900 ms，库负责恢复终端模式。Unix 查询后 tcflush 清空输入；进入界面后排空 crossterm 队列。迟于约 0.9 秒的回复仍有被识别为输入的残余风险。终端不支持查询时 aurora 使用 classic 深色调色板和图案，不联网、不改终端配置。
+背景查询使用 terminal-colorsaurus 1.0.3，在进入 raw mode/alternate screen、读取键盘事件之前仅执行一次。关闭检测返回 Disabled；非终端返回 Unavailable；TTY 查询超时为 900 ms，库负责恢复终端模式。Unix 查询后 tcflush 清空输入；进入界面后排空 crossterm 队列。
 
-`Step_Event` 包含编号、总数、Action ID、开始/结束状态，以及结束结果与用时。CLI 保持原进度行；TUI 更新 Progress_Panel 和语义日志。`BatchReport` 为每项保留 outcome/elapsed，未运行项为 None；同步交还终端的路径返回后回放报告，不伪造跳过项的成功。`Session_Records` 仅存在于内存，最近使用去重保留 10 项，每个操作覆盖保存本会话最近结果，退出不落盘。
+`Step_Event` 包含编号、总数、Action ID、开始/结束状态，以及结束结果与用时。CLI 保持原进度行；TUI 更新右侧步骤进度与底部/全屏语义日志。`BatchReport` 为每项保留 outcome/elapsed，未运行项为 None；同步交还终端的路径返回后回放报告，不伪造跳过项的成功。`Session_Records` 仅存在于内存，最近使用去重保留 10 项（供概览快捷卡与命令面板使用），每个操作覆盖保存本会话最近结果，退出不落盘。
 
-RGB 对话框有填充与一格阴影，120 ms 淡入使用帧时钟，输入无需等动画结束；非 RGB 颜色直接显示。classic 保持历史外观。plain 用 ASCII 字形和终端默认颜色，状态形状不依赖颜色；本地化文本不改写。
+居中悬浮弹层具备背景压暗（Backdrop Scrim）、1-cell 投影与 120 ms 淡入动效，输入无需等动画结束；`reduced_motion = true` 或 `plain` 模式禁用过渡与呼吸流光。`plain` 使用纯 ASCII 字形与终端默认颜色，状态形状不依赖颜色。
 
 ### 渲染验证
 
-快照用固定 Snapshot/时钟/权限夹具，不采样真实主机。文件包含 case、尺寸、主题、背景、locale、文字网格和合并样式段；宽字符续格不重复输出。默认逐字节比较，只有显式 `CQS_UPDATE_SNAPSHOTS=1` 才录制；`baseline_*` 永远不允许重录。有意改版使用独立 case 名称，不能全量更新来掩盖失败。
-
-最终矩阵包含 44 个主题/背景主视图和 42 个状态视图，另保留前两阶段快照。16 条属性分别覆盖顺序、偏好、采样、主题文件、命令、搜索、进度、渲染、对比度与确认规则；Property 15 穷举确认组合，其余至少 100 个用例。文档的 my-nord 示例由 Theme_Printer 往返测试核对。示例导出支持主题和背景参数，HTML 的 Reset 映射到对应参考终端颜色。
+快照用固定 Snapshot/时钟/权限夹具，不采样真实主机，覆盖宽/中/窄（80×24）/移动端（59×24、40×16）四档断点、深/浅/Plain 主题、概览、工作台、Docker、批量优化进度、外观抽屉、命令面板、表单 Chips、终端提示符预览、高危确认及窄屏侧栏浮层等核心场景。默认逐字节比较，仅显式设置 `CQS_UPDATE_SNAPSHOTS=1` 时更新；并配套全主题 WCAG 对比度属性测试、全断点多主题双语渲染测试、键鼠交互与状态机测试。`examples/tui_snapshot.rs` 支持导出真实渲染缓冲区的 HTML 视觉检视稿。
 
 Linux 验收遵循本地构建 → SFTP 上传 → 文件大小/SHA-256 校验 → 远端只读冒烟及测试；PTY 中的取消/预览/保存验证不等同于系统修改类操作验收。
 

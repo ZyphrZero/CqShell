@@ -1,0 +1,57 @@
+# case overview_plain_80x24_en-US
+# size 80x24
+# theme plain
+# locale en-US
+  = Nav  * CqShell v0.1.5 | Overview                          * USER   English  
++-[System & resources]-----------------+ +-[Network & proxy]-------------------+
+| CPU    [#---------]  12%  2C | ::::: | | BBR   o Disabled | available / v... |
+| Memory [######----]  63%    1.2/1.9G | | TCP   o not configured | fq_codel   |
+| Disk   [####------]  41%  16.4/40.0G | | IPv4  203.0.113.24 | AS64500 Exa... |
+| Swap   [#---------]  10%    0.2/2.0G | | IPv6  2001:db8:3c4d:15::1a2f        |
+| Host   vps-sg-01 | Debian GNU/Lin... | | Proxy Mihomo * Running | v1.19.2... |
+| Kernel 6.12.8-joeyblog-bbrv3 | x8... | | GH    o Direct                      |
+| Uptime 3d 04h 00m | Asia/Shanghai    | |                                     |
++--------------------------------------+ +-------------------------------------+
+                                                                                
+ Quick Actions & Insights                                      / search actions 
++--------------------------------------+ +-------------------------------------+
+| One-Click Optimization     [4 Enter] | | Enable BBRv3             [Disabled] |
+| 4 selected; press Enter to review    | | Kernel supports BBR; currently      |
++--------------------------------------+ +-------------------------------------+
+                                                                                
++--------------------------------------+ +-------------------------------------+
+| Mihomo Proxy Center        [Running] | | Recent · Command Search         [/] |
+| Subscriptions, proxy nodes, TUN and  | | Press / or Ctrl+K to search all     |
++--------------------------------------+ +-------------------------------------+
+                                                                                
+                                                                                
+ [Arrows] move  [Enter] open  [/] search actions  [O] Optimization              
+---
+0 1 7 reset reset bold
+0 9 9 reset reset bold
+0 28 8 reset reset bold
+1 2 20 reset reset bold
+1 43 17 reset reset bold
+2 10 1 reset reset bold
+2 21 5 reset reset bold
+2 49 29 yellow reset -
+3 10 6 reset reset bold
+3 21 5 reset reset bold
+4 10 4 reset reset bold
+4 21 5 reset reset bold
+5 10 1 reset reset bold
+5 21 5 reset reset bold
+6 49 29 green reset -
+11 1 24 reset reset bold
+13 2 22 reset reset bold
+13 29 9 reset reset bold
+13 43 12 reset reset bold
+13 68 10 yellow reset bold
+18 2 19 reset reset bold
+18 29 9 green reset bold
+18 43 23 reset reset bold
+18 75 3 cyan reset bold
+23 1 8 reset reset bold
+23 16 7 reset reset bold
+23 30 3 reset reset bold
+23 50 3 reset reset bold

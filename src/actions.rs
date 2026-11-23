@@ -31,12 +31,16 @@ pub enum Kind {
     BbrRestore,
     TcpTune,
     TcpRestore,
+    GithubProxy,
     ClashInstall,
     ClashStatus,
     ClashStart,
     ClashStop,
+    ClashReload,
+    ClashMode,
     ClashSubscriptions,
     ClashSubscriptionAdd,
+    ClashSubscriptionImport,
     ClashSubscriptionUse,
     ClashSubscriptionUpdate,
     ClashSubscriptionRemove,
@@ -44,11 +48,21 @@ pub enum Kind {
     ClashControllerConfigure,
     ClashProxies,
     ClashProxySelect,
+    ClashProxyDelay,
+    ClashConnections,
     ClashSecretGenerate,
     ClashSecretSet,
     ClashSecretClear,
     ClashPanelStatus,
     ClashPanelInstall,
+    ClashPanelRemove,
+    ClashGeodataStatus,
+    ClashGeodataUpdate,
+    ClashSettingsConfigure,
+    ClashDnsStatus,
+    ClashDnsConfigure,
+    ClashMixinStatus,
+    ClashMixinReset,
     ClashTunStatus,
     ClashTunConfigure,
     ClashLogs,
@@ -64,6 +78,7 @@ pub enum Kind {
     AiInstall(ops::ai::Tool),
     AiStatus,
     TerminalInstall,
+    TerminalPreview,
     TerminalApply,
     TerminalStatus,
     TerminalRestore,
@@ -79,6 +94,8 @@ pub enum Kind {
     Performance,
     Connectivity,
     Io,
+    SelfUpdateCheck,
+    SelfUpdate,
     Install,
     Uninstall,
 }
@@ -88,6 +105,7 @@ pub enum Kind {
 pub enum Listing {
     Subscriptions,
     ProxyGroups,
+    DelayGroups,
     BootKernels,
     RemovableKernels,
 }
@@ -234,6 +252,37 @@ impl Spec {
                 ops::docker::candidate("{}", ops::docker::Change::Mirror(&p["mirror"]), "")?;
                 true
             }
+            Kind::GithubProxy => {
+                if p["gh_proxy_state"] == "on" || !p["gh_proxy_url"].is_empty() {
+                    crate::github_proxy::normalize(&p["gh_proxy_url"])?;
+                }
+                true
+            }
+            Kind::SelfUpdate => {
+                if !p["version"].is_empty() {
+                    ops::self_update::parse_version_tag(&p["version"])?;
+                }
+                true
+            }
+            Kind::ClashSubscriptionImport => {
+                let path = Path::new(&p["subscription_file"]);
+                if !p["subscription_url"].is_empty() {
+                    ops::clash::validate_subscription_url(&p["subscription_url"])?;
+                }
+                path.is_absolute()
+                    && !path
+                        .components()
+                        .any(|c| c == std::path::Component::ParentDir)
+            }
+            Kind::ClashProxyDelay => {
+                ops::clash::controller::validate_test_url(&p["delay_url"])?;
+                ops::clash::controller::validate_delay_timeout(&p["delay_timeout"])?;
+                true
+            }
+            Kind::ClashSettingsConfigure => {
+                ops::clash::settings::validate_mixed_port(&p["mixed_port"])?;
+                true
+            }
             Kind::SshKey | Kind::Io => {
                 let path = Path::new(
                     &p[if self.kind == Kind::SshKey {
@@ -281,9 +330,13 @@ pub const OPTIMIZATION: &[&str] = &[
 const REVERSIBLE: &[&str] = &[
     "bbr.enable",
     "tcp.tune",
+    "github.proxy",
     "system.timezone",
     "terminal.apply",
     "clash.proxy.select",
+    "clash.mode",
+    "clash.settings.configure",
+    "clash.dns.configure",
 ];
 
 pub fn specs() -> Vec<Spec> {
@@ -495,6 +548,18 @@ pub fn specs() -> Vec<Spec> {
         vec![],
     );
     add(
+        "github.proxy",
+        "network",
+        GithubProxy,
+        false,
+        true,
+        false,
+        vec![
+            field("gh_proxy_state", "on", &["on", "off"], true),
+            field("gh_proxy_url", crate::github_proxy::DEFAULT_URL, &[], false),
+        ],
+    );
+    add(
         "clash.install",
         "clash",
         ClashInstall,
@@ -523,6 +588,27 @@ pub fn specs() -> Vec<Spec> {
     );
     add("clash.stop", "clash", ClashStop, false, true, false, vec![]);
     add(
+        "clash.reload",
+        "clash",
+        ClashReload,
+        false,
+        true,
+        false,
+        vec![],
+    );
+    add(
+        "clash.mode",
+        "clash",
+        ClashMode,
+        false,
+        true,
+        false,
+        vec![
+            field("proxy_mode", "rule", &["rule", "global", "direct"], true),
+            field("persist", "off", &["off", "on"], true),
+        ],
+    );
+    add(
         "clash.sub.list",
         "clash",
         ClashSubscriptions,
@@ -542,6 +628,20 @@ pub fn specs() -> Vec<Spec> {
             field("name", "", &[], true),
             field("url", "", &[], true),
             field("use", "off", &["on", "off"], true),
+        ],
+    );
+    add(
+        "clash.sub.import",
+        "clash",
+        ClashSubscriptionImport,
+        false,
+        true,
+        false,
+        vec![
+            field("name", "", &[], true),
+            field("subscription_file", "", &[], true),
+            field("subscription_url", "", &[], false),
+            field("use", "on", &["on", "off"], true),
         ],
     );
     add(
@@ -611,6 +711,33 @@ pub fn specs() -> Vec<Spec> {
         ],
     );
     add(
+        "clash.proxy.delay",
+        "clash",
+        ClashProxyDelay,
+        false,
+        false,
+        false,
+        vec![
+            listed("proxy_group", Source::Listing(Listing::DelayGroups)),
+            field(
+                "delay_url",
+                ops::clash::controller::DEFAULT_DELAY_URL,
+                &[],
+                false,
+            ),
+            field("delay_timeout", "5000", &[], true),
+        ],
+    );
+    add(
+        "clash.connections",
+        "clash",
+        ClashConnections,
+        false,
+        true,
+        false,
+        vec![field("close_all", "off", &["off", "on"], true)],
+    );
+    add(
         "clash.secret.generate",
         "clash",
         ClashSecretGenerate,
@@ -653,7 +780,112 @@ pub fn specs() -> Vec<Spec> {
         false,
         true,
         false,
-        vec![field("version", "", &[], false)],
+        vec![
+            field(
+                "panel",
+                "zashboard",
+                &["zashboard", "metacubexd", "yacd", "razord"],
+                true,
+            ),
+            field("version", "", &[], false),
+        ],
+    );
+    add(
+        "clash.panel.remove",
+        "clash",
+        ClashPanelRemove,
+        false,
+        true,
+        false,
+        vec![],
+    );
+    add(
+        "clash.geodata.status",
+        "clash",
+        ClashGeodataStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.geodata.update",
+        "clash",
+        ClashGeodataUpdate,
+        false,
+        true,
+        false,
+        vec![field(
+            "geodata_preset",
+            "standard",
+            &["standard", "lite", "full"],
+            true,
+        )],
+    );
+    add(
+        "clash.settings.configure",
+        "clash",
+        ClashSettingsConfigure,
+        false,
+        true,
+        false,
+        vec![
+            field("mixed_port", "7890", &[], true),
+            field("allow_lan", "off", &["off", "on"], true),
+            field("clash_ipv6", "off", &["off", "on"], true),
+            field("sniffer", "on", &["on", "off"], true),
+            field(
+                "log_level",
+                "info",
+                &["info", "warning", "error", "debug", "silent"],
+                true,
+            ),
+        ],
+    );
+    add(
+        "clash.dns.status",
+        "clash",
+        ClashDnsStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.dns.configure",
+        "clash",
+        ClashDnsConfigure,
+        false,
+        true,
+        false,
+        vec![
+            field(
+                "dns_mode",
+                "fake-ip",
+                &["fake-ip", "redir-host", "off"],
+                true,
+            ),
+            field("dns_preset", "china", &["china", "global"], true),
+            field("dns_ipv6", "off", &["off", "on"], true),
+        ],
+    );
+    add(
+        "clash.mixin.status",
+        "clash",
+        ClashMixinStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.mixin.reset",
+        "clash",
+        ClashMixinReset,
+        false,
+        true,
+        false,
+        vec![],
     );
     add(
         "clash.tun.status",
@@ -809,6 +1041,21 @@ pub fn specs() -> Vec<Spec> {
         vec![],
     );
     add(
+        "terminal.preview",
+        "terminal",
+        TerminalPreview,
+        false,
+        false,
+        false,
+        vec![
+            field("style", "box", ops::terminal::PREVIEW_STYLES, true),
+            field("color", "tokyo-night", ops::terminal::PREVIEW_COLORS, true),
+            field("time", "on", &["on", "off"], true),
+            field("git", "on", &["on", "off"], true),
+            field("shell", "bash", ops::terminal::SHELLS, true),
+        ],
+    );
+    add(
         "terminal.apply",
         "terminal",
         TerminalApply,
@@ -816,9 +1063,9 @@ pub fn specs() -> Vec<Spec> {
         true,
         false,
         vec![
-            field("shell", "bash", &["bash", "zsh", "both"], true),
-            field("style", "full", &["compact", "full"], true),
-            field("color", "cyan", &["cyan", "green", "magenta"], true),
+            field("shell", "bash", ops::terminal::SHELLS, true),
+            field("style", "full", ops::terminal::STYLES, true),
+            field("color", "cyan", ops::terminal::COLORS, true),
             field("time", "off", &["on", "off"], true),
             field("git", "on", &["on", "off"], true),
         ],
@@ -936,6 +1183,27 @@ pub fn specs() -> Vec<Spec> {
         false,
         vec![field("directory", "/var/tmp", &[], true)],
     );
+    add(
+        "app.check_update",
+        "app",
+        SelfUpdateCheck,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "app.update",
+        "app",
+        SelfUpdate,
+        false,
+        true,
+        false,
+        vec![
+            field("version", "", &[], false),
+            field("force", "off", &["off", "on"], true),
+        ],
+    );
     add("app.install", "app", Install, true, true, false, vec![]);
     add("app.uninstall", "app", Uninstall, true, true, false, vec![]);
     items
@@ -954,6 +1222,7 @@ pub fn choices(ctx: &Context, listing: Listing) -> Result<Vec<ops::Choice>> {
     let mut choices = match listing {
         Listing::Subscriptions => ops::clash::subscription_choices(ctx)?,
         Listing::ProxyGroups => ops::clash::controller::group_choices(ctx)?,
+        Listing::DelayGroups => ops::clash::controller::delay_group_choices(ctx)?,
         Listing::BootKernels => ops::kernel::boot_choices(ctx)?,
         Listing::RemovableKernels => ops::kernel::removable_choices(ctx)?,
     };
@@ -992,6 +1261,7 @@ fn self_confirming(kind: Kind) -> bool {
             | Kind::MirrorApply
             | Kind::ClashInstall
             | Kind::ClashStart
+            | Kind::SelfUpdate
     )
 }
 
@@ -1022,7 +1292,12 @@ pub fn execute_reviewed(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Re
 
 fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Result<()> {
     let p = spec.parameters(supplied)?;
-    ctx.platform()?;
+    if !matches!(
+        spec.kind,
+        Kind::GithubProxy | Kind::TerminalPreview | Kind::SelfUpdateCheck | Kind::SelfUpdate
+    ) {
+        ctx.platform()?;
+    }
     if spec.root {
         ctx.root()?;
     }
@@ -1067,14 +1342,26 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
         BbrRestore => ops::network::restore(ctx, &ctx.paths.bbr),
         TcpTune => ops::network::tune(ctx, &p["bandwidth"], &p["rtt"]),
         TcpRestore => ops::network::restore(ctx, &ctx.paths.tcp),
+        GithubProxy => {
+            crate::github_proxy::configure(ctx, p["gh_proxy_state"] == "on", &p["gh_proxy_url"])
+        }
         ClashInstall => ops::clash::install(ctx, &p["version"]),
         ClashStatus => ops::clash::status(ctx),
         ClashStart => ops::clash::start(ctx),
         ClashStop => ops::clash::stop(ctx),
+        ClashReload => ops::clash::controller::reload(ctx),
+        ClashMode => ops::clash::controller::mode(ctx, &p["proxy_mode"], p["persist"] == "on"),
         ClashSubscriptions => ops::clash::subscriptions(ctx),
         ClashSubscriptionAdd => {
             ops::clash::subscription_add(ctx, &p["name"], &p["url"], p["use"] == "on")
         }
+        ClashSubscriptionImport => ops::clash::subscription_import(
+            ctx,
+            &p["name"],
+            Path::new(&p["subscription_file"]),
+            &p["subscription_url"],
+            p["use"] == "on",
+        ),
         ClashSubscriptionUse => ops::clash::subscription_use(ctx, &p["name"]),
         ClashSubscriptionUpdate => ops::clash::subscription_update(ctx, &p["name"]),
         ClashSubscriptionRemove => ops::clash::subscription_remove(ctx, &p["name"]),
@@ -1086,11 +1373,38 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
         ClashProxySelect => {
             ops::clash::controller::select(ctx, &p["proxy_group"], &p["proxy_node"])
         }
+        ClashProxyDelay => ops::clash::controller::delay(
+            ctx,
+            &p["proxy_group"],
+            &p["delay_url"],
+            &p["delay_timeout"],
+        ),
+        ClashConnections => ops::clash::controller::connections(ctx, p["close_all"] == "on"),
         ClashSecretGenerate => ops::clash::controller::secret_generate(ctx),
         ClashSecretSet => ops::clash::controller::secret_set(ctx, &p["secret_file"]),
         ClashSecretClear => ops::clash::controller::secret_clear(ctx),
         ClashPanelStatus => ops::clash::panel::status(ctx),
-        ClashPanelInstall => ops::clash::panel::install(ctx, &p["version"]),
+        ClashPanelInstall => ops::clash::panel::install(ctx, &p["panel"], &p["version"]),
+        ClashPanelRemove => ops::clash::panel::remove(ctx),
+        ClashGeodataStatus => ops::clash::geodata::status(ctx),
+        ClashGeodataUpdate => ops::clash::geodata::update(ctx, &p["geodata_preset"]),
+        ClashSettingsConfigure => ops::clash::settings::configure(
+            ctx,
+            &p["mixed_port"],
+            p["allow_lan"] == "on",
+            p["clash_ipv6"] == "on",
+            p["sniffer"] == "on",
+            &p["log_level"],
+        ),
+        ClashDnsStatus => ops::clash::settings::dns_status(ctx),
+        ClashDnsConfigure => ops::clash::settings::dns_configure(
+            ctx,
+            &p["dns_mode"],
+            &p["dns_preset"],
+            p["dns_ipv6"] == "on",
+        ),
+        ClashMixinStatus => ops::clash::settings::mixin_status(ctx),
+        ClashMixinReset => ops::clash::settings::mixin_reset(ctx),
         ClashTunStatus => ops::clash::tun::status(ctx),
         ClashTunConfigure => ops::clash::tun::configure(
             ctx,
@@ -1113,6 +1427,14 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
         AiInstall(tool) => ops::ai::install(ctx, tool),
         AiStatus => ops::ai::status(ctx),
         TerminalInstall => ops::tools::terminal_install(ctx),
+        TerminalPreview => ops::terminal::preview(
+            ctx,
+            &p["style"],
+            &p["color"],
+            &p["time"],
+            &p["git"],
+            &p["shell"],
+        ),
         TerminalApply => ops::terminal::apply(
             ctx,
             &ops::terminal::Options {
@@ -1140,6 +1462,16 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
         Performance => ops::tools::remote(ctx, "https://yabs.sh"),
         Connectivity => ops::tools::connectivity(ctx),
         Io => ops::tools::io_test(ctx, Path::new(&p["directory"])),
+        SelfUpdateCheck => ops::self_update::check_and_report(ctx, None, false).map(|_| ()),
+        SelfUpdate => ops::self_update::update(
+            ctx,
+            &ops::self_update::UpdateOptions {
+                version: (!p["version"].is_empty()).then(|| p["version"].clone()),
+                force: p["force"] == "on",
+                target_path: None,
+            },
+        )
+        .map(|_| ()),
         Install => ops::system::install_self(ctx),
         Uninstall => ops::system::uninstall_self(ctx),
     }
@@ -1291,13 +1623,18 @@ mod tests {
             "system.mirror.apply",
             "clash.install",
             "clash.start",
+            "app.update",
         ];
         const REVIEWED_REVERSIBLE: &[&str] = &[
             "bbr.enable",
             "tcp.tune",
+            "github.proxy",
             "system.timezone",
             "terminal.apply",
             "clash.proxy.select",
+            "clash.mode",
+            "clash.settings.configure",
+            "clash.dns.configure",
         ];
         // Component 8, "generic confirmation per entry point".
         let expected = |spec: &Spec, prompt: Prompt| {

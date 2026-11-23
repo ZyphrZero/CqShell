@@ -331,6 +331,34 @@
   },
   {
     "available": true,
+    "description": "配置并开关 GitHub 国内加速代理前缀（默认地址 https://gh-proxy.com/），加速 Mihomo、BBRv3 内核、Agent 工具、Starship 及固定脚本的 GitHub 拉取；仅作用于 GitHub 官方域名，仍严格校验 SHA-256 与 HTTPS。",
+    "group": "network",
+    "id": "github.proxy",
+    "interactive": false,
+    "label": "GitHub 国内加速代理",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "gh_proxy_state",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "https://gh-proxy.com/",
+        "name": "gh_proxy_url",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "下载当前架构的官方 Mihomo Linux 二进制，校验发布元数据、SHA-256、ELF 架构和实际版本后，为当前用户原子安装。",
     "group": "clash",
     "id": "clash.install",
@@ -386,6 +414,50 @@
   },
   {
     "available": true,
+    "description": "重新合成并通过 Mihomo 校验运行配置，原子发布后调用控制器热重载，无需重启进程；失败自动回滚。",
+    "group": "clash",
+    "id": "clash.reload",
+    "interactive": false,
+    "label": "热重载运行配置",
+    "mutates": true,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "通过控制器在 rule（规则）、global（全局）和 direct（直连）之间即时切换，可选同步持久化到 Mixin。",
+    "group": "clash",
+    "id": "clash.mode",
+    "interactive": false,
+    "label": "切换代理运行模式",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "rule",
+          "global",
+          "direct"
+        ],
+        "default": "rule",
+        "name": "proxy_mode",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "persist",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "显示保存的订阅和当前选择，不下载内容，也不修改运行中的进程。",
     "group": "clash",
     "id": "clash.sub.list",
@@ -423,6 +495,46 @@
           "off"
         ],
         "default": "off",
+        "name": "use",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "从本地 Clash / Mihomo YAML 配置文件导入订阅（无需联网拉取），校验 YAML 与代理节点后以 0600 权限原子保存；可选填写原 HTTPS 订阅链接以便日后在线更新。",
+    "group": "clash",
+    "id": "clash.sub.import",
+    "interactive": false,
+    "label": "从本地 YAML 导入订阅",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "name",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "subscription_file",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "subscription_url",
+        "required": false
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
         "name": "use",
         "required": true
       }
@@ -557,6 +669,59 @@
   },
   {
     "available": true,
+    "description": "通过控制器对所选策略组并发测速，按延迟从低到高排序展示可用节点并列出超时节点。",
+    "group": "clash",
+    "id": "clash.proxy.delay",
+    "interactive": false,
+    "label": "策略组节点批量测速",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "proxy_group",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "https://www.gstatic.com/generate_204",
+        "name": "delay_url",
+        "required": false
+      },
+      {
+        "choices": [],
+        "default": "5000",
+        "name": "delay_timeout",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "查看当前活跃连接数、累计上下行流量、内存占用及热门连接明细，可选一键断开全部连接。",
+    "group": "clash",
+    "id": "clash.connections",
+    "interactive": false,
+    "label": "查看 / 断开活跃连接",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "close_all",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "停止 Mihomo 后生成随机密钥并保存到私有 Mixin；不在日志显示内容。",
     "group": "clash",
     "id": "clash.secret.generate",
@@ -612,13 +777,24 @@
   },
   {
     "available": true,
-    "description": "下载官方 MetaCubeXD 稳定版，校验 SHA-256 并安全解压，验证后更新 external-ui；请先停止 Mihomo。",
+    "description": "下载官方校验的 Web 面板（默认 Zashboard，另支持 MetaCubeXD、Yacd-Meta、Razord-Meta），校验 SHA-256 并安全解压，验证后更新 external-ui；请先停止 Mihomo。",
     "group": "clash",
     "id": "clash.panel.install",
     "interactive": false,
-    "label": "安装 / 更新 Web 控制台",
+    "label": "安装 / 切换 Web 控制台面板",
     "mutates": true,
     "parameters": [
+      {
+        "choices": [
+          "zashboard",
+          "metacubexd",
+          "yacd",
+          "razord"
+        ],
+        "default": "zashboard",
+        "name": "panel",
+        "required": true
+      },
       {
         "choices": [],
         "default": "",
@@ -626,6 +802,188 @@
         "required": false
       }
     ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "停止 Mihomo 后清除 Mixin 中的 external-ui，并删除 CqShell 在 resources/ui 下管理的面板文件。",
+    "group": "clash",
+    "id": "clash.panel.remove",
+    "interactive": false,
+    "label": "卸载 Web 控制台面板",
+    "mutates": true,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "检查 Mihomo 资源目录中 geoip.metadb、geosite.dat、country.mmdb、geoip.dat 与 GeoLite2-ASN.mmdb 的存在状态与体积。",
+    "group": "clash",
+    "id": "clash.geodata.status",
+    "interactive": false,
+    "label": "查看 GeoData 规则库状态",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "从官方 MetaCubeX/meta-rules-dat 下载 standard / lite / full 预设文件，校验精确体积与 SHA-256 后原子替换；自动支持 GitHub 加速代理。",
+    "group": "clash",
+    "id": "clash.geodata.update",
+    "interactive": false,
+    "label": "更新 GeoData 规则库",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "standard",
+          "lite",
+          "full"
+        ],
+        "default": "standard",
+        "name": "geodata_preset",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "停止 Mihomo 后在 Mixin 中配置混合端口、局域网共享、IPv6、HTTP/TLS/QUIC 域名嗅探与日志级别，并校验生效。",
+    "group": "clash",
+    "id": "clash.settings.configure",
+    "interactive": false,
+    "label": "核心代理设置",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "7890",
+        "name": "mixed_port",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "allow_lan",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "clash_ipv6",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "sniffer",
+        "required": true
+      },
+      {
+        "choices": [
+          "info",
+          "warning",
+          "error",
+          "debug",
+          "silent"
+        ],
+        "default": "info",
+        "name": "log_level",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "只读查看当前生效的 Mihomo DNS 开关、增强模式、IPv6 解析、上游 nameserver 与 fallback 数量。",
+    "group": "clash",
+    "id": "clash.dns.status",
+    "interactive": false,
+    "label": "查看 DNS 配置状态",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "停止 Mihomo 后配置 fake-ip / redir-host / 关闭，内置国内分流 DoH（阿里/腾讯 + Cloudflare/Google 回落）或海外 DoH 预设与常见 fake-ip-filter。",
+    "group": "clash",
+    "id": "clash.dns.configure",
+    "interactive": false,
+    "label": "配置 DNS 预设",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "fake-ip",
+          "redir-host",
+          "off"
+        ],
+        "default": "fake-ip",
+        "name": "dns_mode",
+        "required": true
+      },
+      {
+        "choices": [
+          "china",
+          "global"
+        ],
+        "default": "china",
+        "name": "dns_preset",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "dns_ipv6",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "查看持久化 Mixin 覆盖内容，自动脱敏控制器密钥与代理认证凭据。",
+    "group": "clash",
+    "id": "clash.mixin.status",
+    "interactive": false,
+    "label": "查看 Mixin 覆盖配置",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "停止 Mihomo 后清除全部 Mixin 持久化覆盖并重建运行配置，保留已保存的订阅与本地资源。",
+    "group": "clash",
+    "id": "clash.mixin.reset",
+    "interactive": false,
+    "label": "重置 Mixin 覆盖配置",
+    "mutates": true,
+    "parameters": [],
     "root": false,
     "unavailable_reason": null
   },
@@ -1082,6 +1440,79 @@
   },
   {
     "available": true,
+    "description": "实时预览 7 种提示符样式与 9 套配色方案，支持模拟常规 Git、报错退出码与 Root 会话，并可查看生成的 Starship TOML 配置；不修改任何文件。",
+    "group": "terminal",
+    "id": "terminal.preview",
+    "interactive": false,
+    "label": "预览终端提示符",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [
+          "full",
+          "compact",
+          "box",
+          "ribbon",
+          "powerline",
+          "minimal",
+          "brackets",
+          "all"
+        ],
+        "default": "box",
+        "name": "style",
+        "required": true
+      },
+      {
+        "choices": [
+          "cyan",
+          "green",
+          "magenta",
+          "tokyo-night",
+          "catppuccin",
+          "rose-pine",
+          "nord",
+          "gruvbox",
+          "dracula",
+          "all"
+        ],
+        "default": "tokyo-night",
+        "name": "color",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "time",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "git",
+        "required": true
+      },
+      {
+        "choices": [
+          "bash",
+          "zsh",
+          "both"
+        ],
+        "default": "bash",
+        "name": "shell",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "仅更新受管理的 Shell 初始化区块及独立 Starship TOML 文件，保留首次启用前的基线。",
     "group": "terminal",
     "id": "terminal.apply",
@@ -1101,8 +1532,13 @@
       },
       {
         "choices": [
+          "full",
           "compact",
-          "full"
+          "box",
+          "ribbon",
+          "powerline",
+          "minimal",
+          "brackets"
         ],
         "default": "full",
         "name": "style",
@@ -1112,7 +1548,13 @@
         "choices": [
           "cyan",
           "green",
-          "magenta"
+          "magenta",
+          "tokyo-night",
+          "catppuccin",
+          "rose-pine",
+          "nord",
+          "gruvbox",
+          "dracula"
         ],
         "default": "cyan",
         "name": "color",
@@ -1366,6 +1808,46 @@
         "choices": [],
         "default": "/var/tmp",
         "name": "directory",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "连接 GitHub 仓库 ZyphrZero/CqShell 查询最新稳定版本并与当前版本对比（自动遵循 GitHub 加速代理配置，不修改本地文件）。",
+    "group": "app",
+    "id": "app.check_update",
+    "interactive": false,
+    "label": "检测 CqShell 更新",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "从 GitHub 仓库 ZyphrZero/CqShell 下载 Linux x86_64/ARM64 发布包，校验 SHA-256、ELF 架构与实际版本号后原子替换当前 cqs 命令。",
+    "group": "app",
+    "id": "app.update",
+    "interactive": false,
+    "label": "更新 CqShell",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "version",
+        "required": false
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "force",
         "required": true
       }
     ],

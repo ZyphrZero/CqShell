@@ -12,12 +12,30 @@ pub struct Preferences {
     pub locale_dir: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub category_order: Vec<String>,
-    /// Saved theme ID.
+    /// Saved color palette (theme) ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Saved UI style ID (`None` or `"auto"` follows the active palette's default style).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
     /// Terminal background detection; `None` means enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detect_background: Option<bool>,
+    /// Keep terminal canvas transparent instead of painting layered background fills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transparent_bg: Option<bool>,
+    /// Disable transition/shimmer animations for weak SSH links or reduced motion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduced_motion: Option<bool>,
+    /// Remember user's sidebar collapsed preference on wide/medium viewports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_collapsed: Option<bool>,
+    /// Enable GitHub China acceleration proxy for GitHub API/release/raw downloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_proxy_enabled: Option<bool>,
+    /// Saved HTTPS prefix for GitHub acceleration proxy (defaults to `https://gh-proxy.com/`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_proxy: Option<String>,
 }
 
 impl Preferences {
@@ -156,21 +174,70 @@ mod tests {
             Just(REORDERABLE.map(String::from).to_vec()).prop_shuffle(),
         ];
         let theme = prop::option::of("[A-Za-z0-9_-]{1,32}");
+        let style = prop::option::of(
+            prop_oneof![
+                Just("auto"),
+                Just("rounded"),
+                Just("bento"),
+                Just("editorial"),
+                Just("hud"),
+                Just("studio"),
+                Just("atelier"),
+                Just("heavy"),
+                Just("ascii"),
+            ]
+            .prop_map(String::from),
+        );
         let detect_background = prop::option::of(any::<bool>());
+        let transparent_bg = prop::option::of(any::<bool>());
+        let reduced_motion = prop::option::of(any::<bool>());
+        let sidebar_collapsed = prop::option::of(any::<bool>());
+        let github_proxy_enabled = prop::option::of(any::<bool>());
+        let github_proxy = prop::option::of(
+            prop_oneof![
+                Just("https://gh-proxy.com/"),
+                Just("https://mirror.example/gh/"),
+            ]
+            .prop_map(String::from),
+        );
         (
             language,
             locale_dir,
             category_order,
             theme,
+            style,
             detect_background,
+            transparent_bg,
+            reduced_motion,
+            sidebar_collapsed,
+            github_proxy_enabled,
+            github_proxy,
         )
             .prop_map(
-                |(language, locale_dir, category_order, theme, detect_background)| Preferences {
+                |(
                     language,
                     locale_dir,
                     category_order,
                     theme,
+                    style,
                     detect_background,
+                    transparent_bg,
+                    reduced_motion,
+                    sidebar_collapsed,
+                    github_proxy_enabled,
+                    github_proxy,
+                )| Preferences {
+                    language,
+                    locale_dir,
+                    category_order,
+                    theme,
+                    style,
+                    detect_background,
+                    transparent_bg,
+                    reduced_motion,
+                    sidebar_collapsed,
+                    github_proxy_enabled,
+                    github_proxy,
                 },
             )
     }
@@ -189,7 +256,12 @@ mod tests {
 
     #[test]
     fn new_keys_with_wrong_types_are_config_errors() {
-        for text in ["theme = 1\n", "detect_background = \"yes\"\n"] {
+        for text in [
+            "theme = 1\n",
+            "detect_background = \"yes\"\n",
+            "github_proxy_enabled = \"on\"\n",
+            "github_proxy = 42\n",
+        ] {
             let error = read_text(text).unwrap_err();
             assert_eq!(error.key, "error.config", "{text}");
         }
@@ -215,7 +287,13 @@ mod tests {
                 locale_dir: Some("/opt/locales".into()),
                 category_order: vec!["kernel".into(), "system".into()],
                 theme: None,
+                style: None,
                 detect_background: None,
+                transparent_bg: None,
+                reduced_motion: None,
+                sidebar_collapsed: None,
+                github_proxy_enabled: None,
+                github_proxy: None,
             }
         );
     }

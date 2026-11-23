@@ -1,5 +1,5 @@
 //! Export the real TUI render buffer with local read-only measurements for visual QA.
-use cqs::theme::{self, Background, builtin};
+use cqs::theme::{self, Background, StyleSelection, builtin};
 use cqs::{config::Paths, dashboard::Sampler, i18n::I18n, runtime::Context, tui::App};
 use ratatui::{Terminal, backend::TestBackend, style::Color};
 use std::{fs, path::PathBuf, time::Duration};
@@ -84,20 +84,21 @@ fn html_preview(
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let output =
-        PathBuf::from(args.next().ok_or(
-            "usage: tui_snapshot output.json [width] [height] [locale] [theme] [background]",
-        )?);
+    let output = PathBuf::from(args.next().ok_or(
+        "usage: tui_snapshot output.json [width] [height] [locale] [theme] [background] [style]",
+    )?);
     let width: u16 = args.next().unwrap_or_else(|| "120".into()).parse()?;
     let height: u16 = args.next().unwrap_or_else(|| "36".into()).parse()?;
     let locale = args.next().unwrap_or_else(|| "zh-CN".into());
-    let id = args.next().unwrap_or_else(|| "aurora".into());
+    let id = args.next().unwrap_or_else(|| "obsidian".into());
     let background = parse_background(&args.next().unwrap_or_else(|| "unavailable".into()))?;
+    let style_arg = args.next().unwrap_or_else(|| "auto".into());
+    let style_selection = StyleSelection::parse(&style_arg).ok_or("unknown style ID")?;
     let definition = builtin::all()
         .into_iter()
         .find(|definition| definition.id == id)
         .ok_or("unknown theme")?;
-    let resolved = theme::resolve(&definition, &background);
+    let resolved = theme::resolve(&definition, style_selection, &background, false);
     let (reference_bg, reference_fg) = builtin::reference_colors(&resolved, &background);
     let paths = Paths::from_env()?;
     let ctx = Context::new(paths, I18n::load(Some(&locale), None)?, false);
@@ -106,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.max(Duration::from_millis(250)));
     let local = sampler.sample(&ctx);
     let mut app = App::new(ctx);
-    app.preview_theme(&id, background)?;
+    app.preview_theme_with_style(&id, style_selection, background)?;
     app.snapshot.local = local;
     let mut terminal = Terminal::new(TestBackend::new(width, height))?;
     terminal.draw(|frame| app.draw(frame))?;

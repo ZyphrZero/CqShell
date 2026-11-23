@@ -1,446 +1,514 @@
-//! Command_Palette (design component 5, Requirement 8): its state, [`search`], which lists
-//! the Actions whose localized name or Action ID contains the query, grouped by category,
-//! and [`Results`], the rows the palette lists for its query. Nothing here draws or handles
-//! keys; the view marks the matched parts with the ranges [`Hit`] carries.
-use super::{GROUPS, OPTIMIZATION_GROUP, input::InputBuffer, sections};
+//! Enhanced Command Palette (`/`, `Ctrl+K`): recent actions, workbench quick commands, and
+//! multi-token fuzzy + substring matching across localized names, IDs, categories, and
+//! descriptions.
+
+use super::{
+    input::InputBuffer,
+    sections,
+    session::SessionRecords,
+    state::{GROUPS, OPTIMIZATION_GROUP},
+};
 use crate::{actions::Spec, i18n::I18n};
 use std::ops::Range;
 
-/// The open Command_Palette: the query being typed and the highlighted result, counted
-/// across all result rows. It opens with an empty query and the first result highlighted
-/// (Requirement 8.1).
 #[derive(Debug, Default)]
 pub(super) struct CommandPalette {
     pub query: InputBuffer,
     pub cursor: usize,
 }
 
-/// The hits of one Reorderable_Category, in Action_List order.
-#[derive(Debug)]
-pub(super) struct HitGroup {
-    /// Index into `GROUPS`; never `OPTIMIZATION_GROUP`.
-    pub group: usize,
-    /// Never empty: a category without hits has no group.
-    pub hits: Vec<Hit>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WorkbenchCommand {
+    Overview,
+    Optimization,
+    Docker,
+    DockerFocus,
+    GithubProxy,
+    Theme,
+    TransparentBg,
+    ReducedMotion,
+    Sidebar,
+    Language,
+    Refresh,
+    PublicIp,
+    Logs,
+    FullLogs,
+    CopyCommand,
+    CopyLogs,
+    PlainView,
 }
 
-/// One matching Action. Ranges are byte ranges that start and end on character boundaries,
-/// so `&text[range]` is always valid, CJK text included.
-#[derive(Debug)]
-pub(super) struct Hit {
-    pub spec: Spec,
-    /// The parts of the localized name that match, in order; empty when only the ID matches
-    /// or the query is empty.
-    pub label_ranges: Vec<Range<usize>>,
-    /// `Some` only when the ID matches and the name does not: the parts of `spec.id` that
-    /// match, for the row that also shows the ID in text3.
-    pub id_ranges: Option<Vec<Range<usize>>>,
-}
+impl WorkbenchCommand {
+    pub const ALL: [Self; 17] = [
+        Self::Overview,
+        Self::Optimization,
+        Self::Docker,
+        Self::DockerFocus,
+        Self::GithubProxy,
+        Self::Theme,
+        Self::TransparentBg,
+        Self::ReducedMotion,
+        Self::Sidebar,
+        Self::Language,
+        Self::Refresh,
+        Self::PublicIp,
+        Self::Logs,
+        Self::FullLogs,
+        Self::CopyCommand,
+        Self::CopyLogs,
+        Self::PlainView,
+    ];
 
-/// The Actions of `specs` whose localized name or ID contains `query`, both compared after
-/// `to_lowercase()` (Requirement 8.2). Groups follow `order`, the Reorderable_Categories in
-/// Category_List order; hits within a group follow the Action_List, read from the same
-/// `sections::blocks` as `App::rows` (Requirement 8.3). The Optimization_Category has no
-/// Actions of its own, so it never forms a group even when `order` names it. An empty query
-/// matches every Action, with nothing highlighted.
-pub(super) fn search(query: &str, specs: &[Spec], i18n: &I18n, order: &[usize]) -> Vec<HitGroup> {
-    let query = query.to_lowercase();
-    order
-        .iter()
-        .copied()
-        .filter(|group| *group != OPTIMIZATION_GROUP)
-        .filter_map(|group| {
-            let hits = sections::blocks(GROUPS[group], specs)
-                .into_iter()
-                .flat_map(|(_, ids)| ids)
-                // Only the given specs are searched.
-                .filter_map(|id| specs.iter().find(|spec| spec.id == id))
-                .filter_map(|spec| hit(spec, &query, i18n))
-                .collect::<Vec<_>>();
-            (!hits.is_empty()).then_some(HitGroup { group, hits })
-        })
-        .collect()
-}
-
-/// `spec` as a hit for the lowercase `query`: by its name when the name matches, otherwise
-/// by its ID.
-fn hit(spec: &Spec, query: &str, i18n: &I18n) -> Option<Hit> {
-    if let Some(label_ranges) = matches(i18n.text(&spec.label()), query) {
-        return Some(Hit {
-            spec: spec.clone(),
-            label_ranges,
-            id_ranges: None,
-        });
-    }
-    matches(spec.id, query).map(|id_ranges| Hit {
-        spec: spec.clone(),
-        label_ranges: Vec::new(),
-        id_ranges: Some(id_ranges),
-    })
-}
-
-/// `None` unless `text.to_lowercase()` contains the lowercase `query`; otherwise the parts of
-/// `text` that form its non-overlapping occurrences there, in order, with parts that touch
-/// or share a character merged.
-///
-/// Lowercasing may change a character's length ("İ", two bytes, becomes "i̇", three), so each
-/// occurrence in the lowercase text maps back to the characters of `text` whose lowercase
-/// forms it overlaps. `str::to_lowercase` lowercases each character on its own except for
-/// Σ, whose two lowercase forms are both two bytes long, so the per-character lengths below
-/// add up to the lowercase text.
-fn matches(text: &str, query: &str) -> Option<Vec<Range<usize>>> {
-    let lower = text.to_lowercase();
-    if !lower.contains(query) {
-        return None;
-    }
-    if query.is_empty() {
-        return Some(Vec::new());
-    }
-    // For each character of `text`: where its lowercase form ends in `lower`, and its bytes.
-    let mut end = 0;
-    let spans = text
-        .char_indices()
-        .map(|(at, c)| {
-            end += c.to_lowercase().map(char::len_utf8).sum::<usize>();
-            (end, at..at + c.len_utf8())
-        })
-        .collect::<Vec<_>>();
-    debug_assert_eq!(end, lower.len());
-    let mut ranges: Vec<Range<usize>> = Vec::new();
-    for (start, found) in lower.match_indices(query) {
-        // The first character whose lowercase form ends after the occurrence starts, and the
-        // first whose form reaches its end; every lowercase form is at least one byte long.
-        let first = spans.partition_point(|(stop, _)| *stop <= start);
-        let last = spans.partition_point(|(stop, _)| *stop < start + found.len());
-        let range = spans[first].1.start..spans[last].1.end;
-        match ranges.last_mut() {
-            Some(previous) if range.start <= previous.end => previous.end = range.end,
-            _ => ranges.push(range),
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Overview => "cmd.overview",
+            Self::Optimization => "cmd.optimization",
+            Self::Docker => "cmd.docker",
+            Self::DockerFocus => "cmd.docker_focus",
+            Self::GithubProxy => "cmd.github_proxy",
+            Self::Theme => "cmd.theme",
+            Self::TransparentBg => "cmd.transparent",
+            Self::ReducedMotion => "cmd.motion",
+            Self::Sidebar => "cmd.sidebar",
+            Self::Language => "cmd.language",
+            Self::Refresh => "cmd.refresh",
+            Self::PublicIp => "cmd.public_ip",
+            Self::Logs => "cmd.logs",
+            Self::FullLogs => "cmd.full_logs",
+            Self::CopyCommand => "cmd.copy_cmd",
+            Self::CopyLogs => "cmd.copy_logs",
+            Self::PlainView => "cmd.plain_view",
         }
     }
-    Some(ranges)
+
+    pub fn shortcut(self) -> &'static str {
+        match self {
+            Self::Overview => "H",
+            Self::Optimization => "O",
+            Self::Docker => "5",
+            Self::DockerFocus => "z",
+            Self::GithubProxy => "P",
+            Self::Theme => "T",
+            Self::TransparentBg => "T·B",
+            Self::ReducedMotion => "T·M",
+            Self::Sidebar => "[",
+            Self::Language => "L",
+            Self::Refresh => "R",
+            Self::PublicIp => "N",
+            Self::Logs => "G",
+            Self::FullLogs => "F2",
+            Self::CopyCommand => "C",
+            Self::CopyLogs => "Y",
+            Self::PlainView => "V",
+        }
+    }
+
+    pub fn keywords(self) -> &'static str {
+        match self {
+            Self::Overview => "overview home dashboard 概览 首页 仪表盘",
+            Self::Optimization => "optimize batch checklist 一键优化 批量",
+            Self::Docker => {
+                "docker container compose image volume network daemon 容器 编排 镜像 卷 网络"
+            }
+            Self::DockerFocus => "docker focus fullscreen zoom 全屏 聚焦 容器",
+            Self::GithubProxy => "github gh proxy mirror china acceleration 代理 加速 镜像 国内",
+            Self::Theme => "theme style appearance color 主题 风格 外观 配色",
+            Self::TransparentBg => "transparent background glass 透明 背景",
+            Self::ReducedMotion => "motion animation static ssh 动效 动画 静态",
+            Self::Sidebar => "sidebar nav collapse 侧边栏 导航 折叠",
+            Self::Language => "language locale english chinese 语言 中英",
+            Self::Refresh => "refresh reload metrics 刷新 状态",
+            Self::PublicIp => "public ip isp ipv4 ipv6 公网",
+            Self::Logs => "logs output drawer 日志 面板",
+            Self::FullLogs => "full logs modal 完整日志 全屏",
+            Self::CopyCommand => "copy command cli clipboard osc52 复制 命令 剪贴板",
+            Self::CopyLogs => "copy logs output clipboard yank 复制 日志 剪贴板",
+            Self::PlainView => "plain text borderless select drag copy 纯文本 无边框 拖选 复制",
+        }
+    }
 }
 
-/// One row of the Command_Palette's result list.
-#[derive(Debug)]
-pub(super) enum ResultRow {
-    /// The name of the category whose hits follow; never highlighted.
-    Group(usize),
-    Hit(Hit),
+#[derive(Debug, Clone)]
+pub(super) enum PaletteItem {
+    Action {
+        spec: Spec,
+        label_ranges: Vec<Range<usize>>,
+        id_ranges: Option<Vec<Range<usize>>>,
+    },
+    Command {
+        command: WorkbenchCommand,
+        label_ranges: Vec<Range<usize>>,
+    },
 }
 
-/// The rows the Command_Palette lists for its query. A query lists the hits of [`search`],
-/// each group after its category's name (Requirement 8.3); an empty query lists Recent_Use,
-/// most recently started first and without category names (Requirement 8.6). Empty when
-/// nothing matches or, for an empty query, nothing has run yet; the view then shows
-/// `ui.no_match` or `ui.palette_hint` (Requirement 8.7). Only hits are highlighted, and
-/// `CommandPalette::cursor` counts them across all rows.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub(super) enum PaletteRow {
+    Header(String),
+    Item(PaletteItem),
+}
+
 pub(super) struct Results {
-    pub rows: Vec<ResultRow>,
+    pub rows: Vec<PaletteRow>,
+    pub item_indices: Vec<usize>,
+    pub total_items: usize,
 }
+
 impl Results {
-    pub fn new<'a>(
-        query: &str,
-        recent: impl IntoIterator<Item = &'a str>,
-        specs: &[Spec],
-        i18n: &I18n,
-        order: &[usize],
-    ) -> Self {
-        let rows = if query.is_empty() {
-            recent
-                .into_iter()
-                .filter_map(|id| specs.iter().find(|spec| spec.id == id))
-                .map(|spec| {
-                    ResultRow::Hit(Hit {
-                        spec: spec.clone(),
-                        label_ranges: Vec::new(),
-                        id_ranges: None,
-                    })
-                })
-                .collect()
-        } else {
-            search(query, specs, i18n, order)
-                .into_iter()
-                .flat_map(|group| {
-                    std::iter::once(ResultRow::Group(group.group))
-                        .chain(group.hits.into_iter().map(ResultRow::Hit))
-                })
-                .collect()
-        };
-        Self { rows }
-    }
-    fn hits(&self) -> impl Iterator<Item = (usize, &Hit)> {
-        self.rows
-            .iter()
-            .enumerate()
-            .filter_map(|(index, row)| match row {
-                ResultRow::Hit(hit) => Some((index, hit)),
-                ResultRow::Group(_) => None,
-            })
-    }
-    /// The number of hits: the matches the palette's title counts (Requirement 8.5).
     pub fn count(&self) -> usize {
-        self.hits().count()
+        self.item_indices.len()
     }
-    /// The `n`-th hit, counted across all rows.
-    pub fn hit(&self, n: usize) -> Option<&Hit> {
-        self.hits().nth(n).map(|(_, hit)| hit)
+
+    pub fn item_at(&self, cursor: usize) -> Option<&PaletteItem> {
+        let row_idx = *self.item_indices.get(cursor)?;
+        match &self.rows[row_idx] {
+            PaletteRow::Item(item) => Some(item),
+            PaletteRow::Header(_) => None,
+        }
     }
-    /// Index into `rows` of the `n`-th hit.
-    pub fn row_of(&self, n: usize) -> Option<usize> {
-        self.hits().nth(n).map(|(index, _)| index)
+
+    pub fn row_of(&self, cursor: usize) -> usize {
+        self.item_indices.get(cursor).copied().unwrap_or(0)
     }
-    /// Which hit `rows[index]` is; `None` for a category name or a row past the end.
-    pub fn position(&self, index: usize) -> Option<usize> {
-        self.hits().position(|(at, _)| at == index)
+}
+
+pub(super) fn search(
+    query: &str,
+    specs: &[Spec],
+    i18n: &I18n,
+    order: &[usize],
+    records: &SessionRecords,
+) -> Results {
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .map(|part| part.to_lowercase())
+        .filter(|part| !part.is_empty())
+        .collect();
+
+    let total_items = specs.len() + WorkbenchCommand::ALL.len();
+    let mut rows = Vec::new();
+    let mut item_indices = Vec::new();
+
+    if tokens.is_empty() {
+        // 1. Recent actions from this session (up to 5)
+        let recent_specs: Vec<Spec> = records
+            .recent
+            .iter()
+            .take(5)
+            .filter_map(|id| specs.iter().find(|s| s.id == *id).cloned())
+            .collect();
+        if !recent_specs.is_empty() {
+            rows.push(PaletteRow::Header(i18n.text("palette.recent").into()));
+            for spec in recent_specs {
+                item_indices.push(rows.len());
+                rows.push(PaletteRow::Item(PaletteItem::Action {
+                    spec,
+                    label_ranges: Vec::new(),
+                    id_ranges: None,
+                }));
+            }
+        }
+
+        // 2. Workbench quick commands
+        rows.push(PaletteRow::Header(i18n.text("palette.commands").into()));
+        for command in WorkbenchCommand::ALL {
+            item_indices.push(rows.len());
+            rows.push(PaletteRow::Item(PaletteItem::Command {
+                command,
+                label_ranges: Vec::new(),
+            }));
+        }
+
+        // 3. All actions grouped in category order
+        for &group in order.iter().filter(|g| **g != OPTIMIZATION_GROUP) {
+            let group_specs: Vec<Spec> = sections::blocks(GROUPS[group], specs)
+                .into_iter()
+                .flat_map(|(_, ids)| ids)
+                .filter_map(|id| specs.iter().find(|s| s.id == id).cloned())
+                .collect();
+            if group_specs.is_empty() {
+                continue;
+            }
+            rows.push(PaletteRow::Header(
+                i18n.text(&format!("group.{}", GROUPS[group])).into(),
+            ));
+            for spec in group_specs {
+                item_indices.push(rows.len());
+                rows.push(PaletteRow::Item(PaletteItem::Action {
+                    spec,
+                    label_ranges: Vec::new(),
+                    id_ranges: None,
+                }));
+            }
+        }
+        return Results {
+            rows,
+            item_indices,
+            total_items,
+        };
     }
+
+    // Matching workbench commands (scored highest when prefix/substring matches)
+    let mut matched_cmds = Vec::new();
+    for command in WorkbenchCommand::ALL {
+        let label = i18n.text(command.label_key());
+        let haystack_extra = command.keywords();
+        if let Some((score, ranges)) = match_tokens(label, haystack_extra, "", &tokens) {
+            matched_cmds.push((score, command, ranges));
+        }
+    }
+    matched_cmds.sort_by_key(|a| std::cmp::Reverse(a.0));
+
+    // Matching actions grouped by category, scored so crisp matches appear cleanly
+    let mut action_groups: Vec<(usize, Vec<(i32, PaletteItem)>)> = Vec::new();
+    for &group in order.iter().filter(|g| **g != OPTIMIZATION_GROUP) {
+        let group_label = i18n.text(&format!("group.{}", GROUPS[group]));
+        let mut hits = Vec::new();
+        for (_, ids) in sections::blocks(GROUPS[group], specs) {
+            for id in ids {
+                let Some(spec) = specs.iter().find(|s| s.id == id) else {
+                    continue;
+                };
+                let label = i18n.text(&spec.label());
+                let desc = i18n.text(&spec.description());
+                let extra = format!("{group_label} {desc}");
+                if let Some((score, label_ranges, id_ranges)) =
+                    match_action(label, spec.id, &extra, &tokens)
+                {
+                    hits.push((
+                        score,
+                        PaletteItem::Action {
+                            spec: spec.clone(),
+                            label_ranges,
+                            id_ranges,
+                        },
+                    ));
+                }
+            }
+        }
+        if !hits.is_empty() {
+            hits.sort_by_key(|a| std::cmp::Reverse(a.0));
+            action_groups.push((group, hits));
+        }
+    }
+    // Sort categories by their highest-scoring hit so direct label/ID matches rise above
+    // description-only mentions (e.g. searching "bbr" ranks Network/Kernel before System Info).
+    action_groups.sort_by(|a, b| {
+        let top_a = a.1.first().map_or(0, |(s, _)| *s);
+        let top_b = b.1.first().map_or(0, |(s, _)| *s);
+        top_b.cmp(&top_a)
+    });
+
+    // Actions first if query looks like an action or matched actions strongly, commands right after
+    // (or commands first if query starts with `>`).
+    let commands_first = query.trim_start().starts_with('>');
+    if commands_first && !matched_cmds.is_empty() {
+        rows.push(PaletteRow::Header(i18n.text("palette.commands").into()));
+        for (_, command, label_ranges) in matched_cmds.drain(..) {
+            item_indices.push(rows.len());
+            rows.push(PaletteRow::Item(PaletteItem::Command {
+                command,
+                label_ranges,
+            }));
+        }
+    }
+
+    for (group, hits) in action_groups {
+        rows.push(PaletteRow::Header(
+            i18n.text(&format!("group.{}", GROUPS[group])).into(),
+        ));
+        for (_, item) in hits {
+            item_indices.push(rows.len());
+            rows.push(PaletteRow::Item(item));
+        }
+    }
+
+    if !matched_cmds.is_empty() {
+        rows.push(PaletteRow::Header(i18n.text("palette.commands").into()));
+        for (_, command, label_ranges) in matched_cmds {
+            item_indices.push(rows.len());
+            rows.push(PaletteRow::Item(PaletteItem::Command {
+                command,
+                label_ranges,
+            }));
+        }
+    }
+
+    Results {
+        rows,
+        item_indices,
+        total_items,
+    }
+}
+
+type ByteRanges = Vec<Range<usize>>;
+type ActionMatch = (i32, ByteRanges, Option<ByteRanges>);
+
+fn match_action(label: &str, id: &str, extra: &str, tokens: &[String]) -> Option<ActionMatch> {
+    let mut score = 0i32;
+    let mut label_ranges = Vec::new();
+    let mut id_ranges = Vec::new();
+    let mut any_id_match = false;
+
+    for token in tokens {
+        let token = token.trim_start_matches('>');
+        if token.is_empty() {
+            continue;
+        }
+        if let Some((s, ranges)) = match_field(label, token) {
+            score += s + 40;
+            label_ranges.extend(ranges);
+        } else if let Some((s, ranges)) = match_field(id, token) {
+            score += s + 25;
+            id_ranges.extend(ranges);
+            any_id_match = true;
+        } else if let Some((s, _)) = match_field(extra, token) {
+            score += s;
+        } else {
+            return None;
+        }
+    }
+    merge_ranges(&mut label_ranges);
+    merge_ranges(&mut id_ranges);
+    Some((score, label_ranges, any_id_match.then_some(id_ranges)))
+}
+
+fn match_tokens(
+    label: &str,
+    extra: &str,
+    id: &str,
+    tokens: &[String],
+) -> Option<(i32, Vec<Range<usize>>)> {
+    let mut score = 0i32;
+    let mut label_ranges = Vec::new();
+    for token in tokens {
+        let token = token.trim_start_matches('>');
+        if token.is_empty() {
+            continue;
+        }
+        if let Some((s, ranges)) = match_field(label, token) {
+            score += s + 30;
+            label_ranges.extend(ranges);
+        } else if !id.is_empty()
+            && let Some((s, _)) = match_field(id, token)
+        {
+            score += s + 15;
+        } else if let Some((s, _)) = match_field(extra, token) {
+            score += s;
+        } else {
+            return None;
+        }
+    }
+    merge_ranges(&mut label_ranges);
+    Some((score, label_ranges))
+}
+
+/// Match `token` (already lowercased) against `text`: exact substring first (highest score),
+/// then fuzzy subsequence for ASCII/Latin tokens >= 2 chars. Returns byte ranges on char
+/// boundaries of `text`.
+fn match_field(text: &str, token: &str) -> Option<(i32, Vec<Range<usize>>)> {
+    if token.is_empty() {
+        return Some((0, Vec::new()));
+    }
+    let mut lower = String::with_capacity(text.len());
+    let mut spans: Vec<(usize, Range<usize>)> = Vec::new();
+    for (byte_at, ch) in text.char_indices() {
+        let low: String = ch.to_lowercase().collect();
+        lower.push_str(&low);
+        spans.push((lower.len(), byte_at..byte_at + ch.len_utf8()));
+    }
+
+    // 1. Substring match
+    if let Some(pos) = lower.find(token) {
+        let end = pos + token.len();
+        let first = spans.partition_point(|(stop, _)| *stop <= pos);
+        let last = spans.partition_point(|(stop, _)| *stop < end);
+        let mut ranges = Vec::new();
+        if first < spans.len() && last < spans.len() {
+            ranges.push(spans[first].1.start..spans[last].1.end);
+        }
+        let bonus = if pos == 0 { 60 } else { 35 };
+        return Some((bonus, ranges));
+    }
+
+    // 2. Fuzzy subsequence (only when token has >= 2 chars and every char is matched in order)
+    if token.chars().count() < 2 {
+        return None;
+    }
+    let mut ranges = Vec::new();
+    let mut search_from = 0usize;
+    let mut gaps = 0i32;
+    for target in token.chars() {
+        let found = lower[search_from..].find(target)?;
+        let abs = search_from + found;
+        if search_from > 0 && found > 0 {
+            gaps += 1;
+        }
+        let idx = spans.partition_point(|(stop, _)| *stop <= abs);
+        if idx < spans.len() {
+            ranges.push(spans[idx].1.clone());
+        }
+        search_from = abs + target.len_utf8();
+    }
+    merge_ranges(&mut ranges);
+    Some(((20 - gaps * 3).max(1), ranges))
+}
+
+fn merge_ranges(ranges: &mut Vec<Range<usize>>) {
+    if ranges.len() <= 1 {
+        return;
+    }
+    ranges.sort_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges.drain(..) {
+        match merged.last_mut() {
+            Some(prev) if range.start <= prev.end => prev.end = prev.end.max(range.end),
+            _ => merged.push(range),
+        }
+    }
+    *ranges = merged;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{App, Row, default_category_order};
     use super::*;
-    use crate::{actions, config::Paths, runtime::Context};
-    use proptest::{prelude::*, sample::Index};
-    use std::collections::BTreeSet;
-
-    const LOCALES: [&str; 2] = ["zh-CN", "en-US"];
-
-    fn load(locale: &str) -> I18n {
-        I18n::load(Some(locale), None).unwrap()
-    }
-
-    /// The parts of `text` that `ranges` mark; slicing panics unless every range lies on
-    /// character boundaries.
-    fn parts<'a>(text: &'a str, ranges: &[Range<usize>]) -> Vec<&'a str> {
-        ranges.iter().map(|range| &text[range.clone()]).collect()
-    }
-
-    fn marked<'a>(text: &'a str, query: &str) -> Option<Vec<&'a str>> {
-        matches(text, query).map(|ranges| parts(text, &ranges))
-    }
+    use crate::{actions, tui::state::default_category_order};
 
     #[test]
-    fn matched_ranges_map_back_to_character_boundaries() {
-        // Byte ranges: "安装 " is seven bytes long.
-        let bytes = matches("安装 Docker", "docker")
-            .unwrap()
-            .iter()
-            .map(|range| (range.start, range.end))
-            .collect::<Vec<_>>();
-        assert_eq!(bytes, [(7, 13)]);
-        assert_eq!(marked("安装 Docker", "docker"), Some(vec!["Docker"]));
-        assert_eq!(marked("aXa", "a"), Some(vec!["a", "a"]));
-        assert_eq!(marked("aa", "a"), Some(vec!["aa"]), "touching parts merge");
-        // "İx" lowercases to "i\u{307}x"; an occurrence that starts inside the lowercase
-        // form of "İ" covers the whole character.
-        assert_eq!(marked("İx", "\u{307}x"), Some(vec!["İx"]));
-        assert_eq!(marked("Clean system", "zz"), None);
-        assert_eq!(marked("Clean system", ""), Some(vec![]));
-    }
-
-    #[test]
-    fn id_only_hits_carry_the_id_ranges_and_optimization_never_forms_a_group() {
+    fn empty_query_includes_recent_commands_and_actions() {
+        let i18n = I18n::load(Some("zh-CN"), None).unwrap();
         let specs = actions::specs();
         let order = default_category_order();
-        let groups = search("BBR.Enable", &specs, &load("en-US"), &order);
-        assert_eq!(groups.len(), 1);
-        let [hit] = &groups[0].hits[..] else {
-            panic!("{groups:?}")
-        };
-        assert_eq!(hit.spec.id, "bbr.enable");
-        assert!(hit.label_ranges.is_empty());
-        let id_ranges = hit.id_ranges.as_deref().unwrap();
-        assert_eq!(parts(hit.spec.id, id_ranges), ["bbr.enable"]);
-
-        // "安装 Docker" matches by name, so the ID is not shown.
-        let zh = load("zh-CN");
-        let groups = search("DOCKER", &specs, &zh, &order);
-        let hit = groups
-            .iter()
-            .flat_map(|group| &group.hits)
-            .find(|hit| hit.spec.id == "docker.install")
-            .unwrap();
-        let name = zh.text(&hit.spec.label());
-        assert_eq!(parts(name, &hit.label_ranges), ["Docker"]);
-        assert_eq!(hit.id_ranges, None);
-
-        let display = std::iter::once(OPTIMIZATION_GROUP)
-            .chain(order)
-            .collect::<Vec<_>>();
-        let groups = search("", &specs, &load("en-US"), &display);
-        assert!(groups.iter().all(|group| group.group != OPTIMIZATION_GROUP));
-        let hits = groups.iter().flat_map(|group| &group.hits);
-        assert!(hits.clone().all(|hit| hit.label_ranges.is_empty()));
-        assert_eq!(
-            hits.count(),
-            specs.len(),
-            "an empty query matches every Action"
-        );
-    }
-
-    fn row_ids(results: &Results) -> Vec<String> {
-        results
-            .rows
-            .iter()
-            .map(|row| match row {
-                ResultRow::Group(group) => format!("<{}>", GROUPS[*group]),
-                ResultRow::Hit(hit) => hit.spec.id.to_owned(),
-            })
-            .collect()
+        let mut records = SessionRecords::default();
+        records.started("bbr.enable");
+        let results = search("", &specs, &i18n, &order, &records);
+        assert!(results.count() >= specs.len() + WorkbenchCommand::ALL.len());
+        assert!(matches!(
+            results.item_at(0),
+            Some(PaletteItem::Action { spec, .. }) if spec.id == "bbr.enable"
+        ));
     }
 
     #[test]
-    fn an_empty_query_lists_recent_use_and_a_query_names_each_group() {
+    fn multi_token_and_fuzzy_queries_find_actions_and_commands() {
+        let i18n = I18n::load(Some("zh-CN"), None).unwrap();
         let specs = actions::specs();
         let order = default_category_order();
-        let i18n = load("en-US");
-        // Nothing has run: an empty list, for which the view shows `ui.palette_hint`.
-        let none = Results::new("", [], &specs, &i18n, &order);
-        assert!(none.rows.is_empty());
-        assert_eq!(
-            (none.count(), none.hit(0).map(|hit| hit.spec.id)),
-            (0, None)
-        );
+        let records = SessionRecords::default();
 
-        // Recent_Use as recorded, newest first, without category names or marks.
-        let recent = Results::new("", ["tcp.tune", "system.info"], &specs, &i18n, &order);
-        assert_eq!(row_ids(&recent), ["tcp.tune", "system.info"]);
-        assert_eq!(recent.count(), 2);
-        assert_eq!(recent.row_of(1), Some(1));
-        let ResultRow::Hit(hit) = &recent.rows[0] else {
-            panic!("{recent:?}")
-        };
-        assert!(hit.label_ranges.is_empty() && hit.id_ranges.is_none());
+        let bbr = search("bbr 启用", &specs, &i18n, &order, &records);
+        assert!(bbr.count() >= 1);
+        assert!(matches!(
+            bbr.item_at(0),
+            Some(PaletteItem::Action { spec, .. }) if spec.id == "bbr.enable"
+        ));
 
-        // A query: each group after its category's name, in Category_List order, with hits
-        // counted across groups.
-        let bbr = Results::new("bbr", ["tcp.tune"], &specs, &i18n, &order);
-        assert_eq!(
-            row_ids(&bbr),
-            [
-                "<kernel>",
-                "kernel.install",
-                "kernel.remove",
-                "<network>",
-                "bbr.status",
-                "bbr.enable",
-                "bbr.restore",
-            ]
-        );
-        assert_eq!(bbr.count(), 5);
-        assert_eq!(bbr.hit(2).map(|hit| hit.spec.id), Some("bbr.status"));
-        assert_eq!(
-            (bbr.row_of(0), bbr.row_of(2), bbr.row_of(5)),
-            (Some(1), Some(4), None)
-        );
-        assert_eq!(bbr.position(4), Some(2));
-        assert_eq!(bbr.position(3), None, "a category name is not a hit");
-        assert_eq!(bbr.position(7), None);
-        assert!(
-            Results::new("zzz", [], &specs, &i18n, &order)
-                .rows
-                .is_empty()
-        );
-    }
-
-    /// Every localized name in both locales and every Action ID: the texts queries are cut
-    /// from.
-    fn texts() -> Vec<String> {
-        let specs = actions::specs();
-        let mut texts = specs
-            .iter()
-            .map(|spec| spec.id.to_owned())
-            .collect::<Vec<_>>();
-        for locale in LOCALES {
-            let i18n = load(locale);
-            texts.extend(specs.iter().map(|spec| i18n.text(&spec.label()).to_owned()));
-        }
-        texts
-    }
-
-    /// A non-empty query: mostly a random substring of a real name or ID, otherwise one to
-    /// four arbitrary printable characters; then each character kept, uppercased or
-    /// lowercased at random.
-    fn query() -> impl Strategy<Value = String> {
-        let cut = (
-            proptest::sample::select(texts()),
-            any::<Index>(),
-            any::<Index>(),
-        )
-            .prop_map(|(text, start, len)| {
-                let chars = text.chars().collect::<Vec<_>>();
-                let start = start.index(chars.len());
-                let len = 1 + len.index(chars.len() - start);
-                chars[start..start + len].iter().collect::<String>()
-            });
-        (
-            prop_oneof![4 => cut, 1 => "\\PC{1,4}"],
-            proptest::collection::vec(0..3u8, 0..64),
-        )
-            .prop_map(|(text, cases)| {
-                let cases = cases.into_iter().chain(std::iter::repeat(0));
-                text.chars()
-                    .zip(cases)
-                    .map(|(c, case)| match case {
-                        1 => c.to_uppercase().collect::<String>(),
-                        2 => c.to_lowercase().collect(),
-                        _ => c.to_string(),
-                    })
-                    .collect()
+        let theme_cmd = search("> 主题", &specs, &i18n, &order, &records);
+        assert!(matches!(
+            theme_cmd.item_at(0),
+            Some(PaletteItem::Command {
+                command: WorkbenchCommand::Theme,
+                ..
             })
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
-
-        // Feature: tui-redesign, Property 8: 搜索完整且无误报
-        /// **Validates: Requirements 8.2, 8.3**
-        #[test]
-        fn search_is_complete_and_has_no_false_positives(
-            query in query(),
-            locale in proptest::sample::select(LOCALES.to_vec()),
-            order in Just((0..OPTIMIZATION_GROUP).collect::<Vec<_>>()).prop_shuffle(),
-        ) {
-            let specs = actions::specs();
-            let i18n = load(locale);
-            let wanted = query.to_lowercase();
-            let matching = |spec: &Spec| {
-                i18n.text(&spec.label()).to_lowercase().contains(&wanted)
-                    || spec.id.to_lowercase().contains(&wanted)
-            };
-            let groups = search(&query, &specs, &i18n, &order);
-            let found = groups
-                .iter()
-                .flat_map(|group| group.hits.iter().map(|hit| (group.group, hit.spec.id)))
-                .collect::<Vec<_>>();
-
-            // An Action is listed if and only if its name or ID contains the query, once.
-            let listed = found.iter().map(|(_, id)| *id).collect::<BTreeSet<_>>();
-            prop_assert_eq!(listed.len(), found.len(), "an Action is listed twice");
-            for spec in &specs {
-                prop_assert_eq!(listed.contains(spec.id), matching(spec), "{}", spec.id);
-            }
-
-            // Groups follow `order`, each non-empty; hits follow the Action_List.
-            let app = App::new(Context::new(Paths::from_env().unwrap(), load("en-US"), false));
-            let expected = order
-                .iter()
-                .flat_map(|&group| {
-                    app.rows(group).into_iter().filter_map(move |row| match row {
-                        Row::Action(spec) => Some((group, spec)),
-                        _ => None,
-                    })
-                })
-                .filter(|(_, spec)| matching(spec))
-                .map(|(group, spec)| (group, spec.id))
-                .collect::<Vec<_>>();
-            prop_assert_eq!(&found, &expected);
-            let mut expected_groups = expected.iter().map(|(group, _)| *group).collect::<Vec<_>>();
-            expected_groups.dedup();
-            let group_order = groups.iter().map(|group| group.group).collect::<Vec<_>>();
-            prop_assert_eq!(group_order, expected_groups);
-        }
+        ));
     }
 }

@@ -33,7 +33,7 @@ cqs --lang zh-CN
 
 | 用途 | 追加参数 |
 | --- | --- |
-| 安装指定版本；网关不支持 API 或缓存未更新时也可使用 | `--version v0.1.4` |
+| 安装指定版本；网关不支持 API 或缓存未更新时也可使用 | `--version v0.1.5` |
 | 安装到指定目录 | `--install-dir /opt/cqs` |
 | 安装到当前用户目录（同时去掉 `sudo`） | `--install-dir "$HOME/.local/bin"` |
 
@@ -111,7 +111,7 @@ Windows 会锁住正在运行的可执行文件。重新构建同一输出目录
 
 表单使用 Tab / 上下键切换字段，左右键选择枚举或移动文本光标，Home/End、Delete、Backspace 和 Ctrl+U 支持编辑。Enter 移到下一项，在最后一项按 Enter 或选择“继续/保存到清单”即提交，也可用 Ctrl+Enter。取消不会执行或保存参数。需要填写已有对象的参数（订阅、策略组及节点、要切换或删除的内核）不再手动输入：打开操作时先读取本机现有项目并直接弹出列表，上下键移动，输入文字即时筛选，Enter 选定；最后一项选定后直接进入确认。左右键也可在现有项目间轮换。读取较慢时显示可用 Esc 取消的等待框；没有可选项目时提示原因，不打开空表单。普通确认默认选择“取消”，可用方向键、鼠标或 Y/N 操作；RESTORE、REMOVE、KEY-TESTED 等特定确认仍要求准确输入文字。交互式第三方工具暂时接管终端，退出后返回 TUI。
 
-日志只在执行任务后展开，取消与失败分别显示；常驻指标不进入执行日志。80×24 下保留全部分类、当前操作和主要提示，操作与说明上下排列；较高窗口提供内嵌日志，也可按 F2 查看完整日志。仪表低于 70% 使用主题常规颜色，70% 起警告、90% 起危险。可逆操作的参数表单提交后直接执行，不可逆操作继续通用确认，操作专有确认仍保留。可用 `cargo run --release --example tui_snapshot -- target/previews/status.json 120 36 zh-CN aurora '#0b1119'` 生成 JSON 与 HTML 快照；背景也接受 `unavailable` 或 `disabled`。
+日志只在执行任务后展开，取消与失败分别显示；常驻指标不进入执行日志。响应式布局最低兼容 40×16（含 iOS Termius 59×24 等移动端窄屏，自动切换堆叠视图、单列快捷操作卡与浮层导航抽屉），80×24 以上保留完整桌面紧凑与双栏工作台布局；较高窗口提供内嵌日志，也可按 G / F2 查看完整日志。仪表低于 70% 使用主题常规颜色，70% 起警告、90% 起危险。可逆操作的参数表单提交后直接执行，不可逆操作继续通用确认，操作专有确认仍保留。可用 `cargo run --release --example tui_snapshot -- target/previews/status.json 120 36 zh-CN aurora '#0b1119'` 生成 JSON 与 HTML 快照；背景也接受 `unavailable` 或 `disabled`。
 
 `v0.1.1` 修复了系统升级期间 debconf/ucf 隐藏对话框导致的卡住问题。内置 apt 操作使用非交互模式、保留本机修改过的配置并关闭 dpkg 独立伪终端；needrestart 仅列出服务重启需求。后台命令无法读取界面的控制终端，日志中的 ANSI 控制序列会被完整清除。如果旧版本的升级曾被中断，先在独立 SSH 会话确认 apt/dpkg 已退出并执行 `dpkg --audit`，再处理未完成的软件包配置；不要删除锁文件。
 
@@ -129,6 +129,11 @@ T 面板的 Enter 保存 `theme`，Esc 取消预览；保存保留其他配置�
 
 ```bash
 cqs --help
+cqs update --check
+cqs update --check --json
+sudo cqs update
+sudo cqs update --version v0.1.5
+sudo cqs --gh-proxy default update
 cqs list
 cqs list --json
 cqs run bbr.status
@@ -136,7 +141,8 @@ sudo cqs run bbr.enable --set qdisc=fq
 sudo cqs run tcp.tune --set bandwidth=1000 --set rtt=80
 sudo cqs run kernel.install --set profile=standard
 cqs run kernel.list
-cqs run terminal.apply --set shell=bash --set color=cyan
+cqs run terminal.preview --set style=all --set color=tokyo-night
+cqs run terminal.apply --set shell=bash --set style=box --set color=tokyo-night
 sudo cqs batch tcp.tune bbr.enable --set tcp.tune.rtt=80
 cqs run clash.status
 cqs run clash.start
@@ -187,7 +193,7 @@ sudo cqs run system.mirror.restore
 
 ## 常用工具与 Agent 工具
 
-**常用工具**恢复旧版的十个独立安装入口：curl、wget、nano、unzip、tar、tmux、iftop、btop、gdu、fzf。选择条目即可安装对应软件；“全部安装 / 自选软件”默认选择 `all`，同时安装 zsh / Starship 组件。提示符配置和还原位于独立的**终端美化**分类。
+**常用工具**恢复旧版的十个独立安装入口：curl、wget、nano、unzip、tar、tmux、iftop、btop、gdu、fzf。选择条目即可安装对应软件；“全部安装 / 自选软件”默认选择 `all`，同时安装 zsh / Starship 组件。提示符配置、实时预览和还原位于独立的**终端美化**分类，提供 7 种样式（`full`、`compact`、`box`、`ribbon`、`powerline`、`minimal`、`brackets`）与 9 套配色方案（`cyan`、`green`、`magenta`、`tokyo-night`、`catppuccin`、`rose-pine`、`nord`、`gruvbox`、`dracula`），在 TUI 与 CLI 均支持只读效果预览及 Starship TOML 查看。
 
 ```bash
 sudo cqs run tools.tmux
@@ -247,7 +253,15 @@ cqs --locale-dir ./locales languages
 | 常用工具 | 十种工具独立安装、全部安装、Bash / zsh 提示符配置与首次基线还原 |
 | Agent 工具 | Pi（pi.dev）、Claude Code、Codex CLI 安装 / 更新与版本检查 |
 | Mihomo 代理 | 官方 Mihomo 二进制、运行配置、启动/停止/状态、订阅管理和 Shell 代理环境输出 |
-| Docker | 安装、状态、镜像源、IPv6、清理和卸载 |
+| Docker | 专属 6 标签 TUI 管理工作台（容器/Compose/镜像/卷/网络/守护进程）、实时日志与指标、`exec` 交互终端、分级 Prune、安装/镜像源/IPv6/卸载 |
+
+### Docker 专属 TUI 工作台
+
+在主界面选择侧边栏 **5 Docker**，或直接执行 `cqs docker`（支持 `--tab containers|compose|images|volumes|networks|daemon` 与 `--embedded`）即可打开专属 Docker 管理工作台：
+
+- **混合双态与聚焦模式**：嵌入式模式保留侧边栏与全局工具箱；按 `z` / `F`（或 `cqs docker` 默认启动）进入全屏聚焦态，释放全部宽度展示完整列、`1–6` 直达 6 个资源标签页，按 `[` 随时拉出侧边栏。
+- **全栈运维闭环**：容器全生命周期（`s` 启停、`u` 重启、`p` 暂停、`e`/`Shift+E` 进入 `docker exec -it` 交互终端、`Space` 多选批量、`l` 实时日志与全屏沉浸日志、`m` 实时 CPU/内存 Sparkline 与 `docker top`、`v` 环境与挂载且敏感凭据默认脱敏）、Compose 编排（服务拓扑/容器联动/聚合日志/YAML 只读预览/Up·Stop·Restart·Pull·Down）、镜像拉取与层级历史、卷与网络拓扑、可视化分级 Prune 向导（`Shift+P`），并将原有安装/镜像源/IPv6/清理/卸载整合在「守护进程」页。
+- **零重依赖与分级确认**：全程采用原生 `docker` / `docker compose` CLI JSON 采集（天然兼容 Rootless、`DOCKER_HOST` 与 Context），不访问 Docker 时零后台进程开销；系统内置网络与挂载中卷受保护，卷删除 / 批量删除 ≥3 项 / 含卷 Prune 要求输入确认口令（`REMOVE` / `PRUNE`）。
 
 内核安装支持 Debian 12+ / Ubuntu 24.04+ 的 amd64 / arm64 主机，需要独立内核环境和 GRUB。安装后可确认立即重启或稍后手动重启进入新内核；状态页读取实际运行的 BBR 版本。WSL / 容器不支持更换宿主内核，卸载入口仅处理未运行的指定内核。
 

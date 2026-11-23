@@ -1,3 +1,11 @@
 # Copy to ~/.config/cqs/config.toml (or pass --config).
 language = "zh-CN"
+# theme = "auto"
+# style = "auto"
+# transparent_bg = false
+# reduced_motion = false
+# sidebar_collapsed = false
+# detect_background = true
 # locale_dir = "/absolute/path/to/locales"
+# github_proxy_enabled = false
+# github_proxy = "https://gh-proxy.com/"

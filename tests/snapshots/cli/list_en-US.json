@@ -331,6 +331,34 @@
   },
   {
     "available": true,
+    "description": "Configure and toggle an HTTPS GitHub acceleration proxy prefix (default https://gh-proxy.com/) for Mihomo, BBRv3 kernels, Agent tools, Starship, and pinned GitHub scripts. Applies only to canonical GitHub hosts while keeping strict HTTPS and SHA-256 verification.",
+    "group": "network",
+    "id": "github.proxy",
+    "interactive": false,
+    "label": "GitHub acceleration proxy",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "gh_proxy_state",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "https://gh-proxy.com/",
+        "name": "gh_proxy_url",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "Download the official Mihomo Linux binary for this architecture, verify its release metadata, SHA-256, ELF architecture and reported version, then atomically install it for the current user.",
     "group": "clash",
     "id": "clash.install",
@@ -386,6 +414,50 @@
   },
   {
     "available": true,
+    "description": "Rebuild and validate the runtime YAML with Mihomo, atomically publish it, and trigger PUT /configs?force=true without restarting the running process. Rolls back on failure.",
+    "group": "clash",
+    "id": "clash.reload",
+    "interactive": false,
+    "label": "Hot-reload configuration",
+    "mutates": true,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Switch Mihomo between rule, global and direct routing modes through the controller, with optional persistence to Mixin.",
+    "group": "clash",
+    "id": "clash.mode",
+    "interactive": false,
+    "label": "Switch routing mode",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "rule",
+          "global",
+          "direct"
+        ],
+        "default": "rule",
+        "name": "proxy_mode",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "persist",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "Show saved subscriptions and the selected profile without downloading or changing the running process.",
     "group": "clash",
     "id": "clash.sub.list",
@@ -423,6 +495,46 @@
           "off"
         ],
         "default": "off",
+        "name": "use",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Import a Clash / Mihomo subscription from a local YAML file without network access, validate structure and proxies, and commit atomically with mode 0600. Optionally store an HTTPS update URL for future updates.",
+    "group": "clash",
+    "id": "clash.sub.import",
+    "interactive": false,
+    "label": "Import local YAML subscription",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "name",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "subscription_file",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "subscription_url",
+        "required": false
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
         "name": "use",
         "required": true
       }
@@ -557,6 +669,59 @@
   },
   {
     "available": true,
+    "description": "Run a group latency check through Mihomo's controller and list reachable nodes fastest-first alongside timed-out nodes.",
+    "group": "clash",
+    "id": "clash.proxy.delay",
+    "interactive": false,
+    "label": "Test proxy group delay",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "proxy_group",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "https://www.gstatic.com/generate_204",
+        "name": "delay_url",
+        "required": false
+      },
+      {
+        "choices": [],
+        "default": "5000",
+        "name": "delay_timeout",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Show active connection count, upload/download totals, memory and top active sessions; optionally close all active connections.",
+    "group": "clash",
+    "id": "clash.connections",
+    "interactive": false,
+    "label": "Inspect / close connections",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "close_all",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "While stopped, generate a random controller secret and save it in the private Mixin without displaying it.",
     "group": "clash",
     "id": "clash.secret.generate",
@@ -612,13 +777,24 @@
   },
   {
     "available": true,
-    "description": "Download official stable MetaCubeXD assets, verify SHA-256 and safely extract them, then validate external-ui while Mihomo is stopped.",
+    "description": "Download a verified Web dashboard (Zashboard default, MetaCubeXD, Yacd-Meta or Razord-Meta), check SHA-256 and safely extract it, then validate external-ui while Mihomo is stopped.",
     "group": "clash",
     "id": "clash.panel.install",
     "interactive": false,
-    "label": "Install / update Web dashboard",
+    "label": "Install / switch Web dashboard",
     "mutates": true,
     "parameters": [
+      {
+        "choices": [
+          "zashboard",
+          "metacubexd",
+          "yacd",
+          "razord"
+        ],
+        "default": "zashboard",
+        "name": "panel",
+        "required": true
+      },
       {
         "choices": [],
         "default": "",
@@ -626,6 +802,188 @@
         "required": false
       }
     ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "While Mihomo is stopped, clear external-ui from Mixin and delete CqShell-managed dashboard files under resources/ui.",
+    "group": "clash",
+    "id": "clash.panel.remove",
+    "interactive": false,
+    "label": "Uninstall Web dashboard",
+    "mutates": true,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Inspect installed geoip.metadb, geosite.dat, country.mmdb, geoip.dat and GeoLite2-ASN.mmdb files and sizes in Mihomo resources.",
+    "group": "clash",
+    "id": "clash.geodata.status",
+    "interactive": false,
+    "label": "GeoData database status",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Download official MetaCubeX/meta-rules-dat files (standard, lite or full preset), verify exact size and SHA-256, and replace them atomically. Respects the GitHub acceleration proxy.",
+    "group": "clash",
+    "id": "clash.geodata.update",
+    "interactive": false,
+    "label": "Update GeoData databases",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "standard",
+          "lite",
+          "full"
+        ],
+        "default": "standard",
+        "name": "geodata_preset",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "While Mihomo is stopped, configure mixed-port, LAN access, IPv6, HTTP/TLS/QUIC domain sniffing and log level in Mixin with Mihomo validation.",
+    "group": "clash",
+    "id": "clash.settings.configure",
+    "interactive": false,
+    "label": "Core proxy settings",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "7890",
+        "name": "mixed_port",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "allow_lan",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "clash_ipv6",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "sniffer",
+        "required": true
+      },
+      {
+        "choices": [
+          "info",
+          "warning",
+          "error",
+          "debug",
+          "silent"
+        ],
+        "default": "info",
+        "name": "log_level",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Read the effective Mihomo DNS state, enhanced-mode, IPv6 toggle, nameservers and fallback count.",
+    "group": "clash",
+    "id": "clash.dns.status",
+    "interactive": false,
+    "label": "DNS configuration status",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "While Mihomo is stopped, configure fake-ip, redir-host or off with China DoH (Alibaba/DNSPod + Cloudflare/Google fallback) or Global DoH presets and standard fake-ip-filter.",
+    "group": "clash",
+    "id": "clash.dns.configure",
+    "interactive": false,
+    "label": "Configure DNS preset",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "fake-ip",
+          "redir-host",
+          "off"
+        ],
+        "default": "fake-ip",
+        "name": "dns_mode",
+        "required": true
+      },
+      {
+        "choices": [
+          "china",
+          "global"
+        ],
+        "default": "china",
+        "name": "dns_preset",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "dns_ipv6",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Display persistent Mixin overrides with controller secrets and proxy authentication credentials redacted.",
+    "group": "clash",
+    "id": "clash.mixin.status",
+    "interactive": false,
+    "label": "View Mixin overrides",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "While Mihomo is stopped, remove persistent Mixin overrides and rebuild the runtime config while preserving subscriptions and resources.",
+    "group": "clash",
+    "id": "clash.mixin.reset",
+    "interactive": false,
+    "label": "Reset Mixin overrides",
+    "mutates": true,
+    "parameters": [],
     "root": false,
     "unavailable_reason": null
   },
@@ -1082,6 +1440,79 @@
   },
   {
     "available": true,
+    "description": "Interactively preview 7 prompt styles and 9 color palettes across normal Git, failed-command and root sessions, and inspect the generated Starship TOML without changing any files.",
+    "group": "terminal",
+    "id": "terminal.preview",
+    "interactive": false,
+    "label": "Preview prompt styles",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [
+          "full",
+          "compact",
+          "box",
+          "ribbon",
+          "powerline",
+          "minimal",
+          "brackets",
+          "all"
+        ],
+        "default": "box",
+        "name": "style",
+        "required": true
+      },
+      {
+        "choices": [
+          "cyan",
+          "green",
+          "magenta",
+          "tokyo-night",
+          "catppuccin",
+          "rose-pine",
+          "nord",
+          "gruvbox",
+          "dracula",
+          "all"
+        ],
+        "default": "tokyo-night",
+        "name": "color",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "time",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "git",
+        "required": true
+      },
+      {
+        "choices": [
+          "bash",
+          "zsh",
+          "both"
+        ],
+        "default": "bash",
+        "name": "shell",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "Update only managed shell initialization blocks and a dedicated Starship TOML file. Preserve a first-use baseline.",
     "group": "terminal",
     "id": "terminal.apply",
@@ -1101,8 +1532,13 @@
       },
       {
         "choices": [
+          "full",
           "compact",
-          "full"
+          "box",
+          "ribbon",
+          "powerline",
+          "minimal",
+          "brackets"
         ],
         "default": "full",
         "name": "style",
@@ -1112,7 +1548,13 @@
         "choices": [
           "cyan",
           "green",
-          "magenta"
+          "magenta",
+          "tokyo-night",
+          "catppuccin",
+          "rose-pine",
+          "nord",
+          "gruvbox",
+          "dracula"
         ],
         "default": "cyan",
         "name": "color",
@@ -1366,6 +1808,46 @@
         "choices": [],
         "default": "/var/tmp",
         "name": "directory",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Query GitHub repository ZyphrZero/CqShell for the latest stable release and compare with the running version (respects GitHub acceleration proxy; read-only).",
+    "group": "app",
+    "id": "app.check_update",
+    "interactive": false,
+    "label": "Check for CqShell updates",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Download the Linux x86_64/ARM64 release from GitHub repository ZyphrZero/CqShell, verify SHA-256, ELF architecture and --version, then atomically replace the installed cqs binary.",
+    "group": "app",
+    "id": "app.update",
+    "interactive": false,
+    "label": "Update CqShell",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "version",
+        "required": false
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "force",
         "required": true
       }
     ],

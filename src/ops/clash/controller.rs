@@ -261,6 +261,17 @@ fn request(
     path: &str,
     body: &[u8],
 ) -> Result<Vec<u8>> {
+    request_with_timeout(ctx, settings, method, path, body, REQUEST_TIMEOUT)
+}
+
+fn request_with_timeout(
+    ctx: &Context,
+    settings: &Settings,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    timeout: Duration,
+) -> Result<Vec<u8>> {
     ctx.check()?;
     let start = Instant::now();
     let mut stream =
@@ -271,7 +282,7 @@ fn request(
             )
         })?;
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_write_timeout(Some(timeout))?;
     let authorization = if settings.secret.is_empty() {
         String::new()
     } else {
@@ -289,7 +300,7 @@ fn request(
     let mut bytes = Vec::new();
     loop {
         ctx.check()?;
-        if start.elapsed() > REQUEST_TIMEOUT {
+        if start.elapsed() > timeout {
             return Err(Error::new("error.command", "controller response timed out"));
         }
         let mut buffer = [0u8; 8192];
@@ -609,6 +620,362 @@ pub fn select(ctx: &Context, group: &str, node: &str) -> Result<()> {
         "notice.clash_selected",
         redacted(&settings, &format!("{group} -> {node}")),
     );
+    Ok(())
+}
+
+pub const DEFAULT_DELAY_URL: &str = "https://www.gstatic.com/generate_204";
+const MIN_DELAY_TIMEOUT_MS: u64 = 500;
+const MAX_DELAY_TIMEOUT_MS: u64 = 15_000;
+const MAX_CONNECTIONS_DISPLAY: usize = 20;
+
+pub(crate) fn validate_test_url(value: &str) -> Result<()> {
+    let value = if value.is_empty() {
+        DEFAULT_DELAY_URL
+    } else {
+        value
+    };
+    if value.len() > 2048 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(Error::new(
+            "error.url",
+            "delay test URL must be an HTTP(S) URL without whitespace or control characters",
+        ));
+    }
+    let parsed = url::Url::parse(value).map_err(|e| Error::new("error.url", e))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err(Error::new(
+            "error.url",
+            "delay test URL must be HTTP or HTTPS without credentials",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_delay_timeout(value: &str) -> Result<u64> {
+    let parsed = value.parse::<u64>().map_err(|_| {
+        Error::new(
+            "error.input",
+            "delay timeout must be between 500 and 15000 ms",
+        )
+    })?;
+    if !(MIN_DELAY_TIMEOUT_MS..=MAX_DELAY_TIMEOUT_MS).contains(&parsed) {
+        return Err(Error::new(
+            "error.input",
+            "delay timeout must be between 500 and 15000 ms",
+        ));
+    }
+    Ok(parsed)
+}
+
+/// All policy groups that support group latency tests, ordered as in `GLOBAL`.
+pub fn delay_group_choices(ctx: &Context) -> Result<Vec<crate::ops::Choice>> {
+    let settings = settings(ctx)?;
+    let entries = proxy_map(ctx, &settings)?;
+    let order = entries
+        .get("GLOBAL")
+        .and_then(|global| global.get("all"))
+        .and_then(Json::as_array)
+        .map(|all| all.iter().filter_map(Json::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut groups = Vec::new();
+    for (name, entry) in &entries {
+        if entry.get("all").and_then(Json::as_array).is_none() {
+            continue;
+        }
+        let kind = entry.get("type").and_then(Json::as_str).unwrap_or("group");
+        let now = entry.get("now").and_then(Json::as_str).unwrap_or("");
+        let detail = if now.is_empty() {
+            kind.into()
+        } else {
+            format!("{kind} · → {now}")
+        };
+        groups.push(crate::ops::Choice {
+            value: name.clone(),
+            detail,
+            current: false,
+            children: Vec::new(),
+        });
+    }
+    let rank = |name: &str| order.iter().position(|item| *item == name);
+    groups.sort_by(|a, b| match (rank(&a.value), rank(&b.value)) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.value.cmp(&b.value),
+    });
+    Ok(groups)
+}
+
+/// Switch Mihomo's proxy routing mode (`rule`, `global`, or `direct`), optionally
+/// persisting the choice to Mixin.
+pub fn mode(ctx: &Context, mode: &str, persist: bool) -> Result<()> {
+    ctx.check()?;
+    if !matches!(mode, "rule" | "global" | "direct") {
+        return Err(Error::new(
+            "error.input",
+            "proxy mode must be rule, global or direct",
+        ));
+    }
+    let current = state(ctx)?;
+    if matches!(current, State::Unknown) {
+        return Err(unknown_process());
+    }
+    let body = serde_json::to_vec(&serde_json::json!({ "mode": mode }))?;
+    if persist {
+        if matches!(current, State::Running(_)) {
+            let settings = settings(ctx)?;
+            edit_mixin_inner(ctx, true, |map| {
+                map.insert(Value::String("mode".into()), Value::String(mode.into()));
+                Ok(())
+            })?;
+            request(ctx, &settings, "PATCH", "/configs", &body)?;
+            ctx.message("notice.clash_mode", format!("{mode} (live + persisted)"));
+        } else {
+            edit_mixin(ctx, |map| {
+                map.insert(Value::String("mode".into()), Value::String(mode.into()));
+                Ok(())
+            })?;
+            ctx.message(
+                "notice.clash_mode",
+                format!("{mode} (saved to Mixin; start Mihomo to apply)"),
+            );
+        }
+    } else {
+        let settings = settings(ctx)?;
+        request(ctx, &settings, "PATCH", "/configs", &body)?;
+        ctx.message("notice.clash_mode", format!("{mode} (live)"));
+    }
+    Ok(())
+}
+
+/// Rebuild, validate, atomically publish `clash_runtime`, and hot-reload Mihomo
+/// via `PUT /configs?force=true` without restarting the process.
+pub fn reload(ctx: &Context) -> Result<()> {
+    ctx.check()?;
+    let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+    recover_interrupted_files(ctx)?;
+    let current_state = state(ctx)?;
+    if matches!(current_state, State::Unknown) {
+        return Err(unknown_process());
+    }
+    ensure_layout(ctx)?;
+    let settings = settings(ctx)?;
+    let previous = match fs::read(&ctx.paths.clash_runtime) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let runtime = build_runtime_config(ctx)?;
+    let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+    fs::write(candidate.path(), &runtime)?;
+    validate_config(ctx, candidate.path(), true)?;
+    validate_with_mihomo(ctx, candidate.path())?;
+    let payload = String::from_utf8(runtime.clone())
+        .map_err(|_| invalid("generated runtime configuration is not valid UTF-8"))?;
+    storage::atomic_write(&ctx.paths.clash_runtime, &runtime, 0o600)?;
+    // Send the validated YAML via `payload` rather than `path`: Mihomo rejects
+    // `path` outside its `-d` resource directory unless `SAFE_PATHS` includes
+    // `clash_data`, so `payload` works even for already-running Mihomo daemons.
+    let body = serde_json::to_vec(&serde_json::json!({ "payload": payload }))?;
+    if let Err(error) = request_with_timeout(
+        ctx,
+        &settings,
+        "PUT",
+        "/configs?force=true",
+        &body,
+        Duration::from_secs(15),
+    ) {
+        let _ = match previous {
+            Some(bytes) => storage::atomic_write(&ctx.paths.clash_runtime, &bytes, 0o600),
+            None => storage::remove_file(&ctx.paths.clash_runtime),
+        };
+        if matches!(current_state, State::Stopped | State::NotInstalled)
+            && error.detail.contains("cannot connect")
+        {
+            return Err(Error::new(
+                "error.command",
+                "Mihomo is not running; start Mihomo instead of hot-reloading",
+            ));
+        }
+        return Err(error);
+    }
+    ctx.message(
+        "notice.clash_reload",
+        "configuration validated and hot-reloaded",
+    );
+    Ok(())
+}
+
+/// Measure latency for all nodes in a policy group via `GET /group/{name}/delay`.
+pub fn delay(ctx: &Context, group: &str, test_url: &str, timeout_ms: &str) -> Result<()> {
+    ctx.check()?;
+    if group.is_empty() || group.len() > 4096 {
+        return Err(Error::new(
+            "error.input",
+            "group must be a nonempty name of at most 4096 bytes",
+        ));
+    }
+    let effective_url = if test_url.is_empty() {
+        DEFAULT_DELAY_URL
+    } else {
+        test_url
+    };
+    validate_test_url(effective_url)?;
+    let timeout = validate_delay_timeout(timeout_ms)?;
+    let settings = settings(ctx)?;
+    let entries = proxy_map(ctx, &settings)?;
+    let members = entries
+        .get(group)
+        .and_then(|entry| entry.get("all"))
+        .and_then(Json::as_array)
+        .ok_or_else(|| Error::new("error.input", "unknown controller group"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| invalid("controller group contains an invalid node"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let path = format!(
+        "/group/{}/delay?url={}&timeout={timeout}",
+        segment(group),
+        segment(effective_url)
+    );
+    let body = request_with_timeout(
+        ctx,
+        &settings,
+        "GET",
+        &path,
+        &[],
+        Duration::from_millis(timeout + 5_000),
+    )?;
+    let delays: serde_json::Map<String, Json> =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let mut reachable: Vec<(String, u64)> = Vec::new();
+    let mut timed_out: Vec<String> = Vec::new();
+    for member in &members {
+        match delays.get(member).and_then(Json::as_u64) {
+            Some(ms) if ms > 0 => reachable.push((member.clone(), ms)),
+            _ => timed_out.push(member.clone()),
+        }
+    }
+    reachable.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "{group}: {}/{} reachable (timeout {} ms)",
+        reachable.len(),
+        members.len(),
+        timeout
+    ));
+    for (name, ms) in &reachable {
+        lines.push(format!("  {ms:>4} ms  {name}"));
+    }
+    for name in &timed_out {
+        lines.push(format!("  timeout  {name}"));
+    }
+    ctx.message("notice.clash_delay", redacted(&settings, &lines.join("\n")));
+    Ok(())
+}
+
+/// Inspect active connections and traffic totals, optionally closing all active connections.
+pub fn connections(ctx: &Context, close_all: bool) -> Result<()> {
+    ctx.check()?;
+    let settings = settings(ctx)?;
+    let body = request(ctx, &settings, "GET", "/connections", &[])?;
+    let json: Json =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let upload = json.get("uploadTotal").and_then(Json::as_u64).unwrap_or(0);
+    let download = json
+        .get("downloadTotal")
+        .and_then(Json::as_u64)
+        .unwrap_or(0);
+    let memory = json.get("memory").and_then(Json::as_u64);
+    let mut list: Vec<&Json> = json
+        .get("connections")
+        .and_then(Json::as_array)
+        .map(|items| items.iter().collect())
+        .unwrap_or_default();
+    let total_count = list.len();
+    list.sort_by(|a, b| {
+        let bytes = |item: &Json| {
+            item.get("upload")
+                .and_then(Json::as_u64)
+                .unwrap_or(0)
+                .saturating_add(item.get("download").and_then(Json::as_u64).unwrap_or(0))
+        };
+        bytes(b).cmp(&bytes(a))
+    });
+    let mut header = format!(
+        "active={total_count}; up={}; down={}",
+        format_bytes(upload),
+        format_bytes(download)
+    );
+    if let Some(mem) = memory {
+        header.push_str(&format!("; memory={}", format_bytes(mem)));
+    }
+    let mut lines = vec![header];
+    for item in list.iter().take(MAX_CONNECTIONS_DISPLAY) {
+        let meta = item.get("metadata");
+        let network = meta
+            .and_then(|m| m.get("network"))
+            .and_then(Json::as_str)
+            .unwrap_or("tcp");
+        let host = meta
+            .and_then(|m| m.get("host"))
+            .and_then(Json::as_str)
+            .filter(|h| !h.is_empty())
+            .or_else(|| {
+                meta.and_then(|m| m.get("destinationIP"))
+                    .and_then(Json::as_str)
+            })
+            .unwrap_or("-");
+        let port = meta
+            .and_then(|m| m.get("destinationPort"))
+            .and_then(Json::as_str)
+            .unwrap_or("");
+        let target = if port.is_empty() {
+            host.to_owned()
+        } else {
+            format!("{host}:{port}")
+        };
+        let chains = item
+            .get("chains")
+            .and_then(Json::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .rev()
+                    .filter_map(Json::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "-".into());
+        let up = format_bytes(item.get("upload").and_then(Json::as_u64).unwrap_or(0));
+        let down = format_bytes(item.get("download").and_then(Json::as_u64).unwrap_or(0));
+        lines.push(format!(
+            "  {network} {target} [{chains}] (up {up}, down {down})"
+        ));
+    }
+    if total_count > MAX_CONNECTIONS_DISPLAY {
+        lines.push(format!(
+            "  ... {} more active connections",
+            total_count - MAX_CONNECTIONS_DISPLAY
+        ));
+    }
+    ctx.message(
+        "notice.clash_connections",
+        redacted(&settings, &lines.join("\n")),
+    );
+    if close_all {
+        request(ctx, &settings, "DELETE", "/connections", &[])?;
+        ctx.message("notice.clash_connections", "all active connections closed");
+    }
     Ok(())
 }
 
@@ -1071,5 +1438,160 @@ mod tests {
         assert!(!ctx.paths.clash_pid.exists());
         assert!(!ctx.paths.clash_pid_start.exists());
         wait_for_reaping(pid);
+    }
+
+    #[test]
+    fn mode_switches_live_and_persists_when_requested() {
+        let (address, worker) = serve(vec![
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!(
+                "mode: rule\nexternal-controller: {address}\nsecret: mode-secret\nproxies:\n  - name: p1\n    type: direct\n"
+            ),
+        )
+        .unwrap();
+        mode(&ctx, "global", false).unwrap();
+        let requests = worker.join().unwrap();
+        let patch = String::from_utf8(requests[0].clone()).unwrap();
+        assert!(patch.starts_with("PATCH /configs HTTP/1.1\r\n"));
+        assert!(patch.contains("Authorization: Bearer mode-secret\r\n"));
+        let body = patch.split_once("\r\n\r\n").unwrap().1;
+        assert_eq!(
+            serde_json::from_str::<Json>(body).unwrap()["mode"],
+            "global"
+        );
+        assert!(!ctx.paths.clash_mixin.exists());
+
+        // Persist when stopped updates Mixin cleanly without calling HTTP.
+        mode(&ctx, "direct", true).unwrap();
+        let mixin: Value =
+            serde_yaml::from_slice(&fs::read(&ctx.paths.clash_mixin).unwrap()).unwrap();
+        assert_eq!(mixin["mode"], "direct");
+        assert!(mode(&ctx, "invalid", false).is_err());
+    }
+
+    #[test]
+    fn reload_validates_writes_runtime_and_rolls_back_on_http_error() {
+        let (address, worker) = serve(vec![
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".to_vec(),
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("mode: direct\nexternal-controller: {address}\nsecret: reload-secret\n"),
+        )
+        .unwrap();
+        fs::write(&ctx.paths.clash_mixin, "log-level: info\n").unwrap();
+        reload(&ctx).unwrap();
+        let saved = fs::read(&ctx.paths.clash_runtime).unwrap();
+        assert!(String::from_utf8_lossy(&saved).contains("log-level: info"));
+
+        // Change Mixin, trigger HTTP 500 -> clash_runtime must roll back to previous bytes.
+        fs::write(&ctx.paths.clash_mixin, "log-level: debug\n").unwrap();
+        assert!(reload(&ctx).is_err());
+        assert_eq!(fs::read(&ctx.paths.clash_runtime).unwrap(), saved);
+
+        let requests = worker.join().unwrap();
+        let put = String::from_utf8(requests[0].clone()).unwrap();
+        assert!(put.starts_with("PUT /configs?force=true HTTP/1.1\r\n"));
+        assert!(put.contains("Authorization: Bearer reload-secret\r\n"));
+        let body = put.split_once("\r\n\r\n").unwrap().1;
+        let json: Json = serde_json::from_str(body).unwrap();
+        assert!(json.get("path").is_none());
+        assert!(
+            json["payload"]
+                .as_str()
+                .unwrap()
+                .contains("log-level: info")
+        );
+    }
+
+    #[test]
+    fn delay_tests_encoded_group_sorts_results_and_validates_inputs() {
+        let group = "节点/测试";
+        let proxies = serde_json::json!({
+            "proxies": {
+                group: {"type": "URLTest", "all": ["Slow", "Fast", "Dead"], "now": "Fast"},
+                "GLOBAL": {"type": "Selector", "all": [group], "now": group}
+            }
+        })
+        .to_string();
+        let delays = serde_json::json!({"Slow": 210, "Fast": 42}).to_string();
+        let (address, worker) = serve(vec![
+            response(&proxies),
+            response(&delays),
+            response(&proxies),
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("external-controller: {address}\nsecret: delay-secret\n"),
+        )
+        .unwrap();
+        delay(&ctx, group, "", "3000").unwrap();
+        let groups = delay_group_choices(&ctx).unwrap();
+        assert_eq!(
+            groups.iter().map(|g| g.value.as_str()).collect::<Vec<_>>(),
+            vec![group, "GLOBAL"]
+        );
+        let requests = worker.join().unwrap();
+        let get_delay = String::from_utf8(requests[1].clone()).unwrap();
+        assert!(get_delay.starts_with("GET /group/%E8%8A%82%E7%82%B9%2F%E6%B5%8B%E8%AF%95/delay?url=https%3A%2F%2Fwww%2Egstatic%2Ecom%2Fgenerate_204&timeout=3000 HTTP/1.1\r\n"));
+        assert!(validate_test_url("ftp://example.com").is_err());
+        assert!(validate_test_url("https://user:pass@example.com").is_err());
+        assert!(validate_delay_timeout("100").is_err());
+        assert!(validate_delay_timeout("99999").is_err());
+    }
+
+    #[test]
+    fn connections_reads_summary_and_closes_when_requested() {
+        let body = serde_json::json!({
+            "uploadTotal": 2048,
+            "downloadTotal": 1_048_576,
+            "memory": 16_777_216,
+            "connections": [
+                {
+                    "upload": 512,
+                    "download": 4096,
+                    "chains": ["HK-01", "Proxy"],
+                    "metadata": {"network": "tcp", "host": "example.com", "destinationPort": "443"}
+                }
+            ]
+        })
+        .to_string();
+        let (address, worker) = serve(vec![
+            response(&body),
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("external-controller: {address}\nsecret: conn-secret\n"),
+        )
+        .unwrap();
+        connections(&ctx, true).unwrap();
+        let requests = worker.join().unwrap();
+        assert!(
+            String::from_utf8(requests[0].clone())
+                .unwrap()
+                .starts_with("GET /connections HTTP/1.1\r\n")
+        );
+        assert!(
+            String::from_utf8(requests[1].clone())
+                .unwrap()
+                .starts_with("DELETE /connections HTTP/1.1\r\n")
+        );
     }
 }

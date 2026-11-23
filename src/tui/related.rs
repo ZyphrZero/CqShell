@@ -3,7 +3,7 @@
 //! rule. A reading that is not a Value adds no tag; the state shows its placeholder instead
 //! (Requirements 4.10, 5.7, 5.8). Nothing here reads the clock or the theme: callers pass
 //! `now`, and the view styles the tag.
-use super::view::Segment;
+use super::render::Segment;
 use crate::{
     actions::{Parameters, Spec},
     dashboard::{Reading, Snapshot, Usage},
@@ -114,6 +114,28 @@ fn mib(bytes: u64) -> String {
         format!("{} MiB", bytes / MIB)
     } else {
         format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    }
+}
+
+/// Live status summary for the `github.proxy` action in the Network workbench.
+pub(super) fn github_proxy(proxy: Option<&str>, i18n: &I18n) -> Related {
+    let (tag_text, state_value) = match proxy {
+        Some(url) => {
+            let host = url::Url::parse(url)
+                .ok()
+                .and_then(|parsed| parsed.host_str().map(str::to_owned))
+                .unwrap_or_else(|| url.to_owned());
+            (lit(&host), lit(url))
+        }
+        None => (
+            unlit(i18n.text("dash.direct")),
+            unlit(i18n.text("dash.direct")),
+        ),
+    };
+    Related {
+        tag: vec![Segment::new(tag_text, Style::default())],
+        state: vec![line(i18n, "dash.github_proxy", state_value)],
+        matches_current: never,
     }
 }
 

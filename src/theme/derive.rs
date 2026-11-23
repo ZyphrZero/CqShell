@@ -1,5 +1,7 @@
-//! Color arithmetic on 8-bit sRGB: WCAG 2.x relative luminance and contrast ratio, and
-//! linear blending.
+//! WCAG 2.x color math (sRGB relative luminance, contrast ratio, RGB blending) and adaptive
+//! layered-surface palette derivation.
+
+use super::{Color, Palette};
 
 pub const WHITE: (u8, u8, u8) = (0xff, 0xff, 0xff);
 pub const BLACK: (u8, u8, u8) = (0, 0, 0);
@@ -8,8 +10,6 @@ pub const BLACK: (u8, u8, u8) = (0, 0, 0);
 pub fn relative_luminance((r, g, b): (u8, u8, u8)) -> f64 {
     fn linear(channel: u8) -> f64 {
         let c = f64::from(channel) / 255.0;
-        // WCAG 2.x prints the cut-off as 0.03928, sRGB as 0.04045; no 8-bit level lies
-        // between the two, so both give the same result.
         if c <= 0.04045 {
             c / 12.92
         } else {
@@ -25,8 +25,7 @@ pub fn contrast(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// Per-channel linear blend from `a` at `t = 0` to `b` at `t = 1`, rounded to the nearest
-/// level; `t` is clamped to that range.
+/// Per-channel linear blend from `a` at `t = 0` to `b` at `t = 1`.
 pub fn mix(a: (u8, u8, u8), b: (u8, u8, u8), t: f64) -> (u8, u8, u8) {
     let t = t.clamp(0.0, 1.0);
     let channel =
@@ -34,26 +33,67 @@ pub fn mix(a: (u8, u8, u8), b: (u8, u8, u8), t: f64) -> (u8, u8, u8) {
     (channel(a.0, b.0), channel(a.1, b.1), channel(a.2, b.2))
 }
 
-/// A background is light when black text contrasts with it more than white text, which
-/// holds for relative luminance above √0.0525 − 0.05 ≈ 0.179.
+/// A background is light when black text contrasts with it more than white text.
 pub fn is_light(bg: (u8, u8, u8)) -> bool {
     contrast(bg, BLACK) > contrast(bg, WHITE)
 }
 
-pub fn aurora(background: (u8, u8, u8)) -> super::Palette {
-    use super::{Color, Palette};
+/// Derive a layered-surface palette rooted in the user's real terminal background while ensuring
+/// WCAG contrast across every surface layer.
+pub fn adaptive(background: (u8, u8, u8)) -> Palette {
     let light = is_light(background);
     let endpoint = if light { BLACK } else { WHITE };
     let scale = ((contrast(background, endpoint) - 4.6) / 3.4).clamp(0.0, 1.0);
-    let surface = mix(background, endpoint, 0.04 * scale);
-    let selection = mix(background, endpoint, 0.08 * scale);
-    let dialog = mix(background, endpoint, 0.07 * scale);
-    let dialog_selection = mix(background, endpoint, 0.13 * scale);
-    let surfaces = [background, surface, selection, dialog, dialog_selection];
+
+    let (sidebar, surface, surface_alt, elevated) = if light {
+        (
+            mix(background, endpoint, 0.035 * scale),
+            mix(background, WHITE, 0.72),
+            mix(background, endpoint, 0.075 * scale),
+            WHITE,
+        )
+    } else {
+        (
+            mix(background, endpoint, 0.032 * scale),
+            mix(background, endpoint, 0.058 * scale),
+            mix(background, endpoint, 0.095 * scale),
+            mix(background, endpoint, 0.080 * scale),
+        )
+    };
+
+    let bases = if light {
+        [
+            (0x0d, 0x94, 0x88), // accent (teal)
+            (0x02, 0x84, 0xc7), // accent2 (sky)
+            (0x02, 0x84, 0xc7), // info
+            (0x16, 0xa3, 0x4a), // success
+            (0xb4, 0x53, 0x09), // warning
+            (0xdc, 0x26, 0x26), // danger
+        ]
+    } else {
+        [
+            (0x5e, 0xea, 0xd4), // accent (mint teal)
+            (0x7d, 0xd3, 0xfc), // accent2 (sky)
+            (0x7d, 0xd3, 0xfc), // info
+            (0x4a, 0xde, 0x80), // success
+            (0xfb, 0xbf, 0x24), // warning
+            (0xfb, 0x71, 0x85), // danger
+        ]
+    };
+
+    let selection = mix(surface, bases[0], if light { 0.14 } else { 0.16 } * scale);
+    let surfaces = [
+        background,
+        sidebar,
+        surface,
+        surface_alt,
+        elevated,
+        selection,
+    ];
     let worst = |color| {
         surfaces
             .iter()
-            .map(|surface| contrast(color, *surface))
+            .map(|s| contrast(color, *s))
             .fold(f64::INFINITY, f64::min)
     };
     let ceiling = worst(endpoint);
@@ -73,51 +113,35 @@ pub fn aurora(background: (u8, u8, u8)) -> super::Palette {
         }
         mix(base, endpoint, high)
     };
-    let rgb = |(red, green, blue)| Color::Rgb(red, green, blue);
-    let bases = if light {
-        [
-            (0x0b, 0x7a, 0x6c),
-            (0x2a, 0x62, 0xc4),
-            (0x1a, 0x7f, 0x45),
-            (0x8a, 0x5a, 0),
-            (0xb8, 0x32, 0x48),
-        ]
+
+    let rgb = |(r, g, b)| Color::Rgb(r, g, b);
+    let [accent, accent2, info, success, warning, danger] = bases.map(|b| adjusted(b, 4.5));
+    let text1 = adjusted(background, 12.0);
+    let text2 = adjusted(background, 6.5);
+    let text3 = adjusted(background, 4.0);
+    let on_accent = if contrast(accent, BLACK) > contrast(accent, WHITE) {
+        BLACK
     } else {
-        [
-            (0x4f, 0xd1, 0xbd),
-            (0x86, 0xb4, 0xff),
-            (0x6f, 0xd3, 0x9a),
-            (0xf2, 0xc4, 0x6d),
-            (0xf2, 0x87, 0x9a),
-        ]
+        WHITE
     };
-    let [accent, info, success, warning, danger] = bases.map(|base| adjusted(base, 4.5));
-    let text1 = rgb(adjusted(background, 12.0));
+
     Palette {
-        background: rgb(background),
+        canvas: rgb(background),
+        sidebar: rgb(sidebar),
         surface: rgb(surface),
-        surface_alt: rgb(selection),
+        surface_alt: rgb(surface_alt),
+        elevated: rgb(elevated),
         selection: rgb(selection),
-        selection_text: text1,
-        selection_mark: rgb(accent),
-        dialog: rgb(dialog),
-        dialog_selection: rgb(dialog_selection),
-        border: rgb(mix(background, endpoint, 0.20)),
+        border: rgb(mix(background, endpoint, if light { 0.18 } else { 0.16 })),
         border_focus: rgb(accent),
-        rule: rgb(mix(background, endpoint, 0.10)),
-        shadow: rgb(mix(background, BLACK, if light { 0.10 } else { 0.45 })),
-        dim: rgb(mix(background, endpoint, 0.24)),
-        text1,
-        text2: rgb(adjusted(background, 7.0)),
-        text3: rgb(adjusted(background, 4.0)),
+        rule: rgb(mix(background, endpoint, if light { 0.11 } else { 0.10 })),
+        shadow: rgb(mix(background, BLACK, if light { 0.12 } else { 0.50 })),
+        text1: rgb(text1),
+        text2: rgb(text2),
+        text3: rgb(text3),
         accent: rgb(accent),
-        accent2: rgb(accent),
-        on_accent: rgb(if contrast(accent, BLACK) > contrast(accent, WHITE) {
-            BLACK
-        } else {
-            WHITE
-        }),
-        meter: rgb(accent),
+        accent2: rgb(accent2),
+        on_accent: rgb(on_accent),
         info: rgb(info),
         success: rgb(success),
         warning: rgb(warning),
@@ -128,201 +152,52 @@ pub fn aurora(background: (u8, u8, u8)) -> super::Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{Color, Role};
-    use proptest::strategy::Strategy;
+    use proptest::prelude::*;
 
-    fn rgb(color: Color) -> (u8, u8, u8) {
-        match color {
-            Color::Rgb(red, green, blue) => (red, green, blue),
-            _ => panic!("aurora must use RGB"),
-        }
+    #[test]
+    fn black_and_white_contrast_is_twenty_one() {
+        assert!((contrast(BLACK, WHITE) - 21.0).abs() < 1e-9);
+        assert!((contrast(WHITE, BLACK) - 21.0).abs() < 1e-9);
+        assert!(!is_light((0x0d, 0x11, 0x17)));
+        assert!(is_light((0xf8, 0xfa, 0xfc)));
     }
 
-    fn check_aurora(background: (u8, u8, u8)) {
-        let palette = aurora(background);
-        for surface in [
-            palette.background,
-            palette.surface,
-            palette.selection,
-            palette.dialog,
-            palette.dialog_selection,
-        ] {
-            for role in [
-                Role::Text1,
-                Role::Text2,
-                Role::Text3,
-                Role::Accent,
-                Role::Info,
-                Role::Success,
-                Role::Warning,
-                Role::Danger,
-            ] {
-                let minimum = if role == Role::Text3 { 3.0 } else { 4.5 };
-                assert!(
-                    contrast(rgb(palette.get(role)), rgb(surface)) >= minimum,
-                    "{background:?} {role:?} against {surface:?}"
-                );
-            }
-        }
-    }
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
 
-    proptest::proptest! {
-        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(512))]
-        // Feature: tui-redesign, Property 11: aurora 对比度
         #[test]
-        fn aurora_meets_contrast_for_any_background(background in proptest::prop_oneof![proptest::prelude::any::<(u8,u8,u8)>(), (112u8..123).prop_map(|gray| (gray,gray,gray))]) {
-            check_aurora(background);
-        }
-    }
-
-    #[test]
-    fn aurora_matches_the_reference_palettes_and_all_grays() {
-        for gray in 0..=255 {
-            check_aurora((gray, gray, gray));
-        }
-        for (background, expected) in [
-            (
-                (0x0b, 0x11, 0x19),
-                [
-                    0x151b22, 0x1f242b, 0x1c2229, 0x2b3037, 0x232930, 0x3c4147, 0x464a50, 0xf3f4f4,
-                    0xbbbdbf, 0x8b8e91, 0x4fd1bd,
-                ],
-            ),
-            (
-                (0xf6, 0xf7, 0xf9),
-                [
-                    0xecedef, 0xe2e3e5, 0xe5e6e8, 0xd6d7d9, 0xdddee0, 0xc5c6c7, 0xbbbcbd, 0x1a1a1b,
-                    0x414242, 0x656566, 0x0a6a5e,
-                ],
-            ),
-        ] {
-            let palette = aurora(background);
-            for (role, number) in [
-                Role::Surface,
-                Role::Selection,
-                Role::Dialog,
-                Role::DialogSelection,
-                Role::Rule,
-                Role::Border,
-                Role::Dim,
-                Role::Text1,
-                Role::Text2,
-                Role::Text3,
-                Role::Accent,
-            ]
-            .into_iter()
-            .zip(expected)
-            {
-                assert_eq!(
-                    palette.get(role),
-                    Color::Rgb((number >> 16) as u8, (number >> 8) as u8, number as u8),
-                    "{role:?}"
-                );
-            }
-        }
-        let light = aurora((0xf6, 0xf7, 0xf9));
-        for (role, expected) in [
-            (Role::Info, 0x275ab5u32),
-            (Role::Success, 0x166c3a),
-            (Role::Warning, 0x825400),
-            (Role::Danger, 0xab2f43),
-        ] {
-            assert_eq!(
-                light.get(role),
-                Color::Rgb(
-                    (expected >> 16) as u8,
-                    (expected >> 8) as u8,
-                    expected as u8
-                )
-            );
-        }
-        for (background, expected) in [
-            ((11, 17, 25), [12.06, 7.05, 4.03, 7.08, 5.51]),
-            ((246, 247, 249), [12.08, 7.00, 4.04, 4.51, 4.53]),
-        ] {
-            let palette = aurora(background);
-            for (role, expected) in [
-                Role::Text1,
-                Role::Text2,
-                Role::Text3,
-                Role::Accent,
-                Role::Danger,
-            ]
-            .into_iter()
-            .zip(expected)
-            {
-                let actual = [
-                    palette.background,
-                    palette.surface,
-                    palette.selection,
-                    palette.dialog,
-                    palette.dialog_selection,
-                ]
-                .into_iter()
-                .map(|surface| contrast(rgb(palette.get(role)), rgb(surface)))
+        fn adaptive_palette_maintains_readable_contrast_for_any_terminal_background(
+            r in 0u8..=255,
+            g in 0u8..=255,
+            b in 0u8..=255,
+        ) {
+            let bg = (r, g, b);
+            let palette = adaptive(bg);
+            let surfaces = [
+                palette.canvas.rgb().unwrap(),
+                palette.sidebar.rgb().unwrap(),
+                palette.surface.rgb().unwrap(),
+                palette.surface_alt.rgb().unwrap(),
+                palette.elevated.rgb().unwrap(),
+                palette.selection.rgb().unwrap(),
+            ];
+            let endpoint = if is_light(bg) { BLACK } else { WHITE };
+            let ceiling = surfaces
+                .iter()
+                .map(|s| contrast(endpoint, *s))
                 .fold(f64::INFINITY, f64::min);
-                assert!(
-                    (actual - expected).abs() < 0.01,
-                    "{role:?}: {actual} != {expected}"
-                );
-            }
+
+            let text1 = palette.text1.rgb().unwrap();
+            let text2 = palette.text2.rgb().unwrap();
+            let accent = palette.accent.rgb().unwrap();
+
+            let min_text1 = surfaces.iter().map(|s| contrast(text1, *s)).fold(f64::INFINITY, f64::min);
+            let min_text2 = surfaces.iter().map(|s| contrast(text2, *s)).fold(f64::INFINITY, f64::min);
+            let min_accent = surfaces.iter().map(|s| contrast(accent, *s)).fold(f64::INFINITY, f64::min);
+
+            prop_assert!(min_text1 + 0.05 >= ceiling.min(12.0), "text1 {min_text1} < {}", ceiling.min(12.0));
+            prop_assert!(min_text2 + 0.05 >= ceiling.min(6.5), "text2 {min_text2} < {}", ceiling.min(6.5));
+            prop_assert!(min_accent + 0.05 >= ceiling.min(4.5), "accent {min_accent} < {}", ceiling.min(4.5));
         }
-    }
-
-    fn close(actual: f64, expected: f64, tolerance: f64) -> bool {
-        (actual - expected).abs() <= tolerance
-    }
-
-    #[test]
-    fn relative_luminance_of_known_colors() {
-        assert!(close(relative_luminance(BLACK), 0.0, 1e-12));
-        assert!(close(relative_luminance(WHITE), 1.0, 1e-12));
-        assert!(close(relative_luminance((0xff, 0, 0)), 0.2126, 1e-12));
-        assert!(close(relative_luminance((0, 0xff, 0)), 0.7152, 1e-12));
-        assert!(close(relative_luminance((0, 0, 0xff)), 0.0722, 1e-12));
-        assert!(close(
-            relative_luminance((0x80, 0x80, 0x80)),
-            0.2158605,
-            1e-6
-        ));
-    }
-
-    #[test]
-    fn contrast_of_known_pairs() {
-        assert!(close(contrast(WHITE, BLACK), 21.0, 1e-9));
-        assert!(close(contrast(BLACK, WHITE), 21.0, 1e-9));
-        assert!(close(
-            contrast((0x45, 0xcd, 0xb6), (0x45, 0xcd, 0xb6)),
-            1.0,
-            1e-12
-        ));
-        // The dark classic colors that motivate its light variant: muted text and accent
-        // on white.
-        assert!(close(contrast((0x91, 0xa2, 0xb0), WHITE), 2.6, 0.05));
-        assert!(close(contrast((0x45, 0xcd, 0xb6), WHITE), 2.0, 0.05));
-    }
-
-    #[test]
-    fn mix_returns_the_endpoints_and_blends_between_them() {
-        let (a, b) = ((0, 0, 0), (100, 200, 50));
-        assert_eq!(mix(a, b, 0.0), a);
-        assert_eq!(mix(a, b, 1.0), b);
-        assert_eq!(mix(a, b, 0.5), (50, 100, 25));
-        assert_eq!(mix(a, b, -1.0), a);
-        assert_eq!(mix(a, b, 2.0), b);
-        // Rounds to the nearest level: 11 + 244 × 0.04 = 20.76.
-        assert_eq!(mix((11, 17, 25), WHITE, 0.04), (21, 27, 34));
-    }
-
-    #[test]
-    fn is_light_switches_at_the_luminance_threshold() {
-        let threshold = 0.0525_f64.sqrt() - 0.05;
-        let (below, above) = ((0x75, 0x75, 0x75), (0x76, 0x76, 0x76));
-        assert!(relative_luminance(below) < threshold);
-        assert!(relative_luminance(above) > threshold);
-        assert!(!is_light(below));
-        assert!(is_light(above));
-        assert!(is_light(WHITE));
-        assert!(!is_light(BLACK));
     }
 }

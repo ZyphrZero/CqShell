@@ -45,6 +45,10 @@ tcp.tune               TCP 缓冲区调优
   rtt=50 []
 tcp.restore            撤销 TCP 调优
   恢复首次记录的 TCP 运行值和配置。
+github.proxy           GitHub 国内加速代理
+  配置并开关 GitHub 国内加速代理前缀（默认地址 https://gh-proxy.com/），加速 Mihomo、BBRv3 内核、Agent 工具、Starship 及固定脚本的 GitHub 拉取；仅作用于 GitHub 官方域名，仍严格校验 SHA-256 与 HTTPS。
+  gh_proxy_state=on ["on", "off"]
+  gh_proxy_url=https://gh-proxy.com/ []
 clash.install          安装 / 更新 Mihomo
   下载当前架构的官方 Mihomo Linux 二进制，校验发布元数据、SHA-256、ELF 架构和实际版本后，为当前用户原子安装。
   version= []
@@ -54,6 +58,12 @@ clash.start            启动 Mihomo
   校验主配置与 Mixin YAML，原子发布运行配置，然后以带归属校验的 PID 记录启动 Mihomo。
 clash.stop             停止 Mihomo
   向 CqShell 记录的 Mihomo 进程发送 SIGTERM 并等待退出。
+clash.reload           热重载运行配置
+  重新合成并通过 Mihomo 校验运行配置，原子发布后调用控制器热重载，无需重启进程；失败自动回滚。
+clash.mode             切换代理运行模式
+  通过控制器在 rule（规则）、global（全局）和 direct（直连）之间即时切换，可选同步持久化到 Mixin。
+  proxy_mode=rule ["rule", "global", "direct"]
+  persist=off ["off", "on"]
 clash.sub.list         查看订阅列表
   显示保存的订阅和当前选择，不下载内容，也不修改运行中的进程。
 clash.sub.add          添加订阅
@@ -61,6 +71,12 @@ clash.sub.add          添加订阅
   name= []
   url= []
   use=off ["on", "off"]
+clash.sub.import       从本地 YAML 导入订阅
+  从本地 Clash / Mihomo YAML 配置文件导入订阅（无需联网拉取），校验 YAML 与代理节点后以 0600 权限原子保存；可选填写原 HTTPS 订阅链接以便日后在线更新。
+  name= []
+  subscription_file= []
+  subscription_url= []
+  use=on ["on", "off"]
 clash.sub.use          选择订阅
   将已保存订阅原子复制为主配置；需要另行重启 Mihomo 才会应用。
   name= []
@@ -81,6 +97,14 @@ clash.proxy.select     切换策略组节点
   检查策略组及节点归属后通过控制器切换；不修改订阅配置。
   proxy_group= []
   proxy_node= []
+clash.proxy.delay      策略组节点批量测速
+  通过控制器对所选策略组并发测速，按延迟从低到高排序展示可用节点并列出超时节点。
+  proxy_group= []
+  delay_url=https://www.gstatic.com/generate_204 []
+  delay_timeout=5000 []
+clash.connections      查看 / 断开活跃连接
+  查看当前活跃连接数、累计上下行流量、内存占用及热门连接明细，可选一键断开全部连接。
+  close_all=off ["off", "on"]
 clash.secret.generate  生成控制器密钥
   停止 Mihomo 后生成随机密钥并保存到私有 Mixin；不在日志显示内容。
 clash.secret.set       从私有文件设置密钥
@@ -90,9 +114,35 @@ clash.secret.clear     清除控制器密钥
   停止 Mihomo 后清除认证密钥；仅允许回环控制器地址。
 clash.panel.status     Web 控制台地址与状态
   检查静态面板资源，显示不含密钥的控制台 URL。回环地址需在本机或 SSH 隧道中访问。
-clash.panel.install    安装 / 更新 Web 控制台
-  下载官方 MetaCubeXD 稳定版，校验 SHA-256 并安全解压，验证后更新 external-ui；请先停止 Mihomo。
+clash.panel.install    安装 / 切换 Web 控制台面板
+  下载官方校验的 Web 面板（默认 Zashboard，另支持 MetaCubeXD、Yacd-Meta、Razord-Meta），校验 SHA-256 并安全解压，验证后更新 external-ui；请先停止 Mihomo。
+  panel=zashboard ["zashboard", "metacubexd", "yacd", "razord"]
   version= []
+clash.panel.remove     卸载 Web 控制台面板
+  停止 Mihomo 后清除 Mixin 中的 external-ui，并删除 CqShell 在 resources/ui 下管理的面板文件。
+clash.geodata.status   查看 GeoData 规则库状态
+  检查 Mihomo 资源目录中 geoip.metadb、geosite.dat、country.mmdb、geoip.dat 与 GeoLite2-ASN.mmdb 的存在状态与体积。
+clash.geodata.update   更新 GeoData 规则库
+  从官方 MetaCubeX/meta-rules-dat 下载 standard / lite / full 预设文件，校验精确体积与 SHA-256 后原子替换；自动支持 GitHub 加速代理。
+  geodata_preset=standard ["standard", "lite", "full"]
+clash.settings.configure 核心代理设置
+  停止 Mihomo 后在 Mixin 中配置混合端口、局域网共享、IPv6、HTTP/TLS/QUIC 域名嗅探与日志级别，并校验生效。
+  mixed_port=7890 []
+  allow_lan=off ["off", "on"]
+  clash_ipv6=off ["off", "on"]
+  sniffer=on ["on", "off"]
+  log_level=info ["info", "warning", "error", "debug", "silent"]
+clash.dns.status       查看 DNS 配置状态
+  只读查看当前生效的 Mihomo DNS 开关、增强模式、IPv6 解析、上游 nameserver 与 fallback 数量。
+clash.dns.configure    配置 DNS 预设
+  停止 Mihomo 后配置 fake-ip / redir-host / 关闭，内置国内分流 DoH（阿里/腾讯 + Cloudflare/Google 回落）或海外 DoH 预设与常见 fake-ip-filter。
+  dns_mode=fake-ip ["fake-ip", "redir-host", "off"]
+  dns_preset=china ["china", "global"]
+  dns_ipv6=off ["off", "on"]
+clash.mixin.status     查看 Mixin 覆盖配置
+  查看持久化 Mixin 覆盖内容，自动脱敏控制器密钥与代理认证凭据。
+clash.mixin.reset      重置 Mixin 覆盖配置
+  停止 Mihomo 后清除全部 Mixin 持久化覆盖并重建运行配置，保留已保存的订阅与本地资源。
 clash.tun.status       查看 TUN 配置与归属
   只读查看 TUN 配置、链路及进程归属。
 clash.tun.configure    配置 TUN 模式
@@ -160,11 +210,18 @@ ai.status              查看 Agent 工具版本
   检查 Pi、Claude Code、Codex 的常见用户安装目录及 PATH，读取 --version。缺失与执行失败分别显示；不执行登录。
 terminal.install       安装 zsh / Starship
   安装 zsh 和经过摘要校验的 Starship，保持登录 Shell 不变。
+terminal.preview       预览终端提示符
+  实时预览 7 种提示符样式与 9 套配色方案，支持模拟常规 Git、报错退出码与 Root 会话，并可查看生成的 Starship TOML 配置；不修改任何文件。
+  style=box ["full", "compact", "box", "ribbon", "powerline", "minimal", "brackets", "all"]
+  color=tokyo-night ["cyan", "green", "magenta", "tokyo-night", "catppuccin", "rose-pine", "nord", "gruvbox", "dracula", "all"]
+  time=on ["on", "off"]
+  git=on ["on", "off"]
+  shell=bash ["bash", "zsh", "both"]
 terminal.apply         配置终端提示符
   仅更新受管理的 Shell 初始化区块及独立 Starship TOML 文件，保留首次启用前的基线。
   shell=bash ["bash", "zsh", "both"]
-  style=full ["compact", "full"]
-  color=cyan ["cyan", "green", "magenta"]
+  style=full ["full", "compact", "box", "ribbon", "powerline", "minimal", "brackets"]
+  color=cyan ["cyan", "green", "magenta", "tokyo-night", "catppuccin", "rose-pine", "nord", "gruvbox", "dracula"]
   time=off ["on", "off"]
   git=on ["on", "off"]
 terminal.status        查看提示符配置
@@ -202,6 +259,12 @@ test.connectivity      IPv4 / IPv6 连通性
 test.io                磁盘 I/O 测试
   在指定目录中三次写入并同步 1 GiB 临时文件，结束后删除。
   directory=/var/tmp []
+app.check_update       检测 CqShell 更新
+  连接 GitHub 仓库 ZyphrZero/CqShell 查询最新稳定版本并与当前版本对比（自动遵循 GitHub 加速代理配置，不修改本地文件）。
+app.update             更新 CqShell
+  从 GitHub 仓库 ZyphrZero/CqShell 下载 Linux x86_64/ARM64 发布包，校验 SHA-256、ELF 架构与实际版本号后原子替换当前 cqs 命令。
+  version= []
+  force=off ["off", "on"]
 app.install            安装 cqs 命令
   将当前程序原子安装到 CQS_INSTALL_PATH（默认 /usr/local/bin/cqs）。
 app.uninstall          卸载 cqs 命令

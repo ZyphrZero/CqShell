@@ -33,7 +33,7 @@ Append these options to the installation command above to select a version or in
 
 | Purpose | Append |
 | --- | --- |
-| Pin a version, including when the gateway lacks API support or caches an older release | `--version v0.1.4` |
+| Pin a version, including when the gateway lacks API support or caches an older release | `--version v0.1.5` |
 | Install into a specific directory | `--install-dir /opt/cqs` |
 | Install for the current user (also remove `sudo`) | `--install-dir "$HOME/.local/bin"` |
 
@@ -92,7 +92,7 @@ Navigation has no category/action focus. Section headings are not selectable; ea
 
 The plan shows current readings, expected changes and the equivalent CLI command. Batch progress retains each step's result and elapsed time until the checklist changes or a new task starts. The recommended set is package updates, standard cleanup, TCP tuning and BBR.
 
-Forms have explicit Continue / Save to selection / Cancel buttons. Tab moves focus, arrows edit choices/cursor, Enter advances and submits from the last field, and Ctrl+Enter submits. Parameters that name an existing item (subscriptions, proxy groups and nodes, kernels to boot or remove) are never typed: the form reads the current items first and opens on a list where arrows move, typing filters, and Enter chooses; choosing the last one goes straight to confirmation. Left/Right also cycle through the items. A slow read shows a waiting dialog that Esc cancels, and when nothing is available a notice says why instead of opening an empty form. Ordinary confirmations default to Cancel; sensitive confirmation tokens still require exact input. Esc cancels a running task after closing any modal view. Q / Ctrl+C requests cancellation and exits after cleanup, including from the full task log. Interactive third-party tools temporarily take over the terminal. Logs expand when needed, and cancelled operations are distinguished from failures. When the terminal is too short for the log panel, the footer shows the task state and latest output, and a brief notice reports the outcome; language switches, category reordering and saved optimization items get the same notice. Resource gauges use the active theme's meter, warning and danger roles at the 70% and 90% thresholds, and the screen recedes behind dialogs. Layouts support 80×24 or larger terminals.
+Forms have explicit Continue / Save to selection / Cancel buttons. Tab moves focus, arrows edit choices/cursor, Enter advances and submits from the last field, and Ctrl+Enter submits. Parameters that name an existing item (subscriptions, proxy groups and nodes, kernels to boot or remove) are never typed: the form reads the current items first and opens on a list where arrows move, typing filters, and Enter chooses; choosing the last one goes straight to confirmation. Left/Right also cycle through the items. A slow read shows a waiting dialog that Esc cancels, and when nothing is available a notice says why instead of opening an empty form. Ordinary confirmations default to Cancel; sensitive confirmation tokens still require exact input. Esc cancels a running task after closing any modal view. Q / Ctrl+C requests cancellation and exits after cleanup, including from the full task log. Interactive third-party tools temporarily take over the terminal. Logs expand when needed, and cancelled operations are distinguished from failures. When the terminal is too short for the log panel, the footer shows the task state and latest output, and a brief notice reports the outcome; language switches, category reordering and saved optimization items get the same notice. Resource gauges use the active theme's meter, warning and danger roles at the 70% and 90% thresholds, and the screen recedes behind dialogs. Responsive layouts support terminals down to 40×16 (including mobile SSH clients such as iOS Termius at 59×24, automatically switching to stacked panes, a unified quick-actions list, and a floating navigation drawer).
 
 Version 0.1.1 fixes package upgrades hanging on hidden debconf/ucf dialogs. Built-in apt operations run noninteractively, retain locally edited configuration and disable dpkg's private PTY. needrestart lists restart requirements. Captured commands cannot read the TUI's controlling terminal, and complete ANSI control sequences are removed from logs. After interrupting an older version's upgrade, wait for apt/dpkg to exit and inspect `dpkg --audit` from a separate SSH session before completing pending configuration. Do not delete lock files.
 
@@ -111,13 +111,19 @@ Export JSON/HTML with `cargo run --release --example tui_snapshot -- target/prev
 `cqs batch` asks for one generic confirmation before the batch. Interactive operation-specific confirmations remain per operation; existing `--yes` behavior is unchanged. Skipped steps are not reported as successes.
 
 ```bash
+cqs update --check
+cqs update --check --json
+sudo cqs update
+sudo cqs update --version v0.1.5
+sudo cqs --gh-proxy default update
 cqs list
 cqs list --json
 cqs run bbr.status
 sudo cqs run bbr.enable --set qdisc=fq
 sudo cqs run tcp.tune --set bandwidth=1000 --set rtt=80
 sudo cqs run kernel.install --set profile=standard
-cqs run terminal.apply --set shell=bash --set style=full
+cqs run terminal.preview --set style=all --set color=tokyo-night
+cqs run terminal.apply --set shell=bash --set style=box --set color=tokyo-night
 sudo cqs batch tcp.tune bbr.enable --set tcp.tune.rtt=80
 cqs run clash.status
 cqs run clash.start
@@ -175,7 +181,7 @@ cqs --locale-dir ./locales languages
 
 ## Operations and recovery
 
-The **Tools** category includes individual installers for curl, wget, nano, unzip, tar, tmux, iftop, btop, gdu and fzf. **Install all / choose a package** defaults to `all`, including zsh and Starship components. Prompt configuration and restoration remain in **Prompt**.
+The **Tools** category includes individual installers for curl, wget, nano, unzip, tar, tmux, iftop, btop, gdu and fzf. **Install all / choose a package** defaults to `all`, including zsh and Starship components. Prompt configuration, live preview and restoration live in **Prompt**, with 7 styles (`full`, `compact`, `box`, `ribbon`, `powerline`, `minimal`, `brackets`) and 9 palettes (`cyan`, `green`, `magenta`, `tokyo-night`, `catppuccin`, `rose-pine`, `nord`, `gruvbox`, `dracula`), plus read-only TUI/CLI previews and Starship TOML inspection.
 
 ```bash
 sudo cqs run tools.tmux
@@ -197,7 +203,11 @@ Credentials, sessions and project configuration are retained. Sign in through ea
 
 Distribution sources checked on 2026-10-27: [Pi releases](https://github.com/earendil-works/pi/releases), [Claude Code binary integrity](https://code.claude.com/docs/en/setup#binary-integrity-and-code-signing), and [OpenAI Codex CLI](https://developers.openai.com/codex/cli).
 
-Features include system overview, public IP/ISP lookup, package updates, cleanup, timezone, swap, fail2ban, BBR/TCP tuning, third-party kernel management, SSH configuration, Docker, prompt customization, and server benchmarks.
+Features include system overview, public IP/ISP lookup, package updates, cleanup, timezone, swap, fail2ban, BBR/TCP tuning, third-party kernel management, SSH configuration, a dedicated Docker TUI workspace (`cqs docker [--tab TAB] [--embedded]`), prompt customization, and server benchmarks.
+
+### Dedicated Docker TUI Workspace
+
+Open **5 Docker** from the sidebar or launch directly via `cqs docker` (supports `--tab containers|compose|images|volumes|networks|daemon` and `--embedded`). Press `z` / `F` to toggle fullscreen Focus mode (with direct `1–6` tab switching and `[` sidebar drawer). Built purely on native `docker` / `docker compose` CLI JSON output with lazy background polling, it covers container lifecycle (`s` start/stop, `u` restart, `p` pause, `e` / `Shift+E` interactive `docker exec -it`, `Space` multi-select batch ops, `l` live streaming + fullscreen logs, `m` live CPU/memory gauges, sparklines & `docker top`, `v` env/mounts with masked secrets toggled by `Shift+S`), Compose projects (topology, container filtering, aggregated logs, read-only YAML, Up/Down/Pull), images (pull, layer history, reference badges), volumes, networks, an interactive space-reclaim Prune wizard (`Shift+P`), and the **Daemon** tab integrating service controls alongside all existing transactional `docker.*` actions.
 
 Configuration operations retain snapshots, locks, validation and recovery handling. Kernel installation supports Debian 12+ / Ubuntu 24.04+ on amd64 / arm64, with an independent kernel environment and GRUB. After installation, confirm a reboot or reboot manually later. WSL and containers cannot replace the host kernel; removal targets only a specified non-running kernel.
 

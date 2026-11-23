@@ -197,21 +197,53 @@ fn listings_drop_values_a_parameter_could_never_accept() {
 #[test]
 fn every_literal_translation_key_exists() {
     let i = I18n::load(Some("en-US"), None).unwrap();
-    let pattern =
-        regex::Regex::new(r#""((?:error|notice|confirm|ui|cli|info|status|dash)\.[a-z_]+)""#)
-            .unwrap();
+    let pattern = regex::Regex::new(
+        r#""((?:error|notice|confirm|ui|cli|info|status|dash|key|nav|overview|palette|cmd|toast|help|docker)\.[a-z_]+(?:\.[a-z_]+)?)""#,
+    )
+    .unwrap();
     for source in [
         include_str!("actions.rs"),
         include_str!("cli.rs"),
         include_str!("config.rs"),
+        include_str!("github_proxy.rs"),
         include_str!("runtime.rs"),
         include_str!("storage.rs"),
-        include_str!("tui.rs"),
-        include_str!("tui/view.rs"),
+        include_str!("tui/mod.rs"),
+        include_str!("tui/state.rs"),
+        include_str!("tui/events.rs"),
+        include_str!("tui/layout.rs"),
+        include_str!("tui/palette.rs"),
+        include_str!("tui/theme_drawer.rs"),
+        include_str!("tui/docker/mod.rs"),
+        include_str!("tui/docker/state.rs"),
+        include_str!("tui/docker/layout.rs"),
+        include_str!("tui/docker/events.rs"),
+        include_str!("tui/docker/render/mod.rs"),
+        include_str!("tui/docker/render/lists.rs"),
+        include_str!("tui/docker/render/inspector.rs"),
+        include_str!("tui/docker/render/logs.rs"),
+        include_str!("tui/docker/render/modals.rs"),
+        include_str!("tui/render/mod.rs"),
+        include_str!("tui/render/topbar.rs"),
+        include_str!("tui/render/sidebar.rs"),
+        include_str!("tui/render/overview.rs"),
+        include_str!("tui/render/workbench.rs"),
+        include_str!("tui/render/terminal_preview.rs"),
+        include_str!("tui/render/theme_drawer.rs"),
+        include_str!("tui/render/logs.rs"),
+        include_str!("tui/render/modals.rs"),
         include_str!("dashboard.rs"),
         include_str!("ops/ai.rs"),
         include_str!("ops/clash.rs"),
-        include_str!("ops/docker.rs"),
+        include_str!("ops/clash/controller.rs"),
+        include_str!("ops/clash/geodata.rs"),
+        include_str!("ops/clash/panel.rs"),
+        include_str!("ops/clash/settings.rs"),
+        include_str!("ops/docker/mod.rs"),
+        include_str!("ops/docker/model.rs"),
+        include_str!("ops/docker/client.rs"),
+        include_str!("ops/docker/actions.rs"),
+        include_str!("ops/docker/monitor.rs"),
         include_str!("ops/ip_quality.rs"),
         include_str!("ops/kernel.rs"),
         include_str!("ops/memory.rs"),
@@ -224,6 +256,22 @@ fn every_literal_translation_key_exists() {
         include_str!("ops/tools.rs"),
     ] {
         for capture in pattern.captures_iter(source) {
+            if matches!(
+                &capture[1],
+                "key.pem"
+                    | "docker.install"
+                    | "docker.status"
+                    | "docker.mirror"
+                    | "docker.ipv6"
+                    | "docker.clean"
+                    | "docker.uninstall"
+                    | "docker.service"
+                    | "docker.socket"
+                    | "docker.io"
+                    | "docker.sh"
+            ) {
+                continue;
+            }
             assert!(i.has(&capture[1]), "{}", &capture[1]);
         }
     }
@@ -629,8 +677,8 @@ fn terminal_rc_preserves_bytes_and_requires_balanced_markers() {
 }
 #[test]
 fn all_prompt_variants_are_valid_toml() {
-    for style in ["full", "compact"] {
-        for color in ["cyan", "green", "magenta"] {
+    for &style in terminal::STYLES {
+        for &color in terminal::COLORS {
             for time in ["on", "off"] {
                 for git in ["on", "off"] {
                     let settings = terminal::Options {
@@ -640,16 +688,67 @@ fn all_prompt_variants_are_valid_toml() {
                         time: time.into(),
                         git: git.into(),
                     };
-                    let value: toml::Value =
-                        toml::from_str(&terminal::render(&settings).unwrap()).unwrap();
+                    let rendered = terminal::render(&settings).unwrap();
+                    let value: toml::Value = toml::from_str(&rendered).unwrap();
                     assert_eq!(
                         value["git_branch"]["disabled"].as_bool().unwrap(),
-                        git == "off"
+                        git == "off",
+                        "{style}/{color}"
                     );
+                    assert_eq!(
+                        value["git_status"]["disabled"].as_bool().unwrap(),
+                        git == "off",
+                        "{style}/{color}"
+                    );
+                    assert_eq!(
+                        value["time"]["disabled"].as_bool().unwrap(),
+                        time == "off",
+                        "{style}/{color}"
+                    );
+                    assert!(
+                        !value["status"]["disabled"].as_bool().unwrap(),
+                        "{style}/{color}"
+                    );
+                    if style == "box" {
+                        assert!(value.get("fill").is_some(), "box style requires [fill]");
+                    }
+                    for scenario in [
+                        terminal::PreviewScenario::Normal,
+                        terminal::PreviewScenario::Error,
+                        terminal::PreviewScenario::Root,
+                    ] {
+                        for ascii in [false, true] {
+                            let lines =
+                                terminal::preview_lines(&settings, "vps-01", scenario, 60, ascii);
+                            assert!(!lines.is_empty(), "{style}/{color}/{scenario:?}");
+                            let plain = terminal::format_preview_lines(&lines, false);
+                            assert!(plain.contains("vps-01"), "{plain:?}");
+                            let ansi = terminal::format_preview_lines(&lines, true);
+                            assert!(ansi.contains("\x1b["), "{ansi:?}");
+                            if ascii {
+                                assert!(
+                                    plain.is_ascii(),
+                                    "non-ASCII leaked in ascii preview: {plain:?}"
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+#[test]
+fn terminal_preview_covers_single_and_gallery_modes_without_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let ctx = context(temp.path());
+    terminal::preview(&ctx, "box", "tokyo-night", "on", "on", "bash").unwrap();
+    terminal::preview(&ctx, "all", "catppuccin", "off", "on", "zsh").unwrap();
+    terminal::preview(&ctx, "ribbon", "all", "on", "off", "both").unwrap();
+    assert!(terminal::preview(&ctx, "bogus", "cyan", "on", "on", "bash").is_err());
+    assert!(terminal::preview(&ctx, "box", "bogus", "on", "on", "bash").is_err());
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
 }
 #[test]
 fn file_transaction_rolls_back_partial_writes_and_retains_no_false_success() {
@@ -1578,5 +1677,104 @@ server.serve_forever()
         }
         assert!(ctx.download("http://localhost/unsafe", &target, 5).is_err());
         assert!(crate::ops::tools::remote(&ctx, &format!("{base}/syntax")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn github_proxy_rewrites_github_downloads_only_and_never_forwards_subscriptions() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let log = temp.path().join("urls.log");
+        let curl = bin.join("curl");
+        fs::write(
+            &curl,
+            r#"#!/bin/sh
+out=""
+last=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    out="$1"
+  fi
+  last="$1"
+  shift
+done
+printf '%s\n' "$last" >> "$CQS_TEST_URL_LOG"
+if [ "$out" = "-" ]; then
+  printf '1234'
+else
+  printf 'payload' > "$out"
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut ctx = context(temp.path());
+        ctx.github_proxy = Some(crate::github_proxy::DEFAULT_URL.into());
+        let path = std::env::var("PATH").unwrap_or_default();
+        ctx.environment
+            .insert("PATH".into(), format!("{}:{path}", bin.display()));
+        ctx.environment
+            .insert("CQS_TEST_URL_LOG".into(), log.display().to_string());
+
+        let target = temp.path().join("out.bin");
+        ctx.download(
+            "https://api.github.com/repos/starship/starship/releases/latest",
+            &target,
+            10,
+        )
+        .unwrap();
+        ctx.download(
+            "https://github.com/starship/starship/releases/download/v1.0.0/starship.tar.gz",
+            &target,
+            10,
+        )
+        .unwrap();
+        ctx.download(
+            "https://raw.githubusercontent.com/xykt/IPQuality/abc/ip.sh",
+            &target,
+            10,
+        )
+        .unwrap();
+        ctx.download_exact(
+            "https://github.com/MetaCubeX/mihomo/releases/download/v1.0.0/mihomo.gz",
+            &target,
+            10,
+            4,
+        )
+        .unwrap();
+        ctx.download(
+            "https://downloads.claude.ai/claude-code-releases/latest",
+            &target,
+            10,
+        )
+        .unwrap();
+        ctx.download_as(
+            "https://raw.githubusercontent.com/private/sub/main/config.yaml?token=secret",
+            &target,
+            10,
+            Some("clash.meta"),
+        )
+        .unwrap();
+
+        let recorded: Vec<String> = fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            recorded,
+            vec![
+                "https://gh-proxy.com/https://api.github.com/repos/starship/starship/releases/latest",
+                "https://gh-proxy.com/https://github.com/starship/starship/releases/download/v1.0.0/starship.tar.gz",
+                "https://gh-proxy.com/https://raw.githubusercontent.com/xykt/IPQuality/abc/ip.sh",
+                "https://gh-proxy.com/https://github.com/MetaCubeX/mihomo/releases/download/v1.0.0/mihomo.gz",
+                "https://downloads.claude.ai/claude-code-releases/latest",
+                "https://raw.githubusercontent.com/private/sub/main/config.yaml?token=secret",
+            ]
+        );
     }
 }

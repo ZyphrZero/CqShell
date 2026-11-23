@@ -9,7 +9,8 @@ Usage: bash install.sh [--version vX.Y.Z] [--install-dir /absolute/path] [--gh-p
 
   --version TAG       Install an exact release (default: latest stable release).
   --install-dir DIR   Install as DIR/cqs and skip the location prompt.
-  --gh-proxy URL      Use a trusted HTTPS GitHub download prefix (default: GH_PROXY).
+  --gh-proxy URL      Use a trusted HTTPS GitHub download prefix, or "default"
+                      for https://gh-proxy.com/ (default: GH_PROXY).
   -h, --help          Show this help.
 
 Interactive installs offer /usr/local/bin, ~/.local/bin, and a custom path; Enter keeps /usr/local/bin.
@@ -176,6 +177,9 @@ main() {
     [[ "$release_base" == https://?* && ! "$release_base" =~ [[:space:]\?\#@] ]] \
         || die 'CQS_RELEASE_BASE_URL must be an HTTPS URL without credentials, query or fragment.'
     if [[ -n "$gh_proxy" ]]; then
+        if [[ "$gh_proxy" == "default" ]]; then
+            gh_proxy='https://gh-proxy.com/'
+        fi
         [[ "$gh_proxy" =~ $proxy_pattern ]] \
             || die '--gh-proxy/GH_PROXY must be an HTTPS URL without credentials, query, fragment or whitespace.'
         if [[ -n "${BASH_REMATCH[2]:-}" ]]; then

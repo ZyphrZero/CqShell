@@ -33,13 +33,21 @@ const SECTIONS: &[(&str, &[Section])] = &[
         &[
             (
                 "core",
-                &["clash.install", "clash.status", "clash.start", "clash.stop"],
+                &[
+                    "clash.install",
+                    "clash.status",
+                    "clash.start",
+                    "clash.stop",
+                    "clash.reload",
+                    "clash.mode",
+                ],
             ),
             (
                 "subscriptions",
                 &[
                     "clash.sub.list",
                     "clash.sub.add",
+                    "clash.sub.import",
                     "clash.sub.use",
                     "clash.sub.update",
                     "clash.sub.remove",
@@ -52,12 +60,32 @@ const SECTIONS: &[(&str, &[Section])] = &[
                     "clash.controller.configure",
                     "clash.proxies",
                     "clash.proxy.select",
+                    "clash.proxy.delay",
+                    "clash.connections",
                     "clash.secret.generate",
                     "clash.secret.set",
                     "clash.secret.clear",
                 ],
             ),
-            ("panel", &["clash.panel.status", "clash.panel.install"]),
+            (
+                "panel",
+                &[
+                    "clash.panel.status",
+                    "clash.panel.install",
+                    "clash.panel.remove",
+                ],
+            ),
+            ("geodata", &["clash.geodata.status", "clash.geodata.update"]),
+            (
+                "settings",
+                &[
+                    "clash.settings.configure",
+                    "clash.dns.status",
+                    "clash.dns.configure",
+                    "clash.mixin.status",
+                    "clash.mixin.reset",
+                ],
+            ),
             ("tun", &["clash.tun.status", "clash.tun.configure"]),
             (
                 "service",
@@ -75,6 +103,7 @@ const SECTIONS: &[(&str, &[Section])] = &[
         &[
             ("bbr", &["bbr.status", "bbr.enable", "bbr.restore"]),
             ("tcp", &["tcp.tune", "tcp.restore"]),
+            ("github", &["github.proxy"]),
         ],
     ),
     (

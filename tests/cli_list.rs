@@ -25,6 +25,8 @@ fn list_output_is_unchanged_and_omits_reversible() {
                 .env("XDG_CONFIG_HOME", temp.path().join("config"))
                 .env("XDG_STATE_HOME", temp.path().join("state"))
                 .env_remove("CQS_LANG")
+                .env_remove("CQS_GH_PROXY")
+                .env_remove("GH_PROXY")
                 .stdin(Stdio::null())
                 .args(["--lang", locale, "list"])
                 .args(flags)

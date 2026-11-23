@@ -8,3 +8,4 @@ __pycache__/
 /.kiro/
 /AGENTS.md
 /docs/REMOTE_VALIDATION.md
+/.deploy.local.json

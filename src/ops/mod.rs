@@ -7,6 +7,7 @@ pub mod memory;
 pub mod mirrors;
 pub mod network;
 pub mod packages;
+pub mod self_update;
 pub mod service;
 pub mod ssh;
 pub mod system;

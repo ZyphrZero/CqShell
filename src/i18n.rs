@@ -143,6 +143,9 @@ impl I18n {
     pub fn locale(&self) -> &str {
         &self.selected
     }
+    pub fn language_name(&self) -> &str {
+        &self.catalogs[&self.selected].name
+    }
     pub fn languages(&self) -> Vec<(&str, &str)> {
         self.catalogs
             .values()

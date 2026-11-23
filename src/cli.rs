@@ -53,6 +53,19 @@ pub fn command(i: &I18n) -> Command {
                 .help(i.text("cli.theme").to_owned()),
         )
         .arg(
+            Arg::new("style")
+                .long("style")
+                .global(true)
+                .help(i.text("cli.style").to_owned()),
+        )
+        .arg(
+            Arg::new("gh-proxy")
+                .long("gh-proxy")
+                .global(true)
+                .value_name("URL|off")
+                .help(i.text("cli.gh_proxy").to_owned()),
+        )
+        .arg(
             Arg::new("config")
                 .long("config")
                 .global(true)
@@ -94,9 +107,38 @@ pub fn command(i: &I18n) -> Command {
                 .action(ArgAction::SetTrue)
                 .help(i.text("cli.uninstall").to_owned()),
         );
-    for name in ["list", "languages", "themes"] {
+    for name in ["list", "languages", "themes", "styles"] {
         cmd = cmd.subcommand(Command::new(name).about(i.text(&format!("cli.{name}")).to_owned()));
     }
+    cmd = cmd.subcommand(
+        Command::new("update")
+            .alias("self-update")
+            .about(i.text("cli.update").to_owned())
+            .help_template(format!(
+                "{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
+                i.text("cli.usage")
+            ))
+            .next_help_heading(i.text("cli.options").to_owned())
+            .arg(
+                Arg::new("check")
+                    .long("check")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with("force")
+                    .help(i.text("cli.update_check").to_owned()),
+            )
+            .arg(
+                Arg::new("target-version")
+                    .long("version")
+                    .value_name("TAG")
+                    .help(i.text("cli.update_version").to_owned()),
+            )
+            .arg(
+                Arg::new("force")
+                    .long("force")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.update_force").to_owned()),
+            ),
+    );
     cmd = cmd.subcommand(
         Command::new("proxy-env")
             .about(i.text("cli.proxy_env").to_owned())
@@ -115,6 +157,35 @@ pub fn command(i: &I18n) -> Command {
             ),
     );
     cmd = cmd.subcommand(crate::ops::clash::compat::command(i));
+    cmd = cmd.subcommand(
+        Command::new("docker")
+            .about(i.text("cli.docker").to_owned())
+            .help_template(format!(
+                "{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
+                i.text("cli.usage")
+            ))
+            .next_help_heading(i.text("cli.options").to_owned())
+            .arg(
+                Arg::new("tab")
+                    .long("tab")
+                    .default_value("containers")
+                    .value_parser([
+                        "containers",
+                        "compose",
+                        "images",
+                        "volumes",
+                        "networks",
+                        "daemon",
+                    ])
+                    .help(i.text("cli.docker_tab").to_owned()),
+            )
+            .arg(
+                Arg::new("embedded")
+                    .long("embedded")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.docker_embedded").to_owned()),
+            ),
+    );
     for name in ["run", "batch"] {
         cmd = cmd.subcommand(
             Command::new(name)
@@ -236,7 +307,20 @@ pub fn main_entry() -> i32 {
             return 2;
         }
     };
-    let ctx = Context::new(paths, i18n, matches.get_flag("yes"));
+    let github_proxy = match crate::github_proxy::resolve(
+        matches.get_one::<String>("gh-proxy").map(String::as_str),
+        env::var("CQS_GH_PROXY").ok().as_deref(),
+        env::var("GH_PROXY").ok().as_deref(),
+        &preferences,
+    ) {
+        Ok(proxy) => proxy,
+        Err(e) => {
+            eprintln!("{}", i18n.error(&e));
+            return 2;
+        }
+    };
+    let mut ctx = Context::new(paths, i18n, matches.get_flag("yes"));
+    ctx.github_proxy = github_proxy;
     #[cfg(unix)]
     {
         for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
@@ -280,19 +364,45 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
         })?;
         return actions::execute(ctx, &spec, &Parameters::new());
     }
-    if args.get_flag("json")
-        && !matches!(
-            args.subcommand_name(),
-            Some("list" | "languages" | "themes")
-        )
-    {
-        return Err(Error::new(
-            "error.cli",
-            "--json requires list/languages/themes",
-        ));
+    if args.get_flag("json") {
+        let json_allowed = match args.subcommand() {
+            Some(("list" | "languages" | "themes" | "styles", _)) => true,
+            Some(("update", matches)) => matches.get_flag("check"),
+            _ => false,
+        };
+        if !json_allowed {
+            return Err(Error::new(
+                "error.cli",
+                "--json requires list/languages/themes/styles or update --check",
+            ));
+        }
     }
     match args.subcommand() {
         Some(("themes", _)) => themes(ctx, args.get_flag("json")),
+        Some(("styles", _)) => styles(ctx, args.get_flag("json")),
+        Some(("update", matches)) => {
+            let check_only = matches.get_flag("check");
+            let version = matches.get_one::<String>("target-version").cloned();
+            let force = matches.get_flag("force");
+            if check_only {
+                crate::ops::self_update::check_and_report(
+                    ctx,
+                    version.as_deref(),
+                    args.get_flag("json"),
+                )
+                .map(|_| ())
+            } else {
+                crate::ops::self_update::update(
+                    ctx,
+                    &crate::ops::self_update::UpdateOptions {
+                        version,
+                        force,
+                        target_path: None,
+                    },
+                )
+                .map(|_| ())
+            }
+        }
         Some(("clashctl", matches)) => crate::ops::clash::compat::dispatch(ctx, matches),
         Some(("list", _)) => {
             let specs = actions::specs();
@@ -362,6 +472,23 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                 .collect::<Vec<_>>();
             actions::batch(ctx, &batch_jobs(&ids, &sets)?)
         }
+        Some(("docker", matches)) => {
+            if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                return Err(Error::new("error.tty", "cqs list / cqs run"));
+            }
+            let tab = matches
+                .get_one::<String>("tab")
+                .and_then(|s| crate::ops::docker::model::DockerTab::from_cli(s))
+                .unwrap_or(crate::ops::docker::model::DockerTab::Containers);
+            let fullscreen = !matches.get_flag("embedded");
+            crate::tui::run_with_target(
+                ctx.clone(),
+                args.get_one::<String>("theme").map(String::as_str),
+                args.get_one::<String>("style").map(String::as_str),
+                preferences,
+                crate::tui::LaunchTarget::Docker { tab, fullscreen },
+            )
+        }
         None => {
             if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
                 return Err(Error::new("error.tty", "cqs list / cqs run"));
@@ -369,6 +496,7 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
             crate::tui::run(
                 ctx.clone(),
                 args.get_one::<String>("theme").map(String::as_str),
+                args.get_one::<String>("style").map(String::as_str),
                 preferences,
             )
         }
@@ -382,13 +510,39 @@ fn themes(ctx: &Context, json: bool) -> Result<()> {
         ThemeName::Builtin(key) => ctx.i18n.text(key).to_owned(),
         ThemeName::Custom(name) => name.clone(),
     };
-    let mut rows = builtin::all().into_iter().map(|definition| serde_json::json!({"id": definition.id, "name": name(&definition), "builtin": true, "path": null, "valid": true, "error": null})).collect::<Vec<_>>();
+    let mut rows = builtin::all()
+        .into_iter()
+        .map(|definition| {
+            serde_json::json!({
+                "id": definition.id,
+                "name": name(&definition),
+                "default_style": definition.default_style.id(),
+                "builtin": true,
+                "path": null,
+                "valid": true,
+                "error": null
+            })
+        })
+        .collect::<Vec<_>>();
     for custom in file::load_dir(&ctx.paths.themes) {
         let error = custom.result.as_ref().err().map(|error| {
             ctx.i18n
                 .format("ui.theme_error", &[("detail", &error.to_string())])
         });
-        rows.push(serde_json::json!({"id": custom.id, "name": custom.result.as_ref().map(name).unwrap_or_else(|_| custom.id.clone()), "builtin": false, "path": custom.path, "valid": error.is_none(), "error": error}));
+        let default_style = custom
+            .result
+            .as_ref()
+            .ok()
+            .map(|def| def.default_style.id());
+        rows.push(serde_json::json!({
+            "id": custom.id,
+            "name": custom.result.as_ref().map(name).unwrap_or_else(|_| custom.id.clone()),
+            "default_style": default_style,
+            "builtin": false,
+            "path": custom.path,
+            "valid": error.is_none(),
+            "error": error
+        }));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -406,6 +560,36 @@ fn themes(ctx: &Context, json: bool) -> Result<()> {
                     row["error"].as_str().unwrap().replace(['\n', '\r'], " ")
                 );
             }
+        }
+    }
+    Ok(())
+}
+
+fn styles(ctx: &Context, json: bool) -> Result<()> {
+    use crate::theme::UiStyle;
+    let mut rows = vec![serde_json::json!({
+        "id": "auto",
+        "name": ctx.i18n.text("style.auto.name"),
+        "description": ctx.i18n.text("style.auto.description"),
+        "builtin": true
+    })];
+    for style in UiStyle::ALL {
+        rows.push(serde_json::json!({
+            "id": style.id(),
+            "name": ctx.i18n.text(style.name_key()),
+            "description": ctx.i18n.text(style.description_key()),
+            "builtin": true
+        }));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        for row in rows {
+            println!(
+                "{}\t{}",
+                row["id"].as_str().unwrap(),
+                row["name"].as_str().unwrap()
+            );
         }
     }
     Ok(())

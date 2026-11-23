@@ -1,10 +1,13 @@
-//! Verified MetaCubeXD static resources served by Mihomo's controller.
+//! Verified Clash/Mihomo Web UI panels served by Mihomo's controller.
+//!
+//! Supports Zashboard (default), MetaCubeXD, Yacd-Meta, and Razord-Meta.
+//! Release panels verify official GitHub Release metadata, SHA-256 digests, and
+//! exact byte sizes; pinned `gh-pages` panels verify exact commit archive size
+//! and SHA-256 before bounded extraction.
 
 use super::*;
 use std::{collections::BTreeSet, path::Component};
 
-const REPOSITORY: &str = "MetaCubeX/metacubexd";
-const ASSET: &str = "compressed-dist.tgz";
 const MAX_METADATA: u64 = 2 * 1024 * 1024;
 const MAX_PANEL_ARCHIVE: u64 = 32 * 1024 * 1024;
 const MAX_PANEL_FILE: u64 = 32 * 1024 * 1024;
@@ -12,12 +15,137 @@ const MAX_PANEL_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_PANEL_ENTRIES: usize = 8192;
 const VERSION_MARKER: &str = ".cqs-panel-version";
 
+const YACD_COMMIT: &str = "1798b8222b78c4cf7395ccea032d664d53f43c91";
+const YACD_VERSION: &str = "gh-pages@1798b82";
+const YACD_SIZE: u64 = 1_807_736;
+const YACD_SHA256: &str = "d2d1fdc35887f247f43a66985b847392f03384eb42e897476120f40a9e8f7d4f";
+const YACD_ROOT: &str = "Yacd-meta-1798b8222b78c4cf7395ccea032d664d53f43c91";
+
+const RAZORD_COMMIT: &str = "197d540ef7c0a4842b812e2af86d1c2d76233be3";
+const RAZORD_VERSION: &str = "gh-pages@197d540";
+const RAZORD_SIZE: u64 = 317_922;
+const RAZORD_SHA256: &str = "b3855dd5a178926c9d0012478f0965cd696127587b8db034322b8f658a27ff34";
+const RAZORD_ROOT: &str = "Razord-meta-197d540ef7c0a4842b812e2af86d1c2d76233be3";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Panel {
+    Zashboard,
+    MetaCubeXd,
+    Yacd,
+    Razord,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveFormat {
+    TarGz,
+    Zip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StripRoot {
+    None,
+    Optional(&'static str),
+    Required(&'static str),
+}
+
+enum Source {
+    GitHubRelease {
+        repository: &'static str,
+        asset: &'static str,
+        format: ArchiveFormat,
+        strip_root: StripRoot,
+    },
+    PinnedArchive {
+        repository: &'static str,
+        commit: &'static str,
+        version: &'static str,
+        size: u64,
+        digest: &'static str,
+        strip_root: &'static str,
+    },
+}
+
+impl Panel {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "" | "zashboard" => Ok(Self::Zashboard),
+            "metacubexd" => Ok(Self::MetaCubeXd),
+            "yacd" => Ok(Self::Yacd),
+            "razord" => Ok(Self::Razord),
+            _ => Err(Error::new(
+                "error.input",
+                "panel must be zashboard, metacubexd, yacd or razord",
+            )),
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Zashboard => "zashboard",
+            Self::MetaCubeXd => "metacubexd",
+            Self::Yacd => "yacd",
+            Self::Razord => "razord",
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Zashboard => "Zashboard",
+            Self::MetaCubeXd => "MetaCubeXD",
+            Self::Yacd => "Yacd-Meta",
+            Self::Razord => "Razord-Meta",
+        }
+    }
+
+    fn source(self) -> Source {
+        match self {
+            Self::Zashboard => Source::GitHubRelease {
+                repository: "Zephyruso/zashboard",
+                asset: "dist-cdn-fonts.zip",
+                format: ArchiveFormat::Zip,
+                strip_root: StripRoot::Optional("dist"),
+            },
+            Self::MetaCubeXd => Source::GitHubRelease {
+                repository: "MetaCubeX/metacubexd",
+                asset: "compressed-dist.tgz",
+                format: ArchiveFormat::TarGz,
+                strip_root: StripRoot::None,
+            },
+            Self::Yacd => Source::PinnedArchive {
+                repository: "MetaCubeX/Yacd-meta",
+                commit: YACD_COMMIT,
+                version: YACD_VERSION,
+                size: YACD_SIZE,
+                digest: YACD_SHA256,
+                strip_root: YACD_ROOT,
+            },
+            Self::Razord => Source::PinnedArchive {
+                repository: "MetaCubeX/Razord-meta",
+                commit: RAZORD_COMMIT,
+                version: RAZORD_VERSION,
+                size: RAZORD_SIZE,
+                digest: RAZORD_SHA256,
+                strip_root: RAZORD_ROOT,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Installed {
+    panel: Panel,
+    version: String,
+}
+
 #[derive(Debug)]
 struct Release {
+    panel: Panel,
     version: String,
     url: String,
     digest: String,
     size: u64,
+    format: ArchiveFormat,
+    strip_root: StripRoot,
 }
 
 fn version(value: &str) -> Result<String> {
@@ -34,7 +162,45 @@ fn version(value: &str) -> Result<String> {
     Ok(format!("v{value}"))
 }
 
-fn release(value: &serde_json::Value, requested: Option<&str>) -> Result<Release> {
+fn valid_marker_version(panel: Panel, value: &str) -> Option<String> {
+    match panel.source() {
+        Source::GitHubRelease { .. } => version(value).ok(),
+        Source::PinnedArchive { .. } => {
+            let hash = value.strip_prefix("gh-pages@")?;
+            ((7..=40).contains(&hash.len()) && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then(|| value.to_owned())
+        }
+    }
+}
+
+fn parse_marker(raw: &str) -> Option<Installed> {
+    let trimmed = raw.trim();
+    if let Some((panel_id, ver)) = trimmed.split_once(':') {
+        let panel = Panel::parse(panel_id).ok()?;
+        let version = valid_marker_version(panel, ver)?;
+        return Some(Installed { panel, version });
+    }
+    // Backward compatibility with legacy markers written before multi-panel support.
+    let version = version(trimmed).ok()?;
+    Some(Installed {
+        panel: Panel::MetaCubeXd,
+        version,
+    })
+}
+
+fn release(panel: Panel, value: &serde_json::Value, requested: Option<&str>) -> Result<Release> {
+    let Source::GitHubRelease {
+        repository,
+        asset: asset_name,
+        format,
+        strip_root,
+    } = panel.source()
+    else {
+        return Err(Error::new(
+            "error.release",
+            "pinned panel does not use GitHub Releases metadata",
+        ));
+    };
     if value["draft"] != false || value["prerelease"] != false {
         return Err(Error::new("error.release", "panel release must be stable"));
     }
@@ -49,11 +215,11 @@ fn release(value: &serde_json::Value, requested: Option<&str>) -> Result<Release
     let assets = value["assets"]
         .as_array()
         .ok_or_else(|| Error::new("error.release", "panel release assets"))?;
-    let mut matches = assets.iter().filter(|asset| asset["name"] == ASSET);
+    let mut matches = assets.iter().filter(|asset| asset["name"] == asset_name);
     let asset = matches
         .next()
         .ok_or_else(|| Error::new("error.release", "panel archive is missing"))?;
-    let url = format!("https://github.com/{REPOSITORY}/releases/download/{tag}/{ASSET}");
+    let url = format!("https://github.com/{repository}/releases/download/{tag}/{asset_name}");
     if matches.next().is_some() || asset["browser_download_url"] != url {
         return Err(Error::new("error.release", "panel archive source mismatch"));
     }
@@ -67,47 +233,62 @@ fn release(value: &serde_json::Value, requested: Option<&str>) -> Result<Release
         .filter(|size| (1..=MAX_PANEL_ARCHIVE).contains(size))
         .ok_or_else(|| Error::new("error.release", "panel archive size"))?;
     Ok(Release {
+        panel,
         version: tag,
         url,
         digest: digest.to_ascii_lowercase(),
         size,
+        format,
+        strip_root,
     })
 }
 
-fn metadata(ctx: &Context, requested: Option<&str>) -> Result<Release> {
+fn metadata(ctx: &Context, panel: Panel, requested: Option<&str>) -> Result<Release> {
+    let Source::GitHubRelease { repository, .. } = panel.source() else {
+        return Err(Error::new(
+            "error.release",
+            "pinned panel does not fetch release metadata",
+        ));
+    };
     let endpoint = match requested {
         Some(tag) => format!("tags/{tag}"),
         None => "latest".to_owned(),
     };
-    let url = format!("https://api.github.com/repos/{REPOSITORY}/releases/{endpoint}");
+    let url = format!("https://api.github.com/repos/{repository}/releases/{endpoint}");
     let file = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
     let target = path_string(file.path())?;
-    ctx.run(
-        "curl",
-        &[
-            "--proto",
-            "=https",
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "30",
-            "--max-filesize",
-            &MAX_METADATA.to_string(),
-            "--header",
-            "Accept: application/vnd.github+json",
-            "--output",
-            &target,
-            &url,
-        ],
-    )?;
-    if fs::metadata(file.path())?.len() > MAX_METADATA {
-        return Err(Error::new("error.release", "panel metadata size"));
-    }
-    let value = serde_json::from_slice(&fs::read(file.path())?)?;
-    release(&value, requested)
+    let max_metadata = MAX_METADATA.to_string();
+    let value: serde_json::Value = ctx.with_github_url(&url, |effective| {
+        ctx.run(
+            "curl",
+            &[
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--location",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "30",
+                "--max-filesize",
+                &max_metadata,
+                "--header",
+                "Accept: application/vnd.github+json",
+                "--output",
+                &target,
+                effective,
+            ],
+        )?;
+        if fs::metadata(file.path())?.len() > MAX_METADATA {
+            return Err(Error::new("error.release", "panel metadata size"));
+        }
+        Ok(serde_json::from_slice(&fs::read(file.path())?)?)
+    })?;
+    release(panel, &value, requested)
 }
 
 fn archive_path(value: &[u8]) -> Result<PathBuf> {
@@ -141,7 +322,61 @@ fn archive_path(value: &[u8]) -> Result<PathBuf> {
     Ok(path.into())
 }
 
-fn unpack(bytes: &[u8], destination: &Path, check: impl Fn() -> Result<()>) -> Result<()> {
+fn strip_entry_root(path: PathBuf, strip_root: StripRoot) -> Result<PathBuf> {
+    match strip_root {
+        StripRoot::None => Ok(path),
+        StripRoot::Optional(prefix) => {
+            if path.as_os_str().is_empty() {
+                return Ok(path);
+            }
+            if let Ok(stripped) = path.strip_prefix(prefix) {
+                Ok(stripped.to_path_buf())
+            } else {
+                Ok(path)
+            }
+        }
+        StripRoot::Required(prefix) => {
+            if path.as_os_str().is_empty() {
+                return Ok(path);
+            }
+            path.strip_prefix(prefix)
+                .map(Path::to_path_buf)
+                .map_err(|_| Error::new("error.release", "unexpected panel archive root"))
+        }
+    }
+}
+
+fn verify_root_index(destination: &Path) -> Result<()> {
+    let index = destination.join("index.html");
+    storage::check_path(&index, true)?;
+    if !index.is_file() || fs::metadata(index)?.len() == 0 {
+        return Err(Error::new(
+            "error.release",
+            "panel archive has no root index.html",
+        ));
+    }
+    Ok(())
+}
+
+fn unpack(
+    bytes: &[u8],
+    format: ArchiveFormat,
+    strip_root: StripRoot,
+    destination: &Path,
+    check: impl Fn() -> Result<()>,
+) -> Result<()> {
+    match format {
+        ArchiveFormat::TarGz => unpack_tar(bytes, strip_root, destination, check),
+        ArchiveFormat::Zip => unpack_zip(bytes, strip_root, destination, check),
+    }
+}
+
+fn unpack_tar(
+    bytes: &[u8],
+    strip_root: StripRoot,
+    destination: &Path,
+    check: impl Fn() -> Result<()>,
+) -> Result<()> {
     let decoder = flate2::read::GzDecoder::new(bytes);
     // Bound every decompressed byte, including tar headers and extension records.
     let mut archive = tar::Archive::new(decoder.take(MAX_PANEL_BYTES + 16 * 1024 * 1024));
@@ -156,14 +391,17 @@ fn unpack(bytes: &[u8], destination: &Path, check: impl Fn() -> Result<()>) -> R
             ));
         }
         let mut entry = entry?;
-        let path = archive_path(&entry.path_bytes())?;
         let kind = entry.header().entry_type();
+        if kind == tar::EntryType::XGlobalHeader {
+            continue;
+        }
         if kind != tar::EntryType::Regular && kind != tar::EntryType::Directory {
             return Err(Error::new(
                 "error.release",
                 "panel archive contains a link or special file",
             ));
         }
+        let path = strip_entry_root(archive_path(&entry.path_bytes())?, strip_root)?;
         if path.as_os_str().is_empty() && kind == tar::EntryType::Directory {
             continue;
         }
@@ -193,48 +431,349 @@ fn unpack(bytes: &[u8], destination: &Path, check: impl Fn() -> Result<()>) -> R
         }
         storage::atomic_write(&target, &content, 0o600)?;
     }
-    let index = destination.join("index.html");
-    storage::check_path(&index, true)?;
-    if !index.is_file() || fs::metadata(index)?.len() == 0 {
+    verify_root_index(destination)
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Result<u16> {
+    let slice = bytes
+        .get(offset..offset + 2)
+        .ok_or_else(|| Error::new("error.release", "truncated ZIP archive"))?;
+    Ok(u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Result<u32> {
+    let slice = bytes
+        .get(offset..offset + 4)
+        .ok_or_else(|| Error::new("error.release", "truncated ZIP archive"))?;
+    Ok(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn crc32_ieee(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in bytes {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+/// Pure-Rust bounded ZIP extractor supporting Stored (0) and Deflate (8) entries
+/// via `flate2`, rejecting encryption, Zip64, multi-disk archives, symlinks/special
+/// files, header/central-directory mismatches, CRC errors, and oversized output.
+fn unpack_zip(
+    bytes: &[u8],
+    strip_root: StripRoot,
+    destination: &Path,
+    check: impl Fn() -> Result<()>,
+) -> Result<()> {
+    const EOCD_SIG: u32 = 0x0605_4b50;
+    const CD_SIG: u32 = 0x0201_4b50;
+    const LFH_SIG: u32 = 0x0403_4b50;
+    const EOCD_MIN: usize = 22;
+
+    if bytes.len() < EOCD_MIN {
+        return Err(Error::new("error.release", "invalid ZIP archive"));
+    }
+    let min_offset = bytes.len().saturating_sub(EOCD_MIN + 65535);
+    let mut eocd_offset = None;
+    for offset in (min_offset..=bytes.len() - EOCD_MIN).rev() {
+        if read_u32_le(bytes, offset)? == EOCD_SIG {
+            let comment_len = read_u16_le(bytes, offset + 20)? as usize;
+            if offset + EOCD_MIN + comment_len == bytes.len() {
+                eocd_offset = Some(offset);
+                break;
+            }
+        }
+    }
+    let eocd = eocd_offset.ok_or_else(|| Error::new("error.release", "invalid ZIP archive"))?;
+    let disk_num = read_u16_le(bytes, eocd + 4)?;
+    let cd_disk = read_u16_le(bytes, eocd + 6)?;
+    let entries_disk = read_u16_le(bytes, eocd + 8)?;
+    let entries_total = read_u16_le(bytes, eocd + 10)?;
+    let cd_size = read_u32_le(bytes, eocd + 12)?;
+    let cd_offset = read_u32_le(bytes, eocd + 16)?;
+    if disk_num != 0 || cd_disk != 0 || entries_disk != entries_total {
         return Err(Error::new(
             "error.release",
-            "panel archive has no root index.html",
+            "multi-disk ZIP archives are not supported",
         ));
     }
-    Ok(())
+    if entries_total == u16::MAX || cd_size == u32::MAX || cd_offset == u32::MAX {
+        return Err(Error::new(
+            "error.release",
+            "Zip64 archives are not supported",
+        ));
+    }
+    if entries_total as usize > MAX_PANEL_ENTRIES {
+        return Err(Error::new(
+            "error.release",
+            "too many panel archive entries",
+        ));
+    }
+    let cd_start = cd_offset as usize;
+    let cd_end = cd_start
+        .checked_add(cd_size as usize)
+        .filter(|end| *end <= eocd)
+        .ok_or_else(|| Error::new("error.release", "invalid ZIP central directory"))?;
+
+    let mut seen = BTreeSet::new();
+    let mut total = 0u64;
+    let mut cursor = cd_start;
+    for _ in 0..entries_total {
+        check()?;
+        if cursor
+            .checked_add(46)
+            .is_none_or(|header_end| header_end > cd_end)
+            || read_u32_le(bytes, cursor)? != CD_SIG
+        {
+            return Err(Error::new(
+                "error.release",
+                "invalid ZIP central directory entry",
+            ));
+        }
+        let version_made_by = read_u16_le(bytes, cursor + 4)?;
+        let flags = read_u16_le(bytes, cursor + 8)?;
+        let method = read_u16_le(bytes, cursor + 10)?;
+        let expected_crc = read_u32_le(bytes, cursor + 16)?;
+        let compressed_size = read_u32_le(bytes, cursor + 20)? as usize;
+        let uncompressed_size = read_u32_le(bytes, cursor + 24)? as u64;
+        let name_len = read_u16_le(bytes, cursor + 28)? as usize;
+        let extra_len = read_u16_le(bytes, cursor + 30)? as usize;
+        let comment_len = read_u16_le(bytes, cursor + 32)? as usize;
+        let external_attrs = read_u32_le(bytes, cursor + 38)?;
+        let local_offset = read_u32_le(bytes, cursor + 42)? as usize;
+
+        let name_start = cursor + 46;
+        let name_end = name_start
+            .checked_add(name_len)
+            .ok_or_else(|| Error::new("error.release", "truncated ZIP entry name"))?;
+        let next_cursor = name_end
+            .checked_add(extra_len)
+            .and_then(|v| v.checked_add(comment_len))
+            .filter(|end| *end <= cd_end)
+            .ok_or_else(|| Error::new("error.release", "truncated ZIP entry metadata"))?;
+        let raw_name = &bytes[name_start..name_end];
+        cursor = next_cursor;
+
+        if flags & 0x0041 != 0 {
+            return Err(Error::new(
+                "error.release",
+                "encrypted ZIP entries are not supported",
+            ));
+        }
+        if !matches!(method, 0 | 8) {
+            return Err(Error::new(
+                "error.release",
+                "unsupported ZIP compression method",
+            ));
+        }
+
+        let mut is_unix_dir = false;
+        if (version_made_by >> 8) == 3 {
+            let file_type = (external_attrs >> 16) & 0o170_000;
+            match file_type {
+                0 | 0o100_000 => (),
+                0o040_000 => is_unix_dir = true,
+                _ => {
+                    return Err(Error::new(
+                        "error.release",
+                        "panel archive contains a link or special file",
+                    ));
+                }
+            }
+        }
+        let is_dir = raw_name.ends_with(b"/") || is_unix_dir;
+
+        let path = strip_entry_root(archive_path(raw_name)?, strip_root)?;
+        if path.as_os_str().is_empty() && is_dir {
+            continue;
+        }
+        if path.as_os_str().is_empty() || !seen.insert(path.clone()) {
+            return Err(Error::new("error.release", "duplicate panel archive path"));
+        }
+
+        let lfh_min_end = local_offset
+            .checked_add(30)
+            .filter(|end| *end <= cd_start)
+            .ok_or_else(|| Error::new("error.release", "invalid ZIP local file header"))?;
+        if read_u32_le(bytes, local_offset)? != LFH_SIG {
+            return Err(Error::new("error.release", "invalid ZIP local file header"));
+        }
+        let lfh_method = read_u16_le(bytes, local_offset + 8)?;
+        let lfh_name_len = read_u16_le(bytes, local_offset + 26)? as usize;
+        let lfh_extra_len = read_u16_le(bytes, local_offset + 28)? as usize;
+        let lfh_name_end = lfh_min_end
+            .checked_add(lfh_name_len)
+            .filter(|end| *end <= cd_start)
+            .ok_or_else(|| Error::new("error.release", "truncated ZIP local header name"))?;
+        if lfh_method != method || &bytes[lfh_min_end..lfh_name_end] != raw_name {
+            return Err(Error::new(
+                "error.release",
+                "ZIP local header does not match central directory",
+            ));
+        }
+        let data_start = lfh_name_end
+            .checked_add(lfh_extra_len)
+            .filter(|end| *end <= cd_start)
+            .ok_or_else(|| Error::new("error.release", "truncated ZIP local header extra"))?;
+        let data_end = data_start
+            .checked_add(compressed_size)
+            .filter(|end| *end <= cd_start)
+            .ok_or_else(|| Error::new("error.release", "truncated ZIP entry data"))?;
+
+        let target = destination.join(path);
+        if is_dir {
+            if uncompressed_size != 0 || compressed_size != 0 {
+                return Err(Error::new(
+                    "error.release",
+                    "ZIP directory entry contains unexpected payload",
+                ));
+            }
+            storage::private_dir(&target)?;
+            continue;
+        }
+
+        if uncompressed_size > MAX_PANEL_FILE {
+            return Err(Error::new("error.release", "panel file size limit"));
+        }
+        total = total
+            .checked_add(uncompressed_size)
+            .filter(|total| *total <= MAX_PANEL_BYTES)
+            .ok_or_else(|| Error::new("error.release", "panel extracted size limit"))?;
+
+        let payload = &bytes[data_start..data_end];
+        let content = match method {
+            0 => {
+                if payload.len() as u64 != uncompressed_size {
+                    return Err(Error::new("error.release", "panel file size mismatch"));
+                }
+                payload.to_vec()
+            }
+            8 => {
+                let mut decoder = flate2::read::DeflateDecoder::new(payload);
+                let mut content = Vec::with_capacity(uncompressed_size as usize);
+                decoder
+                    .by_ref()
+                    .take(uncompressed_size + 1)
+                    .read_to_end(&mut content)
+                    .map_err(|_| Error::new("error.release", "corrupt ZIP deflate stream"))?;
+                if content.len() as u64 != uncompressed_size {
+                    return Err(Error::new("error.release", "panel file size mismatch"));
+                }
+                content
+            }
+            _ => unreachable!(),
+        };
+        if crc32_ieee(&content) != expected_crc {
+            return Err(Error::new("error.release", "ZIP entry CRC-32 mismatch"));
+        }
+        storage::atomic_write(&target, &content, 0o600)?;
+    }
+    if cursor != cd_end {
+        return Err(Error::new(
+            "error.release",
+            "trailing ZIP central directory",
+        ));
+    }
+    verify_root_index(destination)
 }
 
 /// Each install publishes a fresh immutable directory; the Mixin transaction
 /// switches the reference only after the complete archive passes validation.
-pub fn install(ctx: &Context, requested: &str) -> Result<()> {
+pub fn install(ctx: &Context, panel: &str, requested: &str) -> Result<()> {
     ctx.check()?;
+    let panel = Panel::parse(panel)?;
     ensure_layout(ctx)?;
-    let requested = if requested.is_empty() || requested == "latest" {
-        None
-    } else {
-        Some(version(requested)?)
+    let installed = installed_panel(ctx)?;
+
+    let release = match panel.source() {
+        Source::PinnedArchive {
+            repository,
+            commit,
+            version: pinned_version,
+            size,
+            digest,
+            strip_root,
+        } => {
+            if !requested.is_empty() && requested != "latest" && requested != pinned_version {
+                return Err(Error::new(
+                    "error.input",
+                    format!(
+                        "{} uses a verified pinned gh-pages build ({pinned_version}); leave version empty",
+                        panel.display_name()
+                    ),
+                ));
+            }
+            if installed
+                .as_ref()
+                .is_some_and(|current| current.panel == panel && current.version == pinned_version)
+            {
+                ctx.message(
+                    "notice.clash_panel",
+                    format!(
+                        "{} {pinned_version}; already installed, download skipped",
+                        panel.display_name()
+                    ),
+                );
+                return Ok(());
+            }
+            ctx.require(&["curl"])?;
+            Release {
+                panel,
+                version: pinned_version.into(),
+                url: format!("https://github.com/{repository}/archive/{commit}.tar.gz"),
+                digest: digest.into(),
+                size,
+                format: ArchiveFormat::TarGz,
+                strip_root: StripRoot::Required(strip_root),
+            }
+        }
+        Source::GitHubRelease { .. } => {
+            let requested = if requested.is_empty() || requested == "latest" {
+                None
+            } else {
+                Some(version(requested)?)
+            };
+            if let Some(requested) = requested.as_deref()
+                && installed
+                    .as_ref()
+                    .is_some_and(|current| current.panel == panel && current.version == requested)
+            {
+                ctx.message(
+                    "notice.clash_panel",
+                    format!(
+                        "{} {requested}; already installed, download skipped",
+                        panel.display_name()
+                    ),
+                );
+                return Ok(());
+            }
+            ctx.require(&["curl"])?;
+            let release = metadata(ctx, panel, requested.as_deref())?;
+            if installed
+                .as_ref()
+                .is_some_and(|current| current.panel == panel && current.version == release.version)
+            {
+                ctx.message(
+                    "notice.clash_panel",
+                    format!(
+                        "{} {}; already installed, download skipped",
+                        panel.display_name(),
+                        release.version
+                    ),
+                );
+                return Ok(());
+            }
+            release
+        }
     };
-    if let Some(requested) = requested.as_deref()
-        && installed_version(ctx)?.as_deref() == Some(requested)
-    {
-        ctx.message(
-            "notice.clash_panel",
-            format!("MetaCubeXD {requested}; already installed, download skipped"),
-        );
-        return Ok(());
-    }
-    ctx.require(&["curl"])?;
-    let release = metadata(ctx, requested.as_deref())?;
-    if installed_version(ctx)?.as_deref() == Some(release.version.as_str()) {
-        ctx.message(
-            "notice.clash_panel",
-            format!(
-                "MetaCubeXD {}; already installed, download skipped",
-                release.version
-            ),
-        );
-        return Ok(());
-    }
+
     if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
         return Err(Error::new(
             "error.busy",
@@ -247,7 +786,11 @@ pub fn install(ctx: &Context, requested: &str) -> Result<()> {
     publish(ctx, &release, &bytes)?;
     ctx.message(
         "notice.clash_panel",
-        format!("MetaCubeXD {}; start Mihomo to serve /ui/", release.version),
+        format!(
+            "{} {}; start Mihomo to serve /ui/",
+            release.panel.display_name(),
+            release.version
+        ),
     );
     Ok(())
 }
@@ -258,13 +801,21 @@ fn publish(ctx: &Context, release: &Release, bytes: &[u8]) -> Result<()> {
     }
     let panels = ctx.paths.clash_resources.join("ui");
     storage::private_dir(&panels)?;
+    let sanitized_version = release.version.replace('@', "-");
     let destination = tempfile::Builder::new()
-        .prefix(&format!("metacubexd-{}-", release.version))
+        .prefix(&format!("{}-{sanitized_version}-", release.panel.id()))
         .tempdir_in(&panels)?;
-    unpack(bytes, destination.path(), || ctx.check())?;
+    unpack(
+        bytes,
+        release.format,
+        release.strip_root,
+        destination.path(),
+        || ctx.check(),
+    )?;
+    let marker = format!("{}:{}", release.panel.id(), release.version);
     storage::atomic_write(
         &destination.path().join(VERSION_MARKER),
-        release.version.as_bytes(),
+        marker.as_bytes(),
         0o600,
     )?;
     let external_ui = path_string(destination.path())?;
@@ -287,6 +838,52 @@ fn publish(ctx: &Context, release: &Release, bytes: &[u8]) -> Result<()> {
         let _ = destination.keep();
     }
     result
+}
+
+pub fn remove(ctx: &Context) -> Result<()> {
+    ctx.check()?;
+    ensure_layout(ctx)?;
+    if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
+        return Err(Error::new(
+            "error.busy",
+            "stop Mihomo before removing its panel",
+        ));
+    }
+    edit_mixin(ctx, |map| {
+        let key = Value::String("external-ui".into());
+        map.remove(&key);
+        let runtime = runtime_with_mixin(ctx, Value::Mapping(map.clone()))?;
+        let parsed: Value = serde_yaml::from_slice(&runtime)
+            .map_err(|_| Error::new("error.data", "cannot parse panel configuration"))?;
+        if parsed
+            .get("external-ui")
+            .and_then(Value::as_str)
+            .is_some_and(|path| !path.is_empty())
+        {
+            map.insert(key, Value::String(String::new()));
+        }
+        Ok(())
+    })?;
+    let panels = ctx.paths.clash_resources.join("ui");
+    if panels.exists() {
+        storage::check_path(&panels, false)?;
+        for entry in fs::read_dir(&panels)? {
+            let entry = entry?;
+            let path = entry.path();
+            let meta = fs::symlink_metadata(&path)?;
+            if meta.file_type().is_symlink() {
+                return Err(Error::new("error.path", path.display()));
+            }
+            if meta.is_dir() {
+                fs::remove_dir_all(&path)?;
+            } else {
+                fs::remove_file(&path)?;
+            }
+        }
+        let _ = fs::remove_dir(&panels);
+    }
+    ctx.message("notice.clash_panel", "panel removed");
+    Ok(())
 }
 
 fn configured_directory(ctx: &Context) -> Result<Option<PathBuf>> {
@@ -330,7 +927,7 @@ fn configured_directory(ctx: &Context) -> Result<Option<PathBuf>> {
     }
 }
 
-fn installed_version(ctx: &Context) -> Result<Option<String>> {
+fn installed_panel(ctx: &Context) -> Result<Option<Installed>> {
     let Some(directory) = configured_directory(ctx)? else {
         return Ok(None);
     };
@@ -343,20 +940,31 @@ fn installed_version(ctx: &Context) -> Result<Option<String>> {
     storage::check_path(&marker, true)?;
     if let Ok(bytes) = fs::read(&marker)
         && let Ok(value) = std::str::from_utf8(&bytes)
-        && let Ok(version) = version(value.trim())
+        && let Some(installed) = parse_marker(value)
     {
-        return Ok(Some(version));
+        return Ok(Some(installed));
     }
     let Some(name) = directory.file_name().and_then(|name| name.to_str()) else {
         return Ok(None);
     };
-    let Some(value) = name.strip_prefix("metacubexd-") else {
-        return Ok(None);
-    };
-    let Some((installed, _suffix)) = value.split_once('-') else {
-        return Ok(None);
-    };
-    Ok(version(installed).ok())
+    for panel in [
+        Panel::Zashboard,
+        Panel::MetaCubeXd,
+        Panel::Yacd,
+        Panel::Razord,
+    ] {
+        let prefix = format!("{}-", panel.id());
+        if let Some(rest) = name.strip_prefix(&prefix)
+            && let Some((installed, _suffix)) = rest.split_once('-')
+            && let Ok(ver) = version(installed)
+        {
+            return Ok(Some(Installed {
+                panel,
+                version: ver,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 pub fn url(ctx: &Context) -> Result<Option<String>> {
@@ -374,14 +982,19 @@ pub fn url(ctx: &Context) -> Result<Option<String>> {
 pub fn status(ctx: &Context) -> Result<()> {
     let directory = configured_directory(ctx)?;
     let address = url(ctx)?;
+    let installed = installed_panel(ctx)?;
+    let label = installed
+        .as_ref()
+        .map(|item| format!("{} {}; ", item.panel.display_name(), item.version))
+        .unwrap_or_default();
     let detail = match (directory, address) {
         (Some(path), Some(address)) => format!(
-            "{}; {address}; {}; loopback URLs require a browser on the server or an SSH tunnel",
+            "{label}{}; {address}; {}; loopback URLs require a browser on the server or an SSH tunnel",
             path.display(),
             state(ctx)?.label(),
         ),
         (Some(path), None) => format!(
-            "{}; index.html or external-controller is not configured",
+            "{label}{}; index.html or external-controller is not configured",
             path.display()
         ),
         (None, _) => "panel is not installed".into(),
@@ -395,21 +1008,188 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    fn fixture() -> serde_json::Value {
+    fn fixture_for(panel: Panel) -> serde_json::Value {
+        let Source::GitHubRelease {
+            repository, asset, ..
+        } = panel.source()
+        else {
+            unreachable!()
+        };
         serde_json::json!({
             "tag_name":"v1.2.3", "draft":false, "prerelease":false,
-            "assets":[{"name":ASSET,"size":1234,"digest":format!("sha256:{}", "a".repeat(64)),
-                "browser_download_url":format!("https://github.com/{REPOSITORY}/releases/download/v1.2.3/{ASSET}")}]
+            "assets":[{"name":asset,"size":1234,"digest":format!("sha256:{}", "a".repeat(64)),
+                "browser_download_url":format!("https://github.com/{repository}/releases/download/v1.2.3/{asset}")}]
         })
     }
 
-    fn package(bytes: &[u8]) -> Release {
+    fn package_tar(panel: Panel, strip_root: StripRoot, bytes: &[u8]) -> Release {
         Release {
+            panel,
             version: "v1.2.3".into(),
             url: String::new(),
             digest: sha256_hex(bytes),
             size: bytes.len() as u64,
+            format: ArchiveFormat::TarGz,
+            strip_root,
         }
+    }
+
+    fn package_zip(panel: Panel, strip_root: StripRoot, bytes: &[u8]) -> Release {
+        Release {
+            panel,
+            version: "v3.30.0".into(),
+            url: String::new(),
+            digest: sha256_hex(bytes),
+            size: bytes.len() as u64,
+            format: ArchiveFormat::Zip,
+            strip_root,
+        }
+    }
+
+    fn zip_archive(entries: &[(&str, u16, u32, &[u8])]) -> Vec<u8> {
+        // Each tuple: (name, method 0|8, unix_mode e.g. 0o100644 or 0o040755, content)
+        let mut out = Vec::new();
+        let mut cd = Vec::new();
+        for &(name, method, unix_mode, content) in entries {
+            let local_offset = out.len() as u32;
+            let crc = crc32_ieee(content);
+            let compressed = match method {
+                0 => content.to_vec(),
+                8 => {
+                    let mut encoder = flate2::write::DeflateEncoder::new(
+                        Vec::new(),
+                        flate2::Compression::default(),
+                    );
+                    encoder.write_all(content).unwrap();
+                    encoder.finish().unwrap()
+                }
+                _ => content.to_vec(),
+            };
+            // Local file header
+            out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+            out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+            out.extend_from_slice(&0u16.to_le_bytes()); // flags
+            out.extend_from_slice(&method.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // mod time
+            out.extend_from_slice(&0u16.to_le_bytes()); // mod date
+            out.extend_from_slice(&crc.to_le_bytes());
+            out.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+            out.extend_from_slice(&(content.len() as u32).to_le_bytes());
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes()); // extra len
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(&compressed);
+
+            // Central directory header
+            cd.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+            cd.extend_from_slice(&((3u16 << 8) | 20u16).to_le_bytes()); // Unix + 2.0
+            cd.extend_from_slice(&20u16.to_le_bytes());
+            cd.extend_from_slice(&0u16.to_le_bytes());
+            cd.extend_from_slice(&method.to_le_bytes());
+            cd.extend_from_slice(&0u16.to_le_bytes());
+            cd.extend_from_slice(&0u16.to_le_bytes());
+            cd.extend_from_slice(&crc.to_le_bytes());
+            cd.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+            cd.extend_from_slice(&(content.len() as u32).to_le_bytes());
+            cd.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            cd.extend_from_slice(&0u16.to_le_bytes()); // extra len
+            cd.extend_from_slice(&0u16.to_le_bytes()); // comment len
+            cd.extend_from_slice(&0u16.to_le_bytes()); // disk start
+            cd.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+            cd.extend_from_slice(&(unix_mode << 16).to_le_bytes());
+            cd.extend_from_slice(&local_offset.to_le_bytes());
+            cd.extend_from_slice(name.as_bytes());
+        }
+        let cd_offset = out.len() as u32;
+        let cd_size = cd.len() as u32;
+        out.extend_from_slice(&cd);
+        // EOCD
+        out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        out.extend_from_slice(&cd_size.to_le_bytes());
+        out.extend_from_slice(&cd_offset.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn crc32_matches_ieee_standard_vector() {
+        assert_eq!(crc32_ieee(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32_ieee(b""), 0);
+    }
+
+    #[test]
+    fn zip_extraction_supports_stored_deflate_root_stripping_and_rejects_malformed_entries() {
+        let zip = zip_archive(&[
+            ("dist/", 0, 0o040_755, b""),
+            ("dist/index.html", 8, 0o100_644, b"<html>zashboard</html>"),
+            ("dist/assets/app.js", 0, 0o100_644, b"console.log('ok')"),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        unpack_zip(&zip, StripRoot::Optional("dist"), dir.path(), || Ok(())).unwrap();
+        assert_eq!(
+            fs::read(dir.path().join("index.html")).unwrap(),
+            b"<html>zashboard</html>"
+        );
+        assert_eq!(
+            fs::read(dir.path().join("assets/app.js")).unwrap(),
+            b"console.log('ok')"
+        );
+
+        // Symlink inside ZIP must be rejected.
+        let symlink_zip = zip_archive(&[
+            ("dist/index.html", 0, 0o100_644, b"<html>ok</html>"),
+            ("dist/evil", 0, 0o120_777, b"/etc/passwd"),
+        ]);
+        assert!(
+            unpack_zip(
+                &symlink_zip,
+                StripRoot::Optional("dist"),
+                tempfile::tempdir().unwrap().path(),
+                || Ok(())
+            )
+            .is_err()
+        );
+
+        // Path traversal inside ZIP must be rejected.
+        let traversal_zip = zip_archive(&[("../index.html", 0, 0o100_644, b"evil")]);
+        assert!(
+            unpack_zip(
+                &traversal_zip,
+                StripRoot::None,
+                tempfile::tempdir().unwrap().path(),
+                || Ok(())
+            )
+            .is_err()
+        );
+
+        // Unsupported compression method (bzip2 = 12) must be rejected.
+        let bad_method = zip_archive(&[("index.html", 12, 0o100_644, b"<html></html>")]);
+        assert!(
+            unpack_zip(
+                &bad_method,
+                StripRoot::None,
+                tempfile::tempdir().unwrap().path(),
+                || Ok(())
+            )
+            .is_err()
+        );
+
+        // Corrupt CRC-32 must be rejected.
+        let mut corrupt_crc = zip_archive(&[("index.html", 0, 0o100_644, b"<html>ok</html>")]);
+        // Flip a byte inside the stored file payload right after 30 + "index.html".len() = 40.
+        corrupt_crc[40] ^= 0xFF;
+        let err = unpack_zip(
+            &corrupt_crc,
+            StripRoot::None,
+            tempfile::tempdir().unwrap().path(),
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(err.detail, "ZIP entry CRC-32 mismatch");
     }
 
     #[test]
@@ -427,7 +1207,7 @@ mod tests {
         let original = serde_yaml::to_string(&mixin).unwrap();
         fs::write(&ctx.paths.clash_mixin, &original).unwrap();
         let bytes = tarball(&[("index.html", tar::EntryType::Regular, b"new panel")]);
-        let mut invalid = package(&bytes);
+        let mut invalid = package_tar(Panel::MetaCubeXd, StripRoot::None, &bytes);
         invalid.digest = "0".repeat(64);
         assert_eq!(
             publish(&ctx, &invalid, &bytes).unwrap_err().key,
@@ -437,10 +1217,40 @@ mod tests {
             fs::read_to_string(&ctx.paths.clash_mixin).unwrap(),
             original
         );
-        publish(&ctx, &package(&bytes), &bytes).unwrap();
+        publish(
+            &ctx,
+            &package_tar(Panel::MetaCubeXd, StripRoot::None, &bytes),
+            &bytes,
+        )
+        .unwrap();
         assert_eq!(fs::read(old.join("index.html")).unwrap(), b"previous panel");
         let current = configured_directory(&ctx).unwrap().unwrap();
         assert_eq!(fs::read(current.join("index.html")).unwrap(), b"new panel");
+        assert_eq!(
+            installed_panel(&ctx).unwrap(),
+            Some(Installed {
+                panel: Panel::MetaCubeXd,
+                version: "v1.2.3".into()
+            })
+        );
+        // Switching to Zashboard ZIP publishes a distinct directory and updates marker.
+        let zash_zip = zip_archive(&[
+            ("dist/", 0, 0o040_755, b""),
+            ("dist/index.html", 8, 0o100_644, b"<html>zashboard</html>"),
+        ]);
+        publish(
+            &ctx,
+            &package_zip(Panel::Zashboard, StripRoot::Optional("dist"), &zash_zip),
+            &zash_zip,
+        )
+        .unwrap();
+        assert_eq!(
+            installed_panel(&ctx).unwrap(),
+            Some(Installed {
+                panel: Panel::Zashboard,
+                version: "v3.30.0".into()
+            })
+        );
         let address = url(&ctx).unwrap().unwrap();
         assert_eq!(address, "http://127.0.0.1:9191/ui/");
         assert!(!address.contains("private-test-secret"));
@@ -448,7 +1258,28 @@ mod tests {
     }
 
     #[test]
-    fn installed_panel_version_reads_marker_and_legacy_directory_name() {
+    fn remove_clears_mixin_and_managed_ui_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        let zash_zip = zip_archive(&[
+            ("dist/", 0, 0o040_755, b""),
+            ("dist/index.html", 8, 0o100_644, b"<html>zashboard</html>"),
+        ]);
+        publish(
+            &ctx,
+            &package_zip(Panel::Zashboard, StripRoot::Optional("dist"), &zash_zip),
+            &zash_zip,
+        )
+        .unwrap();
+        assert!(configured_directory(&ctx).unwrap().is_some());
+        remove(&ctx).unwrap();
+        assert!(configured_directory(&ctx).unwrap().is_none());
+        assert!(!ctx.paths.clash_resources.join("ui").exists());
+    }
+
+    #[test]
+    fn installed_panel_version_reads_new_and_legacy_markers_and_directory_name() {
         let temp = tempfile::tempdir().unwrap();
         let ctx = crate::tests::context(temp.path());
         ensure_layout(&ctx).unwrap();
@@ -470,11 +1301,41 @@ mod tests {
             serde_yaml::to_string(&mixin).unwrap(),
         )
         .unwrap();
-        assert_eq!(installed_version(&ctx).unwrap().as_deref(), Some("v1.2.3"));
+        assert_eq!(
+            installed_panel(&ctx).unwrap(),
+            Some(Installed {
+                panel: Panel::MetaCubeXd,
+                version: "v1.2.3".into()
+            })
+        );
         fs::remove_file(directory.join(VERSION_MARKER)).unwrap();
-        assert_eq!(installed_version(&ctx).unwrap().as_deref(), Some("v1.2.3"));
-        fs::write(directory.join(VERSION_MARKER), b"v2.3.4\n").unwrap();
-        assert_eq!(installed_version(&ctx).unwrap().as_deref(), Some("v2.3.4"));
+        assert_eq!(
+            installed_panel(&ctx).unwrap(),
+            Some(Installed {
+                panel: Panel::MetaCubeXd,
+                version: "v1.2.3".into()
+            })
+        );
+        fs::write(directory.join(VERSION_MARKER), b"zashboard:v3.30.0\n").unwrap();
+        assert_eq!(
+            installed_panel(&ctx).unwrap(),
+            Some(Installed {
+                panel: Panel::Zashboard,
+                version: "v3.30.0".into()
+            })
+        );
+        fs::write(
+            directory.join(VERSION_MARKER),
+            format!("yacd:{YACD_VERSION}\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            installed_panel(&ctx).unwrap(),
+            Some(Installed {
+                panel: Panel::Yacd,
+                version: YACD_VERSION.into()
+            })
+        );
     }
 
     #[cfg(unix)]
@@ -517,8 +1378,10 @@ exit 97
                 "CQS_TEST_PANEL_LOG".into(),
                 temp.path().join("curl.log").display().to_string(),
             );
-            ctx.environment
-                .insert("CQS_TEST_RELEASE_JSON".into(), fixture().to_string());
+            ctx.environment.insert(
+                "CQS_TEST_RELEASE_JSON".into(),
+                fixture_for(Panel::MetaCubeXd).to_string(),
+            );
             ensure_layout(&ctx).unwrap();
             let directory = ctx
                 .paths
@@ -538,11 +1401,17 @@ exit 97
             )
             .unwrap();
 
-            install(&ctx, requested).unwrap();
+            install(&ctx, "metacubexd", requested).unwrap();
 
             let log = fs::read_to_string(temp.path().join("curl.log")).unwrap_or_default();
             assert_eq!(log, expected_log);
-            assert_eq!(installed_version(&ctx).unwrap().as_deref(), Some("v1.2.3"));
+            assert_eq!(
+                installed_panel(&ctx).unwrap(),
+                Some(Installed {
+                    panel: Panel::MetaCubeXd,
+                    version: "v1.2.3".into()
+                })
+            );
             assert_eq!(fs::read(directory.join("index.html")).unwrap(), b"panel");
             assert_eq!(
                 fs::read_dir(ctx.paths.clash_resources.join("ui"))
@@ -562,7 +1431,14 @@ exit 97
         fs::write(&ctx.paths.clash_mixin, original).unwrap();
         fs::write(&ctx.paths.clash_config, "{invalid yaml").unwrap();
         let bytes = tarball(&[("index.html", tar::EntryType::Regular, b"new panel")]);
-        assert!(publish(&ctx, &package(&bytes), &bytes).is_err());
+        assert!(
+            publish(
+                &ctx,
+                &package_tar(Panel::MetaCubeXd, StripRoot::None, &bytes),
+                &bytes
+            )
+            .is_err()
+        );
         assert_eq!(
             fs::read_to_string(&ctx.paths.clash_mixin).unwrap(),
             original
@@ -582,7 +1458,12 @@ exit 97
         ensure_layout(&ctx).unwrap();
         fs::write(&ctx.paths.clash_mixin, "external-controller: ''\n").unwrap();
         let bytes = tarball(&[("index.html", tar::EntryType::Regular, b"new panel")]);
-        publish(&ctx, &package(&bytes), &bytes).unwrap();
+        publish(
+            &ctx,
+            &package_tar(Panel::MetaCubeXd, StripRoot::None, &bytes),
+            &bytes,
+        )
+        .unwrap();
         assert_eq!(url(&ctx).unwrap().unwrap(), "http://127.0.0.1:9090/ui/");
     }
 
@@ -606,26 +1487,78 @@ exit 97
 
     #[test]
     fn release_requires_stable_exact_url_size_digest_and_unique_asset() {
-        assert_eq!(release(&fixture(), None).unwrap().version, "v1.2.3");
-        assert!(release(&fixture(), Some("v2.0.0")).is_err());
-        for index in 0..6 {
-            let mut value = fixture();
-            match index {
-                0 => value["draft"] = true.into(),
-                1 => {
-                    value["assets"][0]["browser_download_url"] =
-                        "https://other.invalid/ui.tgz".into()
+        for panel in [Panel::Zashboard, Panel::MetaCubeXd] {
+            let fixture = fixture_for(panel);
+            assert_eq!(release(panel, &fixture, None).unwrap().version, "v1.2.3");
+            assert!(release(panel, &fixture, Some("v2.0.0")).is_err());
+            for index in 0..6 {
+                let mut value = fixture.clone();
+                match index {
+                    0 => value["draft"] = true.into(),
+                    1 => {
+                        value["assets"][0]["browser_download_url"] =
+                            "https://other.invalid/ui.tgz".into()
+                    }
+                    2 => value["assets"][0]["digest"] = "sha256:invalid".into(),
+                    3 => value["assets"][0]["size"] = 0.into(),
+                    4 => {
+                        let asset = value["assets"][0].clone();
+                        value["assets"].as_array_mut().unwrap().push(asset);
+                    }
+                    _ => value["tag_name"] = "../latest".into(),
                 }
-                2 => value["assets"][0]["digest"] = "sha256:invalid".into(),
-                3 => value["assets"][0]["size"] = 0.into(),
-                4 => {
-                    let asset = value["assets"][0].clone();
-                    value["assets"].as_array_mut().unwrap().push(asset);
-                }
-                _ => value["tag_name"] = "../latest".into(),
+                assert!(
+                    release(panel, &value, None).is_err(),
+                    "{panel:?} variation {index}"
+                );
             }
-            assert!(release(&value, None).is_err(), "variation {index}");
         }
+    }
+
+    #[test]
+    fn pinned_panel_rejects_arbitrary_custom_version() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        assert_eq!(
+            install(&ctx, "yacd", "v1.0.0").unwrap_err().key,
+            "error.input"
+        );
+        assert_eq!(
+            install(&ctx, "razord", "v9.9.9").unwrap_err().key,
+            "error.input"
+        );
+    }
+
+    #[test]
+    fn tar_extraction_strips_required_root_and_skips_pax_global_header() {
+        let bytes = tarball(&[
+            (
+                "pax_global_header",
+                tar::EntryType::XGlobalHeader,
+                b"52 comment=abc\n",
+            ),
+            (RAZORD_ROOT, tar::EntryType::Directory, b""),
+            (
+                &format!("{RAZORD_ROOT}/index.html"),
+                tar::EntryType::Regular,
+                b"<html>razord</html>",
+            ),
+            (
+                &format!("{RAZORD_ROOT}/assets/app.js"),
+                tar::EntryType::Regular,
+                b"ok",
+            ),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        unpack_tar(&bytes, StripRoot::Required(RAZORD_ROOT), dir.path(), || {
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            fs::read(dir.path().join("index.html")).unwrap(),
+            b"<html>razord</html>"
+        );
+        assert_eq!(fs::read(dir.path().join("assets/app.js")).unwrap(), b"ok");
     }
 
     #[test]
@@ -662,7 +1595,7 @@ exit 97
         gzip.write_all(header.as_bytes()).unwrap();
         let bytes = gzip.finish().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let error = unpack(&bytes, dir.path(), || Ok(())).unwrap_err();
+        let error = unpack_tar(&bytes, StripRoot::None, dir.path(), || Ok(())).unwrap_err();
         assert_eq!(error.detail, "panel file size limit");
         assert!(!dir.path().join("index.html").exists());
     }
@@ -731,8 +1664,6 @@ exit 97
                     eprintln!("panel smoke cleanup: {error}");
                 }
                 let Some(pid) = pid else { return };
-                // Production owns Child::wait; only observe /proc so the
-                // smoke test cannot race its background process reaper.
                 if wait_gone(pid) {
                     return;
                 }
@@ -740,8 +1671,6 @@ exit 97
                     eprintln!("panel smoke cleanup: PID {pid} still exists but is no longer owned");
                     return;
                 }
-                // Only this test's matching runtime, binary, and start time
-                // can reach the last-resort signal during panic cleanup.
                 if let Err(error) = signal(pid, true) {
                     eprintln!("panel smoke cleanup: {error}");
                     return;
@@ -758,7 +1687,7 @@ exit 97
         let cache = PathBuf::from(std::env::var_os("CQS_PANEL_SMOKE_DIR").unwrap());
         let metadata: serde_json::Value =
             serde_json::from_slice(&fs::read(cache.join("release.json")).unwrap()).unwrap();
-        let package = release(&metadata, None).unwrap();
+        let package = release(Panel::MetaCubeXd, &metadata, None).unwrap();
         let archive = cache.join("archive.tgz");
         assert_eq!(fs::metadata(&archive).unwrap().len(), package.size);
         let bytes = fs::read(archive).unwrap();
@@ -807,8 +1736,6 @@ exit 97
                 .to_ascii_lowercase()
                 .contains("<html")
         );
-        // Fetch an actual module referenced by the shipped index as well, so
-        // a bare HTML response cannot pass with broken static resource paths.
         let script = regex::Regex::new(r#"<script[^>]*src="([^"]+)""#).unwrap();
         let html = String::from_utf8_lossy(html);
         let script = &script.captures(&html).expect("panel has a module script")[1];
@@ -836,21 +1763,21 @@ exit 97
         ] {
             let dir = tempfile::tempdir().unwrap();
             let bytes = tarball(&[("index.html", kind, b"")]);
-            assert!(unpack(&bytes, dir.path(), || Ok(())).is_err());
+            assert!(unpack_tar(&bytes, StripRoot::None, dir.path(), || Ok(())).is_err());
         }
         let valid = tarball(&[
             ("./index.html", tar::EntryType::Regular, b"<html>ok</html>"),
             ("./assets/app.js", tar::EntryType::Regular, b"export {}"),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        unpack(&valid, dir.path(), || Ok(())).unwrap();
+        unpack_tar(&valid, StripRoot::None, dir.path(), || Ok(())).unwrap();
         assert_eq!(
             fs::read(dir.path().join("index.html")).unwrap(),
             b"<html>ok</html>"
         );
         let dir = tempfile::tempdir().unwrap();
         assert!(
-            unpack(&valid, dir.path(), || Err(Error::new(
+            unpack_tar(&valid, StripRoot::None, dir.path(), || Err(Error::new(
                 "error.cancelled",
                 "test"
             )))
@@ -861,8 +1788,24 @@ exit 97
             ("index.html", tar::EntryType::Regular, b"1"),
             ("index.html", tar::EntryType::Regular, b"2"),
         ]);
-        assert!(unpack(&bytes, tempfile::tempdir().unwrap().path(), || Ok(())).is_err());
+        assert!(
+            unpack_tar(
+                &bytes,
+                StripRoot::None,
+                tempfile::tempdir().unwrap().path(),
+                || Ok(())
+            )
+            .is_err()
+        );
         let bytes = tarball(&[("app.js", tar::EntryType::Regular, b"1")]);
-        assert!(unpack(&bytes, tempfile::tempdir().unwrap().path(), || Ok(())).is_err());
+        assert!(
+            unpack_tar(
+                &bytes,
+                StripRoot::None,
+                tempfile::tempdir().unwrap().path(),
+                || Ok(())
+            )
+            .is_err()
+        );
     }
 }

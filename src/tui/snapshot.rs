@@ -1,533 +1,399 @@
-//! Snapshot files for TUI regression tests, and the fixed state they render.
-//!
-//! A snapshot is a rendered buffer in a reviewed text format: a five-line header, the
-//! character grid, `---`, then one `row col len fg bg mods` line per run of identically
-//! styled cells. Files live in `tests/snapshots/tui/<case>.snap` and are compared byte for
-//! byte; they are written only when `CQS_UPDATE_SNAPSHOTS=1` is set.
-use super::App;
+//! Deterministic fixture snapshot and streamlined golden snapshot harness for the redesigned TUI.
+//! Snapshots are compared byte-for-byte; set `CQS_UPDATE_SNAPSHOTS=1` to record intentional updates.
+
+use super::{
+    palette,
+    state::{App, FormMode, NavTarget, Phase, Progress, Tone},
+};
 use crate::{
+    actions,
     dashboard::{LocalSnapshot, PublicSnapshot, Reading, Snapshot, Usage},
     i18n::I18n,
-    ops::clash::State,
-    runtime::Context,
+    ops::clash::State as ClashState,
+    runtime::{Context, Outcome, Step, StepState},
+    theme::{Background, ThemeSource},
 };
 use ratatui::{
     Terminal,
     backend::TestBackend,
-    buffer::{Buffer, Cell},
     style::{Color, Modifier},
 };
 use std::{
-    ffi::OsStr,
-    fmt::{self, Write as _},
-    fs, io,
-    path::Path,
+    fs,
+    path::PathBuf,
+    sync::mpsc,
     time::{Duration, Instant},
 };
 use unicode_width::UnicodeWidthStr;
 
-mod baseline;
+const GIB: u64 = 1 << 30;
+const MIB: u64 = 1 << 20;
 
-const UPDATE_VARIABLE: &str = "CQS_UPDATE_SNAPSHOTS";
-
-/// The terminal background a snapshot was rendered against, as written in its header.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Background {
-    Detected(u8, u8, u8),
-    Unavailable,
-    Disabled,
-}
-impl fmt::Display for Background {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Detected(r, g, b) => write!(f, "#{r:02x}{g:02x}{b:02x}"),
-            Self::Unavailable => f.write_str("unavailable"),
-            Self::Disabled => f.write_str("disabled"),
-        }
-    }
-}
-
-/// Everything a snapshot records besides the buffer. `name` is also the file stem.
-pub(super) struct Case {
-    pub name: String,
-    pub theme: String,
-    pub background: Background,
-    pub locale: String,
-}
-
-/// The style a cell is recorded with.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct Look {
-    fg: Color,
-    bg: Color,
-    modifier: Modifier,
-}
-impl Look {
-    fn of(cell: &Cell) -> Self {
-        Self {
-            fg: cell.fg,
-            bg: cell.bg,
-            modifier: cell.modifier,
-        }
-    }
-    fn is_default(self) -> bool {
-        self == Self::default()
-    }
-}
-
-/// Render `buffer` in the snapshot format.
-pub(super) fn format(case: &Case, buffer: &Buffer) -> String {
-    let area = buffer.area;
-    let mut text = format!(
-        "# case {}\n# size {}x{}\n# theme {}\n# background {}\n# locale {}\n",
-        case.name, area.width, area.height, case.theme, case.background, case.locale
-    );
-    let mut runs = String::new();
-    for row in 0..area.height {
-        let mut looks = Vec::with_capacity(usize::from(area.width));
-        let mut lead = Look::default();
-        let mut hidden = 0;
-        for col in 0..area.width {
-            let cell = &buffer[(area.x + col, area.y + row)];
-            if hidden > 0 {
-                // A wide glyph covers this cell on a real terminal, so the cell takes the
-                // glyph's style and its own (blank or stale) content is not written.
-                hidden -= 1;
-            } else {
-                text.push_str(cell.symbol());
-                hidden = cell.symbol().width().saturating_sub(1);
-                lead = Look::of(cell);
-            }
-            looks.push(lead);
-        }
-        text.push('\n');
-        let mut start = 0;
-        while start < looks.len() {
-            let look = looks[start];
-            let len = looks[start..].iter().take_while(|&&l| l == look).count();
-            if !look.is_default() {
-                writeln!(
-                    runs,
-                    "{row} {start} {len} {} {} {}",
-                    color(look.fg),
-                    color(look.bg),
-                    modifiers(look.modifier)
-                )
-                .expect("writing to a String cannot fail");
-            }
-            start += len;
-        }
-    }
-    text.push_str("---\n");
-    text.push_str(&runs);
-    text
-}
-
-/// `reset`, an ANSI name or `#rrggbb`. ANSI names follow the theme model: ratatui's `Gray`
-/// is ANSI white (index 7) and `White` is bright white (index 15).
-fn color(color: Color) -> String {
-    let name = match color {
-        Color::Reset => "reset",
-        Color::Black => "black",
-        Color::Red => "red",
-        Color::Green => "green",
-        Color::Yellow => "yellow",
-        Color::Blue => "blue",
-        Color::Magenta => "magenta",
-        Color::Cyan => "cyan",
-        Color::Gray => "white",
-        Color::DarkGray => "bright-black",
-        Color::LightRed => "bright-red",
-        Color::LightGreen => "bright-green",
-        Color::LightYellow => "bright-yellow",
-        Color::LightBlue => "bright-blue",
-        Color::LightMagenta => "bright-magenta",
-        Color::LightCyan => "bright-cyan",
-        Color::White => "bright-white",
-        Color::Rgb(r, g, b) => return format!("#{r:02x}{g:02x}{b:02x}"),
-        // Themes only produce the colors above; anything else must fail, not be guessed.
-        Color::Indexed(index) => {
-            panic!("the snapshot format has no notation for Color::Indexed({index})")
-        }
-    };
-    name.to_owned()
-}
-
-const MODIFIERS: [(Modifier, &str); 9] = [
-    (Modifier::BOLD, "bold"),
-    (Modifier::DIM, "dim"),
-    (Modifier::ITALIC, "italic"),
-    (Modifier::UNDERLINED, "underlined"),
-    (Modifier::SLOW_BLINK, "slow_blink"),
-    (Modifier::RAPID_BLINK, "rapid_blink"),
-    (Modifier::REVERSED, "reversed"),
-    (Modifier::HIDDEN, "hidden"),
-    (Modifier::CROSSED_OUT, "crossed_out"),
-];
-
-/// Modifier names joined with `+`, or `-` for none.
-fn modifiers(modifier: Modifier) -> String {
-    let names = MODIFIERS
-        .iter()
-        .filter(|(flag, _)| modifier.contains(*flag))
-        .map(|(_, name)| *name)
-        .collect::<Vec<_>>();
-    if names.is_empty() {
-        "-".into()
-    } else {
-        names.join("+")
-    }
-}
-
-/// Compare `buffer` with `tests/snapshots/tui/<case>.snap`, or record it there when
-/// `CQS_UPDATE_SNAPSHOTS=1` is set.
-pub(super) fn assert_snapshot(case: &Case, buffer: &Buffer) {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/tui");
-    let update = update_requested(&case.name, std::env::var_os(UPDATE_VARIABLE).as_deref());
-    if let Err(message) = check(&directory, case, buffer, update) {
-        panic!("{message}");
-    }
-}
-
-fn update_requested(name: &str, value: Option<&OsStr>) -> bool {
-    !name.starts_with("baseline_") && value == Some(OsStr::new("1"))
-}
-
-/// Compare with, or with `update` write, `<directory>/<case>.snap`. Without `update` no file
-/// is ever created or changed.
-fn check(directory: &Path, case: &Case, buffer: &Buffer, update: bool) -> Result<(), String> {
-    assert!(
-        !case.name.is_empty()
-            && case
-                .name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
-        "a case name is a plain file stem: {:?}",
-        case.name
-    );
-    let path = directory.join(format!("{}.snap", case.name));
-    let actual = format(case, buffer);
-    let expected = match fs::read(&path) {
-        Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(format!("{}: {error}", path.display())),
-    };
-    if expected.as_deref() == Some(actual.as_bytes()) {
-        return Ok(());
-    }
-    if update {
-        return fs::create_dir_all(directory)
-            .and_then(|()| fs::write(&path, &actual))
-            .map_err(|error| format!("{}: {error}", path.display()));
-    }
-    Err(match expected {
-        None => format!(
-            "{}: snapshot missing; review the output and record it with {UPDATE_VARIABLE}=1",
-            path.display()
-        ),
-        Some(expected) => format!(
-            "{}: snapshot differs; {}\nreview the change and rewrite it with {UPDATE_VARIABLE}=1",
-            path.display(),
-            first_difference(&expected, &actual)
-        ),
-    })
-}
-
-fn first_difference(expected: &[u8], actual: &str) -> String {
-    let expected = String::from_utf8_lossy(expected);
-    let (mut want, mut got) = (expected.split('\n'), actual.split('\n'));
-    let shown =
-        |line: Option<&str>| line.map_or_else(|| "<end of file>".into(), |l| format!("{l:?}"));
-    let mut line = 1;
-    loop {
-        match (want.next(), got.next()) {
-            (None, None) => return "the files differ only in bytes that are not UTF-8".into(),
-            (a, b) if a == b => line += 1,
-            (a, b) => {
-                return format!(
-                    "first difference at line {line}:\n  expected: {}\n  actual:   {}",
-                    shown(a),
-                    shown(b)
-                );
-            }
-        }
-    }
-}
-
-/// Distance from the fixture App's start to its frame clock. Fixed, so spinner frames and
-/// data ages never depend on when a test runs.
-const FIXTURE_CLOCK: Duration = Duration::from_secs(60);
-const LOCAL_AGE: Duration = Duration::from_secs(2);
-const PUBLIC_AGE: Duration = Duration::from_secs(12);
-
-/// Fixed readings for snapshots; nothing is sampled live. Ages are measured from `now`.
-pub(super) fn fixture_snapshot(now: Instant) -> Snapshot {
-    const GIB: u64 = 1 << 30;
-    let text = |value: &str| Reading::Value(value.to_owned());
+/// Fixed read-only snapshot fixture shared across TUI tests, `related.rs` tests, and golden renders.
+pub(in crate::tui) fn fixture_snapshot(now: Instant) -> Snapshot {
     Snapshot {
         local: LocalSnapshot {
-            host: text("vps-sg-01"),
-            os: text("Debian GNU/Linux 12 (bookworm)"),
-            kernel: text("6.12.8-joeyblog-bbrv3"),
+            host: Reading::Value("vps-sg-01".into()),
+            os: Reading::Value("Debian GNU/Linux 12 (bookworm)".into()),
+            kernel: Reading::Value("6.12.8-joeyblog-bbrv3".into()),
             arch: "x86_64".into(),
-            cpu: text("AMD EPYC 7B13 × 2"),
+            cpu: Reading::Value("AMD EPYC 7B13".into()),
             cpu_usage: Reading::Value(12.0),
             cpu_count: Reading::Value(2),
             terminal_proxy: Reading::Value(true),
-            mihomo_state: Reading::Value(State::Running(4242)),
-            mihomo_version: text("v1.19.2"),
-            // 1.2 of 1.9 GiB; the total is the 1 992 294 KiB of effective memory.
+            mihomo_state: Reading::Value(ClashState::Running(4242)),
+            mihomo_version: Reading::Value("v1.19.2".into()),
             memory: Reading::Value(Usage {
-                used: GIB * 12 / 10,
-                total: 1_992_294 * 1024,
+                used: (1.2 * GIB as f64) as u64,
+                total: (1.9 * GIB as f64) as u64,
             }),
             effective_memory_kb: Reading::Value(1_992_294),
             swap: Reading::Value(Usage {
-                used: GIB * 2 / 10,
+                used: (0.2 * GIB as f64) as u64,
                 total: 2 * GIB,
             }),
             disk: Reading::Value(Usage {
-                used: GIB * 164 / 10,
+                used: (16.4 * GIB as f64) as u64,
                 total: 40 * GIB,
             }),
             disk_name: "/".into(),
-            // 3 days 04 hours.
-            uptime: Reading::Value(3 * 86_400 + 4 * 3_600),
-            timezone: text("Asia/Shanghai"),
-            congestion: text("cubic"),
-            qdisc: text("fq_codel"),
+            uptime: Reading::Value(3 * 86400 + 4 * 3600),
+            timezone: Reading::Value("Asia/Shanghai".into()),
+            congestion: Reading::Value("cubic".into()),
+            qdisc: Reading::Value("fq_codel".into()),
             bbr_available: Reading::Value(true),
-            bbr_version: text("v3"),
+            bbr_version: Reading::Value("v3".into()),
             tcp_configured: Reading::Value(false),
-            // 6 MiB; tcp.tune with bandwidth 1000 and rtt 50 would raise it to 12 MiB.
-            tcp_rmem_max: Reading::Value(6_291_456),
-            updated: Some(now - LOCAL_AGE),
+            tcp_rmem_max: Reading::Value(6 * MIB),
+            updated: Some(now - Duration::from_secs(2)),
         },
-        // Documentation address ranges and AS number.
         public: PublicSnapshot {
-            ipv4: text("203.0.113.24"),
-            ipv6: text("2001:db8:3c4d:15::1a2f"),
-            isp: text("AS64500 Example Net"),
-            updated: Some(now - PUBLIC_AGE),
+            ipv4: Reading::Value("203.0.113.24".into()),
+            ipv6: Reading::Value("2001:db8:3c4d:15::1a2f".into()),
+            isp: Reading::Value("AS64500 Example Net".into()),
+            updated: Some(now - Duration::from_secs(12)),
         },
-        // Oldest first; the newest is the current 12 %.
         cpu_history: vec![
-            22.0, 35.0, 61.0, 48.0, 30.0, 18.0, 25.0, 12.0, 9.0, 14.0, 20.0, 12.0,
+            18.0, 26.0, 48.0, 39.0, 25.0, 14.0, 22.0, 9.0, 11.0, 15.0, 16.0, 12.0,
         ],
     }
 }
 
-/// The App state snapshots start from: the fixture readings, local data 2 s and public data
-/// 12 s old, and a non-root user on a supported platform, so the screen depends on neither
-/// the clock, the test process's privileges nor the host OS.
-pub(super) fn fixture_app(locale: &str) -> App {
-    // The paths name a directory that does not exist; drawing reads no files.
-    let paths = crate::tests::context(Path::new("/nonexistent/cqs-snapshot")).paths;
-    let i18n = I18n::load(Some(locale), None).expect("bundled locale");
-    let mut app = App::new(Context::new(paths, i18n, false));
-    app.theme.active = crate::theme::resolve(
-        &crate::theme::builtin::classic(),
-        &crate::theme::Background::Unavailable("snapshot fixture".into()),
-    );
-    app.now = app.started + FIXTURE_CLOCK;
-    app.root = false;
+fn fixture_app(locale: &str, theme_id: &str, root: bool) -> App {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = crate::tests::context(temp.path()).paths;
+    let ctx = Context::new(paths, I18n::load(Some(locale), None).unwrap(), false);
+    let mut app = App::new(ctx);
+    let now = Instant::now();
+    app.started = now - Duration::from_secs(10);
+    app.now = now;
+    app.view_changed = now - Duration::from_secs(5);
+    app.root = root;
     app.platform_error = None;
-    app.snapshot = fixture_snapshot(app.now);
+    app.snapshot = fixture_snapshot(now);
+    app.theme.reduced_motion = true;
+    app.preview_theme(theme_id, Background::Detected((0x0d, 0x11, 0x17)))
+        .unwrap();
+    app.theme.source = ThemeSource::Default;
+    app.tick(now);
     app
 }
 
-/// Draw `app` once on a fresh `width`×`height` test terminal.
-pub(super) fn render(app: &App, width: u16, height: u16) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("test terminal");
-    terminal.draw(|frame| app.draw(frame)).expect("draw");
-    terminal.backend().buffer().clone()
+fn format_color(c: Color) -> String {
+    match c {
+        Color::Reset => "reset".into(),
+        Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+        other => format!("{other:?}").to_lowercase(),
+    }
 }
 
-mod matrix;
-mod stage2;
+fn render_snapshot(name: &str, width: u16, height: u16, app: &mut App) -> String {
+    app.viewport = ratatui::layout::Rect::new(0, 0, width, height);
+    app.tick(app.now);
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let buf = terminal.backend().buffer();
 
-mod tests {
-    use super::*;
-    use ratatui::{layout::Rect, style::Style};
+    let mut out = format!(
+        "# case {name}\n# size {width}x{height}\n# theme {}\n# locale {}\n",
+        app.theme.active.id,
+        app.ctx.i18n.locale()
+    );
 
-    fn case(name: &str) -> Case {
-        Case {
-            name: name.into(),
-            theme: "classic".into(),
-            background: Background::Detected(0x0b, 0x11, 0x19),
-            locale: "zh-CN".into(),
+    for y in 0..height {
+        let mut x = 0;
+        while x < width {
+            let sym = buf[(x, y)].symbol();
+            out.push_str(sym);
+            let w = sym.width().max(1) as u16;
+            x += w;
+        }
+        out.push('\n');
+    }
+
+    out.push_str("---\n");
+    for y in 0..height {
+        let mut x = 0;
+        while x < width {
+            let cell = &buf[(x, y)];
+            let fg = cell.fg;
+            let bg = cell.bg;
+            let bold = cell.modifier.contains(Modifier::BOLD);
+            let start = x;
+            while x < width {
+                let c = &buf[(x, y)];
+                if c.fg != fg || c.bg != bg || c.modifier.contains(Modifier::BOLD) != bold {
+                    break;
+                }
+                x += 1;
+            }
+            if fg != Color::Reset || bg != Color::Reset || bold {
+                out.push_str(&format!(
+                    "{y} {start} {} {} {} {}\n",
+                    x - start,
+                    format_color(fg),
+                    format_color(bg),
+                    if bold { "bold" } else { "-" }
+                ));
+            }
         }
     }
-    /// Grid rows and style lines of a formatted snapshot.
-    fn body(text: &str) -> (Vec<&str>, Vec<&str>) {
-        let lines = text.lines().skip(5).collect::<Vec<_>>();
-        let rule = lines.iter().position(|line| *line == "---").expect("rule");
-        (lines[..rule].to_vec(), lines[rule + 1..].to_vec())
+    out
+}
+
+fn assert_snapshot(name: &str, width: u16, height: u16, app: &mut App) {
+    let actual = render_snapshot(name, width, height, app);
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/tui");
+    let path = dir.join(format!("{name}.snap"));
+    if std::env::var_os("CQS_UPDATE_SNAPSHOTS").is_some_and(|v| v == "1") {
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, &actual).unwrap();
+        return;
     }
+    let expected = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "missing snapshot {} ({e}); run with CQS_UPDATE_SNAPSHOTS=1 to record",
+            path.display()
+        )
+    });
+    assert_eq!(
+        actual.replace("\r\n", "\n"),
+        expected.replace("\r\n", "\n"),
+        "snapshot mismatch for {name}"
+    );
+}
 
-    #[test]
-    fn format_writes_header_grid_and_style_runs() {
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 6, 2));
-        let accent = Style::new()
-            .fg(Color::Rgb(0x4f, 0xd1, 0xbd))
-            .add_modifier(Modifier::BOLD);
-        buffer.set_string(0, 0, "中", accent);
-        buffer.set_string(2, 0, "ab", Style::new().fg(Color::Red));
-        buffer.set_string(0, 1, "xyz", Style::new().bg(Color::Rgb(11, 17, 25)));
-        assert_eq!(
-            format(&case("unit"), &buffer),
-            "# case unit\n# size 6x2\n# theme classic\n# background #0b1119\n# locale zh-CN\n\
-             中ab  \nxyz   \n---\n\
-             0 0 2 #4fd1bd reset bold\n0 2 2 red reset -\n1 0 3 reset #0b1119 -\n"
-        );
-        assert_eq!(Background::Unavailable.to_string(), "unavailable");
-        assert_eq!(Background::Disabled.to_string(), "disabled");
-    }
+#[test]
+fn redesigned_tui_core_snapshot_matrix() {
+    // 1. Wide Overview (Obsidian Dark, zh-CN)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    assert_snapshot("overview_obsidian_120x36_zh-CN", 120, 36, &mut app);
 
-    #[test]
-    fn continuation_cells_are_not_written_and_take_the_wide_glyph_style() {
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 4, 2));
-        buffer.set_string(0, 0, "中", Style::new().bg(Color::Rgb(1, 2, 3)));
-        // An overdrawn continuation cell stays hidden behind the glyph on a real terminal.
-        buffer[(1, 0)].set_symbol("X").set_fg(Color::Green);
-        // A wide glyph in the last column must not swallow the start of the next row.
-        buffer[(3, 0)].set_symbol("宽");
-        buffer.set_string(0, 1, "abcd", Style::new());
-        let text = format(&case("wide"), &buffer);
-        let (grid, runs) = body(&text);
-        assert_eq!(grid, ["中 宽", "abcd"]);
-        assert_eq!(runs, ["0 0 2 reset #010203 -"]);
-    }
+    // 2. Wide Overview (Daylight Light, en-US)
+    let mut app = fixture_app("en-US", "daylight", false);
+    assert_snapshot("overview_daylight_120x36_en-US", 120, 36, &mut app);
 
-    #[test]
-    fn equal_neighbours_merge_and_default_runs_are_omitted() {
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 8, 1));
-        let red = Style::new().fg(Color::Red);
-        buffer.set_string(0, 0, "ab", red);
-        buffer.set_string(3, 0, "cd", red);
-        buffer.set_string(5, 0, "e", red.add_modifier(Modifier::BOLD));
-        // Explicitly reset styling is indistinguishable from untouched cells.
-        buffer.set_string(6, 0, "f", Style::reset());
-        let text = format(&case("runs"), &buffer);
-        let (grid, runs) = body(&text);
-        assert_eq!(grid, ["ab cdef "]);
-        assert_eq!(
-            runs,
-            [
-                "0 0 2 red reset -",
-                "0 3 2 red reset -",
-                "0 5 1 red reset bold"
-            ]
-        );
-    }
+    // 3. Compact 80x24 Overview (auto-collapsed sidebar)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    assert_snapshot("overview_compact_80x24_zh-CN", 80, 24, &mut app);
 
-    #[test]
-    fn colors_and_modifiers_use_the_snapshot_notation() {
-        for (value, name) in [
-            (Color::Reset, "reset"),
-            (Color::Black, "black"),
-            (Color::Red, "red"),
-            (Color::Green, "green"),
-            (Color::Yellow, "yellow"),
-            (Color::Blue, "blue"),
-            (Color::Magenta, "magenta"),
-            (Color::Cyan, "cyan"),
-            (Color::Gray, "white"),
-            (Color::DarkGray, "bright-black"),
-            (Color::LightRed, "bright-red"),
-            (Color::LightGreen, "bright-green"),
-            (Color::LightYellow, "bright-yellow"),
-            (Color::LightBlue, "bright-blue"),
-            (Color::LightMagenta, "bright-magenta"),
-            (Color::LightCyan, "bright-cyan"),
-            (Color::White, "bright-white"),
-            (Color::Rgb(0, 10, 255), "#000aff"),
-        ] {
-            assert_eq!(color(value), name);
-        }
-        assert_eq!(modifiers(Modifier::empty()), "-");
-        assert_eq!(modifiers(Modifier::DIM | Modifier::BOLD), "bold+dim");
-        assert_eq!(
-            modifiers(Modifier::all()),
-            "bold+dim+italic+underlined+slow_blink+rapid_blink+reversed+hidden+crossed_out"
-        );
-    }
+    // 4. Plain ASCII 80x24 Overview
+    let mut app = fixture_app("en-US", "plain", false);
+    assert_snapshot("overview_plain_80x24_en-US", 80, 24, &mut app);
 
-    #[test]
-    #[should_panic(expected = "Color::Indexed(42)")]
-    fn colors_outside_the_format_fail_loudly() {
-        color(Color::Indexed(42));
-    }
+    // 5. Wide System Workbench (Sidebar + Action List + Inspector)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    app.goto_nav(NavTarget::Group(0));
+    assert_snapshot("workbench_system_120x36_zh-CN", 120, 36, &mut app);
 
-    #[test]
-    fn snapshot_files_are_written_only_on_request() {
-        let temp = tempfile::tempdir().unwrap();
-        let directory = temp.path().join("tui");
-        let path = directory.join("files.snap");
-        let case = case("files");
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 3, 1));
-        buffer.set_string(0, 0, "abc", Style::new());
+    // 6. Medium 100x30 Workbench (stacked compact inspector)
+    let mut app = fixture_app("zh-CN", "catppuccin", true);
+    app.goto_nav(NavTarget::Group(0));
+    assert_snapshot("workbench_medium_100x30_zh-CN", 100, 30, &mut app);
 
-        let missing = check(&directory, &case, &buffer, false).unwrap_err();
-        assert!(missing.contains(UPDATE_VARIABLE), "{missing}");
-        assert!(!directory.exists(), "a plain check never creates files");
+    // 7. Optimization Checklist + Live Batch Progress + Bottom Log Drawer
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    app.goto_nav(NavTarget::Optimization);
+    app.recommend().unwrap();
+    app.logs_open = true;
+    app.phase = Phase::Running;
+    app.task_ids = vec![
+        "system.update".into(),
+        "system.clean".into(),
+        "tcp.tune".into(),
+        "bbr.enable".into(),
+    ];
+    let now = app.now;
+    let mut progress = Progress::new(4, now - Duration::from_secs(25));
+    progress.apply(
+        &Step {
+            index: 0,
+            total: 4,
+            id: "system.update",
+            state: StepState::Finished {
+                outcome: Outcome::Done,
+                elapsed: Duration::from_secs(18),
+            },
+        },
+        now - Duration::from_secs(7),
+    );
+    progress.apply(
+        &Step {
+            index: 1,
+            total: 4,
+            id: "system.clean",
+            state: StepState::Started,
+        },
+        now - Duration::from_secs(7),
+    );
+    app.progress = Some(progress);
+    app.log_styled("Step 1/4: system.update done", Tone::Success, false);
+    app.log_styled(
+        "Step 2/4: cleaning apt cache and journals...",
+        Tone::Info,
+        true,
+    );
+    assert_snapshot("optimization_progress_120x36_zh-CN", 120, 36, &mut app);
 
-        check(&directory, &case, &buffer, true).unwrap();
-        let recorded = fs::read(&path).unwrap();
-        assert_eq!(recorded, format(&case, &buffer).as_bytes());
-        assert!(!recorded.contains(&b'\r'), "snapshots use LF line endings");
-        check(&directory, &case, &buffer, false).unwrap();
+    // 8. Live Appearance & Theme Drawer (`T`) previewing Tokyo Night (Palette tab + HUD)
+    let mut app = fixture_app("zh-CN", "obsidian", false);
+    app.goto_nav(NavTarget::Group(0));
+    app.open_theme_drawer();
+    app.preview_theme_cursor(3); // tokyo-night
+    assert_snapshot("theme_drawer_tokyo_120x36_zh-CN", 120, 36, &mut app);
 
-        buffer.set_string(1, 0, "X", Style::new());
-        let changed = check(&directory, &case, &buffer, false).unwrap_err();
-        assert!(
-            changed.contains("line 6")
-                && changed.contains("\"abc\"")
-                && changed.contains("\"aXc\""),
-            "{changed}"
-        );
-        assert_eq!(
-            fs::read(&path).unwrap(),
-            recorded,
-            "a mismatch is not written"
-        );
+    // 8b. Live Appearance Drawer Style tab + Tokyo Night HUD Overview (segmented gauges)
+    let mut app = fixture_app("zh-CN", "tokyo-night", true);
+    assert_snapshot("overview_tokyo_hud_120x36_zh-CN", 120, 36, &mut app);
+    app.open_theme_drawer();
+    app.switch_theme_drawer_tab(super::theme_drawer::DrawerTab::Style);
+    assert_snapshot("theme_drawer_style_tab_120x36_zh-CN", 120, 36, &mut app);
 
-        assert!(!update_requested("classic_main", None));
-        assert!(!update_requested("classic_main", Some(OsStr::new(""))));
-        assert!(!update_requested("classic_main", Some(OsStr::new("0"))));
-        assert!(update_requested("classic_main", Some(OsStr::new("1"))));
-        assert!(!update_requested("baseline_main", Some(OsStr::new("1"))));
-    }
+    // 9. Enhanced Command Palette searching "bbr"
+    let mut app = fixture_app("zh-CN", "obsidian", false);
+    let mut pal = palette::CommandPalette::default();
+    pal.query.replace("bbr".into());
+    app.command_palette = Some(pal);
+    assert_snapshot("palette_bbr_120x36_zh-CN", 120, 36, &mut app);
 
-    #[test]
-    fn fixture_app_has_fixed_ages_privileges_and_readings() {
-        let compact = |buffer: &Buffer| {
-            buffer
-                .content
-                .iter()
-                .map(Cell::symbol)
-                .collect::<String>()
-                .replace(' ', "")
-        };
-        for locale in ["zh-CN", "en-US"] {
-            let mut app = fixture_app(locale);
-            assert_eq!(app.ctx.i18n.locale(), locale);
-            assert!(!app.root && app.platform_error.is_none());
-            assert_eq!(app.now - app.started, FIXTURE_CLOCK);
-            let age = |at: Option<Instant>| app.now.duration_since(at.unwrap());
-            assert_eq!(age(app.snapshot.local.updated), LOCAL_AGE);
-            assert_eq!(age(app.snapshot.public.updated), PUBLIC_AGE);
+    // 10. Parameter Form with interactive Chips (`system.clean`)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    let clean = actions::find("system.clean").unwrap();
+    app.form = Some(app.make_form(clean, FormMode::Run).unwrap());
+    assert_snapshot("form_clean_chips_120x36_zh-CN", 120, 36, &mut app);
 
-            let i = &app.ctx.i18n;
-            let screen = compact(&render(&app, 120, 36));
-            let local = i.format("dash.age", &[("age", "2s")]).replace(' ', "");
-            assert!(screen.contains("vps-sg-01"), "{screen}");
-            assert!(screen.contains(&local), "{local} in {screen}");
+    // 11. High-Risk Confirmation Dialog
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    let (tx, _rx) = mpsc::channel();
+    app.confirmation = Some(super::state::Confirmation {
+        text: "Irreversible cleanup: remove old journals, temp files, and unused Docker data."
+            .into(),
+        token: "YES".into(),
+        input: super::input::InputBuffer::default(),
+        reply: tx,
+        scroll: 0,
+        accept: false,
+    });
+    assert_snapshot("confirm_modal_120x36_zh-CN", 120, 36, &mut app);
 
-            app.overview = true;
-            let overview = compact(&render(&app, 120, 36));
-            let public = app.ctx.i18n.text("dash.public_age").replace(' ', "");
-            assert!(overview.contains(&format!("{public}12s")), "{overview}");
-        }
-    }
+    // 12. Compact 80x24 Floating Sidebar Overlay (`[`)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    app.sidebar_overlay = true;
+    assert_snapshot("sidebar_overlay_80x24_zh-CN", 80, 24, &mut app);
+
+    // 13. Interactive Terminal Prompt Preview Studio (`terminal.preview`)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    let term_group = super::state::GROUPS
+        .iter()
+        .position(|g| *g == "terminal")
+        .unwrap();
+    app.goto_nav(NavTarget::Group(term_group));
+    app.open_prompt_preview();
+    assert_snapshot("prompt_preview_studio_120x36_zh-CN", 120, 36, &mut app);
+
+    // 14. Split-Pane Terminal Beautification Form with Live Preview (`terminal.apply`)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    let term_apply = actions::find("terminal.apply").unwrap();
+    let mut form = app.make_form(term_apply, FormMode::Run).unwrap();
+    form.values[1].replace("box".into());
+    form.values[2].replace("tokyo-night".into());
+    form.values[3].replace("on".into());
+    app.form = Some(form);
+    assert_snapshot("form_terminal_apply_120x36_zh-CN", 120, 36, &mut app);
+}
+
+#[test]
+fn mobile_tui_snapshot_matrix() {
+    use super::docker::fixture::fixture_docker_state;
+    use crate::ops::docker::model::DockerTab;
+
+    // 1. iOS Termius 59x24 Overview (stacked metrics + unified quick actions card)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    assert_snapshot("overview_mobile_59x24_zh-CN", 59, 24, &mut app);
+
+    // 2. iOS Termius 59x24 System Workbench (stacked list + section pills + compact inspector)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    app.goto_nav(NavTarget::Group(0));
+    assert_snapshot("workbench_mobile_59x24_zh-CN", 59, 24, &mut app);
+
+    // 3. iOS Termius 59x24 Docker Containers Workspace (stacked list + inspector + quick buttons)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    app.docker = fixture_docker_state(app.now);
+    app.open_docker(DockerTab::Containers, false, false);
+    assert_snapshot("docker_mobile_59x24_zh-CN", 59, 24, &mut app);
+
+    // 4. iOS Termius 59x24 Interactive Prompt Preview Studio (stacked full-width preview)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    let term_group = super::state::GROUPS
+        .iter()
+        .position(|g| *g == "terminal")
+        .unwrap();
+    app.goto_nav(NavTarget::Group(term_group));
+    app.open_prompt_preview();
+    assert_snapshot("prompt_preview_mobile_59x24_zh-CN", 59, 24, &mut app);
+
+    // 5. Minimum Mobile Floor 40x16 Overview (en-US, ultra-compact metrics + unified quick actions)
+    let mut app = fixture_app("en-US", "obsidian", false);
+    assert_snapshot("overview_mobile_min_40x16_en-US", 40, 16, &mut app);
+}
+
+#[test]
+fn docker_tui_snapshot_matrix() {
+    use super::docker::{fixture::fixture_docker_state, state::ContainerSubTab};
+    use crate::ops::docker::model::DockerTab;
+
+    // 1. Wide Embedded Docker Containers Workbench (120x36, Obsidian, zh-CN)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    app.docker = fixture_docker_state(app.now);
+    app.open_docker(DockerTab::Containers, false, false);
+    assert_snapshot("docker_containers_120x36_zh-CN", 120, 36, &mut app);
+
+    // 2. Focus Fullscreen Mode with multi-select + Stats Sparklines & docker top (120x36, zh-CN)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    app.docker = fixture_docker_state(app.now);
+    app.open_docker(DockerTab::Containers, true, true);
+    app.docker.container_sub = ContainerSubTab::Stats;
+    app.docker.selected_ids[0].insert("c001nginx0000000000000001".into());
+    app.docker.selected_ids[0].insert("c002api000000000000000002".into());
+    assert_snapshot("docker_focus_stats_120x36_zh-CN", 120, 36, &mut app);
+
+    // 3. Compact 80x24 Stacked Docker Layout (zh-CN)
+    let mut app = fixture_app("zh-CN", "obsidian", true);
+    app.docker = fixture_docker_state(app.now);
+    app.open_docker(DockerTab::Containers, false, false);
+    assert_snapshot("docker_compact_80x24_zh-CN", 80, 24, &mut app);
+
+    // 4. Fullscreen Immersive Logs Viewport (120x36, en-US)
+    let mut app = fixture_app("en-US", "tokyo-night", true);
+    app.docker = fixture_docker_state(app.now);
+    app.open_docker(DockerTab::Containers, true, true);
+    app.docker.container_sub = ContainerSubTab::Logs;
+    app.docker.logs.fullscreen = true;
+    assert_snapshot("docker_logs_fullscreen_120x36_en-US", 120, 36, &mut app);
+
+    // 5. Pure ASCII Plain Theme at 80x24 (en-US)
+    let mut app = fixture_app("en-US", "plain", false);
+    app.docker = fixture_docker_state(app.now);
+    app.open_docker(DockerTab::Containers, true, true);
+    assert_snapshot("docker_plain_80x24_en-US", 80, 24, &mut app);
 }

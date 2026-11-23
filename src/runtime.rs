@@ -61,6 +61,8 @@ pub struct Context {
     pub events: Option<Sender<Event>>,
     pub yes: bool,
     pub interactive: bool,
+    /// Optional normalized HTTPS prefix for GitHub acceleration proxy (e.g. `https://gh-proxy.com/`).
+    pub github_proxy: Option<String>,
     pub(crate) environment: std::collections::BTreeMap<String, String>,
     recovering: bool,
 }
@@ -74,8 +76,44 @@ impl Context {
             events: None,
             yes,
             interactive: std::io::stdin().is_terminal(),
+            github_proxy: None,
             environment: std::collections::BTreeMap::new(),
             recovering: false,
+        }
+    }
+    /// Rewrites canonical GitHub HTTPS URLs through the configured acceleration proxy and logs
+    /// the active proxy prefix whenever rewriting occurs.
+    pub fn github_fetch_url(&self, url: &str) -> String {
+        let rewritten = crate::github_proxy::rewrite(url, self.github_proxy.as_deref());
+        if rewritten != url
+            && let Some(proxy) = &self.github_proxy
+        {
+            self.message("notice.github_proxy_using", proxy);
+        }
+        rewritten
+    }
+    /// Runs `fetch` against the proxied GitHub URL when acceleration is active.
+    /// For `api.github.com` metadata endpoints, if the proxy returns an error (for example
+    /// HTTP 403 from shared-IP rate limiting or a mirror that only serves download/raw paths),
+    /// logs a notice and retries directly against `https://api.github.com/...` once.
+    /// Cancellations (`error.cancelled`) are never retried.
+    pub(crate) fn with_github_url<T>(
+        &self,
+        url: &str,
+        mut fetch: impl FnMut(&str) -> Result<T>,
+    ) -> Result<T> {
+        let effective = self.github_fetch_url(url);
+        match fetch(&effective) {
+            Ok(value) => Ok(value),
+            Err(error)
+                if error.key != "error.cancelled"
+                    && effective != url
+                    && crate::github_proxy::is_github_api_url(url) =>
+            {
+                self.message("notice.github_proxy_api_fallback", url);
+                fetch(url)
+            }
+            Err(error) => Err(error),
         }
     }
     pub fn recovery(&self) -> Self {
@@ -354,7 +392,7 @@ impl Context {
         self.check()
     }
     pub fn download(&self, url: &str, target: &Path, seconds: u32) -> Result<()> {
-        self.download_as(url, target, seconds, None)
+        self.download_inner(url, target, seconds, None, true)
     }
     pub(crate) fn download_exact(
         &self,
@@ -364,13 +402,9 @@ impl Context {
         size: u64,
     ) -> Result<()> {
         self.check()?;
-        let parsed = url::Url::parse(url).map_err(|error| Error::new("error.url", error))?;
-        if parsed.scheme() != "https"
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-        {
-            return Err(Error::new("error.url", url));
-        }
+        validate_https_url(url)?;
+        let effective = self.github_fetch_url(url);
+        validate_https_url(&effective)?;
         let parent = target
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
@@ -394,7 +428,7 @@ impl Context {
             &max_size,
             "--output",
             "-",
-            url,
+            &effective,
         ];
         let result = self.command_with_stdout("curl", &args, true, move |stdout, _| {
             copy_bounded(stdout, output, size)?;
@@ -415,7 +449,8 @@ impl Context {
         Ok(())
     }
     /// Like [`Self::download`], identifying the client to servers that pick the response
-    /// format by User-Agent. `None` keeps curl's own identity.
+    /// format by User-Agent. `None` keeps curl's own identity. Never forwards private
+    /// subscription URLs through a third-party GitHub proxy.
     pub fn download_as(
         &self,
         url: &str,
@@ -423,35 +458,55 @@ impl Context {
         seconds: u32,
         agent: Option<&str>,
     ) -> Result<()> {
-        let parsed = url::Url::parse(url).map_err(|e| Error::new("error.url", e))?;
-        if parsed.scheme() != "https"
-            || !parsed.username().is_empty()
-            || parsed.password().is_some()
-        {
-            return Err(Error::new("error.url", url));
-        }
-        let seconds = seconds.to_string();
-        let mut args = vec![
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "-fSL",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            &seconds,
-        ];
-        if let Some(agent) = agent {
-            args.extend(["--user-agent", agent]);
-        }
-        args.extend(["--output", path(target)?, url]);
-        self.run("curl", &args)?;
-        if std::fs::metadata(target)?.len() == 0 {
-            return Err(Error::new("error.data", url));
-        }
-        Ok(())
+        self.download_inner(url, target, seconds, agent, false)
     }
+    fn download_inner(
+        &self,
+        url: &str,
+        target: &Path,
+        seconds: u32,
+        agent: Option<&str>,
+        accelerate_github: bool,
+    ) -> Result<()> {
+        validate_https_url(url)?;
+        let fetch = |effective: &str| -> Result<()> {
+            validate_https_url(effective)?;
+            let seconds = seconds.to_string();
+            let mut args = vec![
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "-fSL",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                &seconds,
+            ];
+            if let Some(agent) = agent {
+                args.extend(["--user-agent", agent]);
+            }
+            args.extend(["--output", path(target)?, effective]);
+            self.run("curl", &args)?;
+            if std::fs::metadata(target)?.len() == 0 {
+                return Err(Error::new("error.data", url));
+            }
+            Ok(())
+        };
+        if accelerate_github {
+            self.with_github_url(url, fetch)
+        } else {
+            fetch(url)
+        }
+    }
+}
+
+fn validate_https_url(url: &str) -> Result<()> {
+    let parsed = url::Url::parse(url).map_err(|e| Error::new("error.url", e))?;
+    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(Error::new("error.url", url));
+    }
+    Ok(())
 }
 
 fn copy_bounded(mut input: impl Read, mut output: impl Write, limit: u64) -> Result<()> {
@@ -769,5 +824,63 @@ mod tests {
             // No log line alongside the step, not even for a completed one.
             assert!(rx.try_recv().is_err());
         }
+    }
+
+    #[test]
+    fn with_github_url_falls_back_directly_only_for_github_api_non_cancelled_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        ctx.github_proxy = Some(crate::github_proxy::DEFAULT_URL.into());
+
+        // 1. Proxied api.github.com 403 error retries directly and succeeds.
+        let mut seen = Vec::new();
+        let api = "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest";
+        let result = ctx
+            .with_github_url(api, |url| {
+                seen.push(url.to_owned());
+                if url.starts_with(crate::github_proxy::DEFAULT_URL) {
+                    Err(Error::new("error.command", "curl: (22) 403"))
+                } else {
+                    Ok("direct-ok")
+                }
+            })
+            .unwrap();
+        assert_eq!(result, "direct-ok");
+        assert_eq!(
+            seen,
+            vec![
+                format!("{}{api}", crate::github_proxy::DEFAULT_URL),
+                api.into()
+            ]
+        );
+
+        // 2. Non-API GitHub download failures stay on the proxy and do not silently bypass it.
+        let mut seen = Vec::new();
+        let asset = "https://github.com/MetaCubeX/mihomo/releases/download/v1.0.0/mihomo.gz";
+        let err = ctx
+            .with_github_url(asset, |url| {
+                seen.push(url.to_owned());
+                Err::<(), _>(Error::new("error.command", "curl: (22) 403"))
+            })
+            .unwrap_err();
+        assert_eq!(err.key, "error.command");
+        assert_eq!(
+            seen,
+            vec![format!("{}{asset}", crate::github_proxy::DEFAULT_URL)]
+        );
+
+        // 3. Cancellation never triggers a retry even for api.github.com.
+        let mut seen = Vec::new();
+        let err = ctx
+            .with_github_url(api, |url| {
+                seen.push(url.to_owned());
+                Err::<(), _>(Error::new("error.cancelled", "curl"))
+            })
+            .unwrap_err();
+        assert_eq!(err.key, "error.cancelled");
+        assert_eq!(
+            seen,
+            vec![format!("{}{api}", crate::github_proxy::DEFAULT_URL)]
+        );
     }
 }

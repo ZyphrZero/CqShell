@@ -1,0 +1,56 @@
+# case docker_plain_80x24_en-US
+# size 80x24
+# theme plain
+# locale en-US
+  = Nav  * CqShell v0.1.5 | Docker > Containers               * USER   English  
++-[Docker [Focus]]----------------------------------------- v27.3.1 | 2.9 GiB -+
+| [1 Containers 5/6]  2 Compose 3   3 Images 4              > [[z] exit focus] |
+| ---------------------------------------------------------------------------- |
+|+----------------------------------------+ +- api-gateway -------------------+|
+||/ Filter items...  [a] All   [o] State^ | |[Overview]  Logs   Stats   Env   ||
+||     Name                  CPU   Mem    | |---------------------------------||
+||>[ ] * api-gateway          8.4%   318M | |Status     * Up 3 days (healthy) ||
+|| [ ] * nginx-proxy          1.2%    42M | |Image      ghcr.io/org/api:v4    ||
+|| [ ] * postgres-16          2.1%   612M | |Contain... c002api00000          ||
+|| [ ] * redis-cache          0.3%    28M | |Compose    prod-web / api        ||
+|| [ ] ~ worker-sync            -      -  | |Networks   prod_net (172.18.0.3) ||
+|| [ ] o backup-cron            -      -  | |Ports      0.0.0.0:8080->8080/tcp||
+||                                        | |Mounts     /srv/prod-web/confi...||
+||                                        | |Restart    unless-stopped (1)    ||
+||                                        | |Health     healthy               ||
+||                                        | |Command    --prod                ||
+||                                        | |                                 ||
+||                                        | | $ docker inspect api-gat... [y] ||
+||                                        | | [s] Stop   [u] restart          ||
+||                                        | | [e] shell   [l] logs            ||
+|+----------------------------------------+ +---------------------------------+|
++------------------------------------------------------------------------------+
+ [Up/Dn] move  [1-6] tabs  [Enter] actions  [s] start/stop  [u] restart         
+---
+0 1 7 reset reset bold
+0 9 9 reset reset bold
+0 37 10 reset reset bold
+1 2 16 reset reset bold
+2 2 18 reset reset bold
+2 62 16 reset reset bold
+4 46 13 reset reset bold
+5 45 10 reset reset bold
+6 3 3 reset reset bold
+6 7 4 reset reset bold
+6 29 3 reset reset bold
+6 35 3 reset reset bold
+7 2 1 reset reset bold
+7 7 1 green reset -
+7 9 11 reset reset bold
+7 56 21 green reset -
+8 7 1 green reset -
+9 7 1 green reset -
+10 7 1 green reset -
+10 56 14 cyan reset -
+11 7 1 yellow reset -
+15 56 7 green reset -
+23 1 7 reset reset bold
+23 15 5 reset reset bold
+23 27 7 reset reset bold
+23 44 3 reset reset bold
+23 60 3 reset reset bold

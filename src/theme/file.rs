@@ -1,3 +1,5 @@
+//! Custom theme file loading, strict validation, and TOML printing.
+
 use super::*;
 use std::{
     fmt, fs,
@@ -32,7 +34,7 @@ pub enum ThemeError {
         key: String,
         value: String,
     },
-    Enum {
+    Value {
         path: PathBuf,
         key: String,
         value: String,
@@ -40,31 +42,26 @@ pub enum ThemeError {
 }
 
 impl fmt::Display for ThemeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Id { path, id } => write!(
-                formatter,
-                "{}: invalid or reserved theme ID {id:?}",
-                path.display()
-            ),
-            Self::Io { path, detail } | Self::Toml { path, detail } => {
-                write!(formatter, "{}: {detail}", path.display())
+            Self::Id { path, id } => {
+                write!(f, "{}: invalid or reserved theme ID {id:?}", path.display())
             }
-            Self::Missing { path, key } => write!(formatter, "{}: missing {key}", path.display()),
-            Self::Unknown { path, key } => write!(formatter, "{}: unknown {key}", path.display()),
-            Self::Color { path, key, value } => write!(
-                formatter,
-                "{}: invalid color {key} = {value}",
-                path.display()
-            ),
-            Self::Enum { path, key, value } => write!(
-                formatter,
-                "{}: invalid value {key} = {value}",
-                path.display()
-            ),
+            Self::Io { path, detail } | Self::Toml { path, detail } => {
+                write!(f, "{}: {detail}", path.display())
+            }
+            Self::Missing { path, key } => write!(f, "{}: missing {key}", path.display()),
+            Self::Unknown { path, key } => write!(f, "{}: unknown {key}", path.display()),
+            Self::Color { path, key, value } => {
+                write!(f, "{}: invalid color {key} = {value}", path.display())
+            }
+            Self::Value { path, key, value } => {
+                write!(f, "{}: invalid value {key} = {value}", path.display())
+            }
         }
     }
 }
+
 impl std::error::Error for ThemeError {}
 
 #[derive(Debug, Clone)]
@@ -74,23 +71,24 @@ pub struct CustomTheme {
     pub result: Result<ThemeDefinition, ThemeError>,
 }
 
-fn invalid(path: &Path, key: &str, value: &Value) -> ThemeError {
-    ThemeError::Enum {
+fn invalid_value(path: &Path, key: &str, value: &Value) -> ThemeError {
+    ThemeError::Value {
         path: path.into(),
         key: key.into(),
         value: value.to_string(),
     }
 }
 
-fn table<'a>(
+fn require_table<'a>(
     value: &'a Value,
     path: &Path,
     prefix: &str,
-    names: &[&str],
+    required: &[&str],
+    optional: &[&str],
 ) -> Result<&'a Map<String, Value>, ThemeError> {
     let table = value
         .as_table()
-        .ok_or_else(|| invalid(path, prefix, value))?;
+        .ok_or_else(|| invalid_value(path, prefix, value))?;
     let key = |name: &str| {
         if prefix.is_empty() {
             name.into()
@@ -98,7 +96,7 @@ fn table<'a>(
             format!("{prefix}.{name}")
         }
     };
-    for name in names {
+    for name in required {
         if !table.contains_key(*name) {
             return Err(ThemeError::Missing {
                 path: path.into(),
@@ -106,26 +104,16 @@ fn table<'a>(
             });
         }
     }
-    if let Some(name) = table.keys().find(|name| !names.contains(&name.as_str())) {
+    if let Some(name) = table
+        .keys()
+        .find(|name| !required.contains(&name.as_str()) && !optional.contains(&name.as_str()))
+    {
         return Err(ThemeError::Unknown {
             path: path.into(),
             key: key(name),
         });
     }
     Ok(table)
-}
-
-fn enumeration<T>(
-    table: &Map<String, Value>,
-    name: &str,
-    path: &Path,
-    parse: fn(&str) -> Option<T>,
-) -> Result<T, ThemeError> {
-    let value = &table[name];
-    value
-        .as_str()
-        .and_then(parse)
-        .ok_or_else(|| invalid(path, &format!("patterns.{name}"), value))
 }
 
 pub fn parse(id: &str, text: &str) -> Result<ThemeDefinition, ThemeError> {
@@ -145,61 +133,51 @@ fn parse_at(id: &str, text: &str, path: &Path) -> Result<ThemeDefinition, ThemeE
             id: id.into(),
         });
     }
-    let value: Value = toml::from_str(text).map_err(|error: toml::de::Error| ThemeError::Toml {
+    let value: Value = toml::from_str(text).map_err(|error| ThemeError::Toml {
         path: path.into(),
         detail: error.to_string(),
     })?;
-    let root = table(
+    let root = require_table(
         &value,
         path,
         "",
-        &["name", "background", "colors", "patterns"],
+        &["name", "appearance", "colors"],
+        &["style"],
     )?;
     let name = root["name"]
         .as_str()
-        .filter(|name| !name.chars().any(char::is_control))
-        .ok_or_else(|| invalid(path, "name", &root["name"]))?;
-    let background = root["background"]
+        .filter(|name| !name.trim().is_empty() && !name.chars().any(char::is_control))
+        .ok_or_else(|| invalid_value(path, "name", &root["name"]))?;
+    let appearance = root["appearance"]
         .as_str()
-        .and_then(BackgroundKind::parse)
-        .filter(|kind| *kind != BackgroundKind::Follow)
-        .ok_or_else(|| invalid(path, "background", &root["background"]))?;
-    let colors = table(&root["colors"], path, "colors", &COLOR_NAMES)?;
-    let mut palette = [Color::Default; 24];
-    for (index, name) in COLOR_NAMES.iter().enumerate() {
-        palette[index] = colors[*name]
+        .and_then(Appearance::parse)
+        .ok_or_else(|| invalid_value(path, "appearance", &root["appearance"]))?;
+    let default_style = match root.get("style") {
+        Some(raw) => raw
+            .as_str()
+            .and_then(UiStyle::parse)
+            .ok_or_else(|| invalid_value(path, "style", raw))?,
+        None => UiStyle::Rounded,
+    };
+    let colors = require_table(&root["colors"], path, "colors", &COLOR_NAMES, &[])?;
+    let mut palette = [Color::Default; 20];
+    for (index, key) in COLOR_NAMES.iter().enumerate() {
+        palette[index] = colors[*key]
             .as_str()
             .and_then(Color::parse)
             .ok_or_else(|| ThemeError::Color {
                 path: path.into(),
-                key: format!("colors.{name}"),
-                value: colors[*name].to_string(),
+                key: format!("colors.{key}"),
+                value: colors[*key].to_string(),
             })?;
     }
-    let patterns = table(&root["patterns"], path, "patterns", &PATTERN_NAMES)?;
-    let patterns = Patterns {
-        border: enumeration(patterns, "border", path, BorderStyle::parse)?,
-        title: enumeration(patterns, "title", path, TitleStyle::parse)?,
-        bar: enumeration(patterns, "bar", path, BarStyle::parse)?,
-        sparkline: enumeration(patterns, "sparkline", path, SparklineStyle::parse)?,
-        selection: enumeration(patterns, "selection", path, SelectionStyle::parse)?,
-        checkbox: enumeration(patterns, "checkbox", path, CheckboxStyle::parse)?,
-        dot: enumeration(patterns, "dot", path, DotStyle::parse)?,
-        rule: enumeration(patterns, "rule", path, RuleStyle::parse)?,
-        keys: enumeration(patterns, "keys", path, KeyStyle::parse)?,
-        background: enumeration(patterns, "background", path, BackgroundStyle::parse)?,
-        gradient: patterns["gradient"]
-            .as_bool()
-            .ok_or_else(|| invalid(path, "patterns.gradient", &patterns["gradient"]))?,
-        tertiary: enumeration(patterns, "tertiary", path, TertiaryStyle::parse)?,
-        glyphs: enumeration(patterns, "glyphs", path, GlyphSet::parse)?,
-    };
     Ok(ThemeDefinition {
         id: id.into(),
         name: ThemeName::Custom(name.into()),
+        appearance,
         palette: PaletteSource::Fixed(Palette::from_colors(palette)),
-        patterns,
-        background,
+        default_style,
+        paint_bg: true,
     })
 }
 
@@ -256,33 +234,78 @@ pub fn load_dir(directory: &Path) -> Vec<CustomTheme> {
 
 pub fn print(definition: &ThemeDefinition) -> String {
     let PaletteSource::Fixed(palette) = definition.palette else {
-        panic!("only fixed palettes can be written");
+        panic!("only fixed palettes can be printed");
     };
     let ThemeName::Custom(name) = &definition.name else {
         panic!("a custom theme name is required");
     };
     assert!(matches!(
-        definition.background,
-        BackgroundKind::Dark | BackgroundKind::Light
+        definition.appearance,
+        Appearance::Dark | Appearance::Light
     ));
     let mut output = format!(
-        "name = {}\nbackground = \"{}\"\n\n[colors]\n",
+        "name = {}\nappearance = \"{}\"\n",
         Value::String(name.clone()),
-        definition.background.name()
+        definition.appearance.name()
     );
-    for (name, role) in COLOR_NAMES.iter().zip(Role::ALL) {
-        output.push_str(&format!("{name} = \"{}\"\n", palette.get(role).value()));
+    if definition.default_style != UiStyle::Rounded {
+        output.push_str(&format!("style = \"{}\"\n", definition.default_style.id()));
     }
-    output.push_str("\n[patterns]\n");
-    for (name, value) in PATTERN_NAMES.iter().zip(definition.patterns.values()) {
-        if *name == "gradient" {
-            output.push_str(&format!("{name} = {value}\n"));
-        } else {
-            output.push_str(&format!("{name} = \"{value}\"\n"));
-        }
+    output.push_str("\n[colors]\n");
+    for (key, role) in COLOR_NAMES.iter().zip(Role::ALL) {
+        output.push_str(&format!("{key} = \"{}\"\n", palette.get(role).value()));
     }
     output
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_theme_round_trips_and_rejects_invalid_inputs() {
+        let mut def = builtin::obsidian();
+        def.id = "my-slate".into();
+        def.name = ThemeName::Custom("My Slate".into());
+        let printed = print(&def);
+        let parsed = parse("my-slate", &printed).expect("valid custom theme");
+        assert_eq!(parsed, def);
+
+        // Built-in ID is rejected
+        assert!(matches!(
+            parse("obsidian", &printed),
+            Err(ThemeError::Id { .. })
+        ));
+        // Unknown key is rejected
+        assert!(matches!(
+            parse("my-slate", &format!("{printed}\nextra = 1\n")),
+            Err(ThemeError::Unknown { .. })
+        ));
+        // Missing key is rejected
+        let missing = printed.replacen("danger = \"#fb7185\"\n", "", 1);
+        assert!(matches!(
+            parse("my-slate", &missing),
+            Err(ThemeError::Missing { .. })
+        ));
+        // Invalid color is rejected
+        let bad_color = printed.replacen("#fb7185", "#xyz", 1);
+        assert!(matches!(
+            parse("my-slate", &bad_color),
+            Err(ThemeError::Color { .. })
+        ));
+        // Optional style defaults to Rounded when omitted
+        let without_style = printed.replacen("style = \"bento\"\n", "", 1);
+        let parsed_default = parse("my-slate", &without_style).expect("style is optional");
+        assert_eq!(parsed_default.default_style, UiStyle::Rounded);
+        // Valid explicit style parses cleanly
+        let with_hud = printed.replacen("style = \"bento\"", "style = \"hud\"", 1);
+        let parsed_hud = parse("my-slate", &with_hud).expect("valid explicit style");
+        assert_eq!(parsed_hud.default_style, UiStyle::Hud);
+        // Invalid explicit style is rejected with Value error
+        let bad_style = printed.replacen("style = \"bento\"", "style = \"neon-x\"", 1);
+        assert!(matches!(
+            parse("my-slate", &bad_style),
+            Err(ThemeError::Value { key, .. }) if key == "style"
+        ));
+    }
+}
