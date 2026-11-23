@@ -324,8 +324,7 @@ impl Context {
                 });
             }
         }
-        let mut child = command
-            .spawn()
+        let mut child = retry_executable_busy(self, || command.spawn())
             .map_err(|e| Error::new("error.command", format!("{program}: {e}")))?;
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
@@ -381,11 +380,12 @@ impl Context {
         if self.events.is_some() {
             return Err(Error::new("error.tty", "terminal ownership"));
         }
-        let status = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .envs(&self.environment)
-            .env("PATH", self.search_path())
-            .status()?;
+            .env("PATH", self.search_path());
+        let status = retry_executable_busy(self, || command.status())?;
         if !status.success() {
             return Err(Error::new("error.command", format!("{program}: {status}")));
         }
@@ -507,6 +507,30 @@ fn validate_https_url(url: &str) -> Result<()> {
         return Err(Error::new("error.url", url));
     }
     Ok(())
+}
+
+/// Retry transient `ETXTBSY` (`ExecutableFileBusy`) errors that can occur on Linux when another
+/// thread forks while this thread has just finished writing a newly unpacked executable.
+fn retry_executable_busy<T>(
+    ctx: &Context,
+    mut op: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    const BACKOFF_MS: [u64; 5] = [5, 10, 20, 40, 80];
+    let mut attempt = 0usize;
+    loop {
+        match op() {
+            Ok(value) => return Ok(value),
+            Err(err)
+                if err.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && attempt < BACKOFF_MS.len()
+                    && (ctx.recovering || !ctx.cancel.load(Ordering::SeqCst)) =>
+            {
+                thread::sleep(Duration::from_millis(BACKOFF_MS[attempt]));
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 fn copy_bounded(mut input: impl Read, mut output: impl Write, limit: u64) -> Result<()> {
@@ -882,5 +906,46 @@ mod tests {
             seen,
             vec![format!("{}{api}", crate::github_proxy::DEFAULT_URL)]
         );
+    }
+
+    #[test]
+    fn retry_executable_busy_recovers_transient_etxtbsy_and_preserves_other_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+
+        // Transient ExecutableFileBusy succeeds after brief retries.
+        let mut attempts = 0usize;
+        let value = retry_executable_busy(&ctx, || {
+            attempts += 1;
+            if attempts < 3 {
+                Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok("spawned")
+            }
+        })
+        .unwrap();
+        assert_eq!(value, "spawned");
+        assert_eq!(attempts, 3);
+
+        // Non-busy errors fail immediately without retrying.
+        let mut attempts = 0usize;
+        let err = retry_executable_busy(&ctx, || {
+            attempts += 1;
+            Err::<(), _>(std::io::Error::from(std::io::ErrorKind::NotFound))
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(attempts, 1);
+
+        // Cancelled context does not retry ExecutableFileBusy.
+        ctx.cancel.store(true, Ordering::SeqCst);
+        let mut attempts = 0usize;
+        let err = retry_executable_busy(&ctx, || {
+            attempts += 1;
+            Err::<(), _>(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::ExecutableFileBusy);
+        assert_eq!(attempts, 1);
     }
 }
