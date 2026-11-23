@@ -11,13 +11,49 @@
 
 简体中文 | [English](README.en.md)
 
-[快速安装](#快速安装) · [功能一览](#功能一览) · [Docker 工作台](#docker-专属-tui-工作台) · [TUI 交互与主题](#tui-交互与主题) · [CLI 编排](#cli-与自动化编排) · [友情链接](#友情链接)
+[界面预览](#界面预览) · [快速安装](#快速安装) · [功能一览](#功能一览) · [Docker 工作台](#docker-专属-tui-工作台) · [TUI 交互与主题](#tui-交互与主题) · [CLI 编排](#cli-与自动化编排) · [友情链接](#友情链接)
 
 </div>
 
 ---
 
 **CqShell（`cqs`）** 是一个单二进制分发的 Rust / Ratatui 服务器运维工具箱，将系统维护、软件源测速换源、BBRv3 内核管理、TCP 调优、SSH 加固、专属 Docker 工作台、Mihomo 全栈代理、AI Agent 工具安装、终端美化与服务器体检收拢于一套高响应、可回滚的双语终端界面与自动化 CLI 中。
+
+## 界面预览
+
+### 桌面端 TUI（概览仪表盘 · 一键优化 · Mihomo 代理工作台）
+
+<p align="center">
+  <img src="assets/screenshots/desktop-overview-hud.png" alt="CqShell 概览仪表盘（精密角框 HUD 风格）" width="100%" />
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/desktop-optimization-checklist.png" alt="一键优化批处理清单" width="100%" /><br />
+      <sub>一键优化批处理清单与实时状态对比</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/desktop-mihomo-workbench.png" alt="Mihomo 代理双栏工作台" width="100%" /><br />
+      <sub>Mihomo 代理工作台 · 分区胶囊与命令预览</sub>
+    </td>
+  </tr>
+</table>
+
+### 移动端响应式适配（iOS Termius 竖屏 + 软键盘）
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/mobile-overview.png" alt="移动端堆叠概览仪表盘" width="320" /><br />
+      <sub>自动切换堆叠概览卡片与紧凑快捷操作列表</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/mobile-sidebar-drawer.png" alt="移动端浮层侧边导航抽屉" width="320" /><br />
+      <sub>可随时呼出/收起的浮层导航抽屉（按 <code>[</code> 或点击左上角）</sub>
+    </td>
+  </tr>
+</table>
 
 ## 核心特性
 

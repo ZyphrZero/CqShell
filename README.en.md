@@ -11,13 +11,49 @@
 
 [简体中文](README.md) | English
 
-[Quick Install](#quick-install) · [Features](#feature-overview) · [Docker Workspace](#dedicated-docker-tui-workspace) · [TUI & Themes](#tui-controls--themes) · [CLI Automation](#cli--batch-automation) · [Community](#community--friend-links)
+[Screenshots](#screenshots) · [Quick Install](#quick-install) · [Features](#feature-overview) · [Docker Workspace](#dedicated-docker-tui-workspace) · [TUI & Themes](#tui-controls--themes) · [CLI Automation](#cli--batch-automation) · [Community](#community--friend-links)
 
 </div>
 
 ---
 
 **CqShell (`cqs`)** is a single-binary Rust / Ratatui server operations toolbox for **Debian and Ubuntu**. It brings system maintenance, mirror benchmarking, BBRv3 kernel management, TCP tuning, SSH hardening, a dedicated Docker TUI workspace, full-stack Mihomo proxy management, standalone AI agent CLI installers, prompt customization, and server benchmarks into one responsive, recoverable bilingual TUI and scriptable CLI.
+
+## Screenshots
+
+### Desktop TUI (Overview Dashboard · One-Click Optimization · Mihomo Workbench)
+
+<p align="center">
+  <img src="assets/screenshots/desktop-overview-hud.png" alt="CqShell Overview Dashboard (Cyber HUD style)" width="100%" />
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/desktop-optimization-checklist.png" alt="One-Click Optimization Checklist" width="100%" /><br />
+      <sub>One-Click Optimization batch checklist with live host state</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/desktop-mihomo-workbench.png" alt="Mihomo Proxy Workbench" width="100%" /><br />
+      <sub>Mihomo Proxy dual-pane workbench with section pills & CLI preview</sub>
+    </td>
+  </tr>
+</table>
+
+### Mobile Responsive Layout (iOS Termius Portrait + On-Screen Keyboard)
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/mobile-overview.png" alt="Mobile Stacked Overview Dashboard" width="320" /><br />
+      <sub>Stacked telemetry cards and compact quick actions on narrow screens</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/screenshots/mobile-sidebar-drawer.png" alt="Mobile Overlay Navigation Drawer" width="320" /><br />
+      <sub>Floating overlay navigation drawer (press <code>[</code> or tap the top-left button)</sub>
+    </td>
+  </tr>
+</table>
 
 ## Highlights
 
