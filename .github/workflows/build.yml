@@ -128,6 +128,11 @@ jobs:
           if [[ "${VERSION%%+*}" == *-* ]]; then
             flags+=(--prerelease)
           fi
+          if [[ -f "docs/releases/$TAG.md" ]]; then
+            flags+=(--notes-file "docs/releases/$TAG.md")
+          else
+            flags+=(--generate-notes)
+          fi
           gh release create "$TAG" release/* --verify-tag --draft \
-            --title "CqShell $TAG" --generate-notes "${flags[@]}"
+            --title "CqShell $TAG" "${flags[@]}"
           gh release edit "$TAG" --draft=false

@@ -335,6 +335,7 @@ cqs --yes run clash.start
 | [docs/IPQUALITY.md](docs/IPQUALITY.md) | xykt/IPQuality 接入边界、隐私模式与脚本校验说明 |
 | [docs/I18N.md](docs/I18N.md) | TOML 多语言词典结构与新增翻译指南 |
 | [docs/RELEASING.md](docs/RELEASING.md) | 安装器参数、GitHub 下载代理、CI 构建与发布流程 |
+| [CHANGELOG.md](CHANGELOG.md) | 完整版本更新日志与各版发布说明（[`docs/releases/`](docs/releases/)） |
 
 ### 本地开发与验证
 

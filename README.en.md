@@ -329,6 +329,7 @@ cqs --yes run clash.start
 | [docs/IPQUALITY.md](docs/IPQUALITY.md) | xykt/IPQuality integration, privacy defaults & checksum checks |
 | [docs/I18N.md](docs/I18N.md) | TOML localization schema & adding new languages |
 | [docs/RELEASING.md](docs/RELEASING.md) | Installer flags, GitHub download proxy, CI & release workflow |
+| [CHANGELOG.md](CHANGELOG.md) | Full release changelog & version notes ([`docs/releases/`](docs/releases/)) |
 
 ### Local Verification
 
