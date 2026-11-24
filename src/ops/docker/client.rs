@@ -512,13 +512,13 @@ pub fn fetch_image_inspect(ctx: &Context, id: &str) -> Result<ImageInspect> {
     parse_image_inspect(&res.stdout, &hist)
 }
 
-/// Reads a Compose YAML file safely with a strict 256 KiB cap.
+/// Reads a Compose YAML file safely with path checks, a strict 256 KiB cap, and control sanitization.
 pub fn read_compose_file(path: &str) -> Result<String> {
+    use std::io::Read;
     let p = Path::new(path);
-    if !p.is_absolute() {
-        return Err(Error::new("error.input", path));
-    }
-    let meta = fs::metadata(p)?;
+    crate::storage::check_path(p, true)?;
+    let file = fs::File::open(p)?;
+    let meta = file.metadata()?;
     if !meta.is_file() {
         return Err(Error::new("error.input", format!("not a file: {path}")));
     }
@@ -528,7 +528,17 @@ pub fn read_compose_file(path: &str) -> Result<String> {
             format!("compose file exceeds 256 KiB limit: {path}"),
         ));
     }
-    Ok(fs::read_to_string(p)?)
+    let mut bytes = Vec::new();
+    file.take(MAX_COMPOSE_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_COMPOSE_FILE_BYTES {
+        return Err(Error::new(
+            "error.data",
+            format!("compose file exceeds 256 KiB limit: {path}"),
+        ));
+    }
+    let raw = String::from_utf8(bytes).map_err(|e| Error::new("error.data", e))?;
+    Ok(crate::runtime::sanitize(&raw))
 }
 
 /// Cross-links containers with Compose projects, images, and volumes so reference badges and
@@ -553,7 +563,26 @@ pub fn cross_link_snapshot(snap: &mut DockerSnapshot) {
         }
     }
 
-    // 2. Cross-link Compose projects with containers + synthesize missing projects from labels
+    // 2. Cross-link Volumes `used_by`
+    for vol in &mut snap.volumes {
+        vol.used_by.clear();
+    }
+    for c in &snap.containers {
+        for vol in &mut snap.volumes {
+            let mounted = c.mounts.iter().any(|m| {
+                m == &vol.name
+                    || (!vol.mountpoint.is_empty() && m == &vol.mountpoint)
+                    || (!vol.name.is_empty()
+                        && m.ends_with(&format!("/volumes/{}/_data", vol.name)))
+            });
+            if mounted && !vol.used_by.contains(&c.name) {
+                vol.used_by.push(c.name.clone());
+            }
+        }
+    }
+
+    // 3. Cross-link Compose projects with containers + synthesize missing projects from labels
+    snap.compose.retain(|proj| !proj.synthesized_from_labels);
     let mut by_project: BTreeMap<String, Vec<&ContainerItem>> = BTreeMap::new();
     for c in &snap.containers {
         if let Some(proj) = &c.compose_project {
@@ -576,6 +605,10 @@ pub fn cross_link_snapshot(snap: &mut DockerSnapshot) {
             {
                 proj.config_files = split_config_files(&cf);
             }
+        } else {
+            proj.total_count = 0;
+            proj.running_count = 0;
+            proj.container_ids.clear();
         }
     }
     for (name, members) in by_project {
@@ -722,12 +755,14 @@ pub fn parse_containers_ndjson(raw: &str) -> Vec<ContainerItem> {
             .filter(|s| !s.is_empty())
             .map(ToOwned::to_owned)
             .collect();
-        let mounts_count = row
+        let mounts: Vec<String> = row
             .mounts
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .count();
+            .map(ToOwned::to_owned)
+            .collect();
+        let mounts_count = mounts.len();
         let state = ContainerState::parse(&row.state);
         let health = ContainerHealth::from_status(&row.status);
         let size_bytes = parse_size_bytes(&row.size);
@@ -752,6 +787,7 @@ pub fn parse_containers_ndjson(raw: &str) -> Vec<ContainerItem> {
             health,
             ports,
             networks,
+            mounts,
             mounts_count,
             size: row.size,
             size_bytes,
@@ -1455,19 +1491,32 @@ pub fn parse_image_inspect(raw: &str, history_ndjson: &str) -> Result<ImageInspe
 }
 
 pub fn parse_docker_top(raw: &str) -> Vec<ContainerTopRow> {
+    fn next_field(rest: &mut &str) -> String {
+        let s = rest.trim_start();
+        match s.find(char::is_whitespace) {
+            Some(pos) => {
+                *rest = &s[pos..];
+                s[..pos].to_owned()
+            }
+            None => {
+                *rest = "";
+                s.to_owned()
+            }
+        }
+    }
+
     let mut rows = Vec::new();
     for line in raw.lines().skip(1) {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+        let mut rest = line.trim();
+        if rest.is_empty() {
             continue;
         }
-        let mut parts = trimmed.splitn(6, char::is_whitespace);
-        let uid = parts.next().unwrap_or_default().trim().to_owned();
-        let pid = parts.next().unwrap_or_default().trim().to_owned();
-        let cpu = parts.next().unwrap_or_default().trim().to_owned();
-        let mem = parts.next().unwrap_or_default().trim().to_owned();
-        let time = parts.next().unwrap_or_default().trim().to_owned();
-        let command = parts.next().unwrap_or_default().trim().to_owned();
+        let uid = next_field(&mut rest);
+        let pid = next_field(&mut rest);
+        let cpu = next_field(&mut rest);
+        let mem = next_field(&mut rest);
+        let time = next_field(&mut rest);
+        let command = rest.trim_start().to_owned();
         if !pid.is_empty() {
             rows.push(ContainerTopRow {
                 uid,

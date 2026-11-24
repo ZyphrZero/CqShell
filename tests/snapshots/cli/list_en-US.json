@@ -331,7 +331,7 @@
   },
   {
     "available": true,
-    "description": "Configure and toggle an HTTPS GitHub acceleration proxy prefix (default https://gh-proxy.com/) for Mihomo, BBRv3 kernels, Agent tools, Starship, and pinned GitHub scripts. Applies only to canonical GitHub hosts while keeping strict HTTPS and SHA-256 verification.",
+    "description": "Configure and toggle an HTTPS GitHub acceleration proxy prefix (default https://gh-proxy.com/) for Mihomo, BBRv3 kernels, Agent tools, gh, Starship, and pinned GitHub scripts. Applies only to canonical GitHub hosts while keeping strict HTTPS and SHA-256 verification.",
     "group": "network",
     "id": "github.proxy",
     "interactive": false,
@@ -1349,6 +1349,30 @@
   },
   {
     "available": true,
+    "description": "Install the git distributed version control system through apt.",
+    "group": "tools",
+    "id": "tools.git",
+    "interactive": false,
+    "label": "git version control",
+    "mutates": true,
+    "parameters": [],
+    "root": true,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Download the latest official Linux .deb from cli/cli Releases, verify SHA-256 and architecture, and install through apt.",
+    "group": "tools",
+    "id": "tools.gh",
+    "interactive": false,
+    "label": "gh GitHub CLI",
+    "mutates": true,
+    "parameters": [],
+    "root": true,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "Install a selected package; all also installs zsh and Starship without enabling prompt customization.",
     "group": "tools",
     "id": "tools.install",
@@ -1368,7 +1392,9 @@
           "iftop",
           "btop",
           "gdu",
-          "fzf"
+          "fzf",
+          "git",
+          "gh"
         ],
         "default": "all",
         "name": "package",

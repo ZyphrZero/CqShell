@@ -1092,6 +1092,44 @@ fn edit_mixin(
     edit_mixin_inner(ctx, false, edit)
 }
 
+fn persist_running_mode(ctx: &Context, mode: &str) -> Result<()> {
+    ctx.check()?;
+    let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+    recover_interrupted_files(ctx)?;
+    ensure_layout(ctx)?;
+    storage::check_path(&ctx.paths.clash_mixin, true)?;
+    storage::check_path(&ctx.paths.clash_runtime, true)?;
+    let mut mixin = if ctx.paths.clash_mixin.is_file() {
+        serde_yaml::from_slice::<Value>(&fs::read(&ctx.paths.clash_mixin)?)
+            .map_err(|_| Error::new("error.data", "invalid Mixin YAML"))?
+    } else {
+        Value::Mapping(Default::default())
+    };
+    mixin
+        .as_mapping_mut()
+        .ok_or_else(|| Error::new("error.data", "Mixin root must be a map"))?
+        .insert(Value::String("mode".into()), Value::String(mode.into()));
+    let mixin_bytes = serde_yaml::to_string(&mixin)?.into_bytes();
+
+    let mut updates = vec![(
+        ctx.paths.clash_mixin.clone(),
+        Some(storage::Saved::new(&mixin_bytes, 0o600)),
+    )];
+    if ctx.paths.clash_runtime.is_file() {
+        let mut rt_val: Value = serde_yaml::from_slice(&fs::read(&ctx.paths.clash_runtime)?)
+            .map_err(|_| Error::new("error.data", "invalid runtime YAML"))?;
+        if let Some(rt_map) = rt_val.as_mapping_mut() {
+            rt_map.insert(Value::String("mode".into()), Value::String(mode.into()));
+            let rt_bytes = serde_yaml::to_string(&rt_val)?.into_bytes();
+            updates.push((
+                ctx.paths.clash_runtime.clone(),
+                Some(storage::Saved::new(&rt_bytes, 0o600)),
+            ));
+        }
+    }
+    commit_files(ctx, &updates)
+}
+
 fn edit_mixin_inner(
     ctx: &Context,
     allow_running: bool,
@@ -1416,7 +1454,7 @@ fn recover_interrupted_files(ctx: &Context) -> Result<()> {
     let bytes = fs::read(&pending)?;
     let before: BTreeMap<PathBuf, Option<storage::Saved>> = serde_json::from_slice(&bytes)
         .map_err(|e| Error::new("error.pending", format!("{}: {e}", pending.display())))?;
-    for path in before.keys() {
+    for (path, saved) in &before {
         let profile_dir = ctx.paths.clash_data.join("profiles");
         let profile_file = path.parent() == Some(profile_dir.as_path())
             && path
@@ -1424,7 +1462,12 @@ fn recover_interrupted_files(ctx: &Context) -> Result<()> {
                 .and_then(|value| value.to_str())
                 .and_then(|name| name.strip_suffix(".yaml"))
                 .is_some_and(|stem| {
-                    stem.len() == 24 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    !stem.is_empty()
+                        && !stem.starts_with('.')
+                        && !stem.contains("..")
+                        && !stem
+                            .chars()
+                            .any(|c| c.is_control() || matches!(c, '/' | '\\'))
                 });
         if path != &ctx.paths.clash_profiles
             && path != &ctx.paths.clash_mixin
@@ -1435,6 +1478,9 @@ fn recover_interrupted_files(ctx: &Context) -> Result<()> {
             return Err(Error::new("error.pending", path.display()));
         }
         storage::check_path(path, true)?;
+        if let Some(s) = saved {
+            s.bytes()?;
+        }
     }
     for (path, saved) in before {
         storage::Saved::write(&path, &saved)?;

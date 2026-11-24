@@ -92,16 +92,43 @@ fn draw_filter_bar(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Colo
     let input_w = right_limit.saturating_sub(geom.filter_bar.x) as usize;
 
     if dk.filtering {
-        let prompt = format!("/ {}_", dk.filter.text);
+        let prefix = "/ ";
         buf.set_stringn(
             geom.filter_bar.x,
             geom.filter_bar.y,
-            clip_ascii_safe(&prompt, input_w, ascii),
+            prefix,
             input_w,
             tokens::fg(theme, Role::Accent)
                 .bg(bg)
                 .add_modifier(Modifier::BOLD),
         );
+        let val_w = input_w.saturating_sub(2);
+        if val_w > 0 {
+            let (shown, cur_col) = dk.filter.visible(val_w);
+            let vx = geom.filter_bar.x + 2;
+            buf.set_stringn(
+                vx,
+                geom.filter_bar.y,
+                &shown,
+                val_w,
+                tokens::fg(theme, Role::Accent)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+            let cx = vx + cur_col.min(val_w.saturating_sub(1) as u16);
+            if cx < right_limit {
+                let cell = &mut buf[(cx, geom.filter_bar.y)];
+                if cell.symbol().is_empty() || cell.symbol() == " " {
+                    cell.set_symbol("_");
+                }
+                cell.set_style(
+                    Style::default()
+                        .fg(tokens::color(theme, Role::OnAccent))
+                        .bg(tokens::color(theme, Role::Accent))
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+        }
     } else if !dk.filter.text.is_empty() {
         let prompt = format!("/ {} (Esc)", dk.filter.text);
         buf.set_stringn(
@@ -442,17 +469,10 @@ fn draw_compose_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Co
     let ascii = theme.flags.ascii;
     let buf = frame.buffer_mut();
 
-    let no_plugin = app
-        .docker
-        .snapshot
-        .engine
-        .as_ref()
-        .is_some_and(|e| e.compose_version.is_none());
-    let mut start_y = inner.y;
-    if no_plugin && inner.height >= 3 {
+    if let Some(warn_y) = geom.compose_warn_y {
         buf.set_stringn(
             inner.x + 1,
-            start_y,
+            warn_y,
             clip_ascii_safe(
                 i.text("docker.empty.no_compose_plugin"),
                 inner.width.saturating_sub(2) as usize,
@@ -461,27 +481,15 @@ fn draw_compose_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Co
             inner.width.saturating_sub(2) as usize,
             tokens::fg(theme, Role::Warning).bg(bg),
         );
-        start_y += 1;
     }
 
     if items.is_empty() {
-        draw_empty_list(
-            app,
-            frame,
-            Rect::new(
-                inner.x,
-                start_y,
-                inner.width,
-                inner.bottom().saturating_sub(start_y),
-            ),
-            "docker.empty.no_compose",
-            bg,
-        );
+        draw_empty_list(app, frame, inner, "docker.empty.no_compose", bg);
         return;
     }
 
     let selected = app.docker.cursor();
-    let avail_h = inner.bottom().saturating_sub(start_y) as usize;
+    let avail_h = inner.height as usize;
     for (offset, p) in items
         .iter()
         .skip(geom.list_scroll)
@@ -489,7 +497,7 @@ fn draw_compose_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Co
         .enumerate()
     {
         let idx = geom.list_scroll + offset;
-        let y = start_y + offset as u16;
+        let y = inner.y + offset as u16;
         let row_rect = Rect::new(inner.x, y, inner.width, 1);
         let active = idx == selected;
         let row_bg = paint_selectable_row(app, buf, row_rect, active, bg);

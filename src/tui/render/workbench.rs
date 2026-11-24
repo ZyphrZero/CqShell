@@ -941,12 +941,12 @@ fn draw_inspector(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, group:
     let body_h = inner
         .height
         .saturating_sub(if geom.inspector_cta.is_some() { 2 } else { 0 });
-    let scroll = app.inspector_scroll.min(
-        lines
-            .len()
-            .saturating_sub(body_h as usize)
-            .min(u16::MAX as usize) as u16,
-    );
+    let max_scroll = lines
+        .len()
+        .saturating_sub(body_h as usize)
+        .min(u16::MAX as usize) as u16;
+    app.max_inspector_scroll.set(max_scroll);
+    let scroll = app.inspector_scroll.min(max_scroll);
     let body_rect = Rect::new(inner.x, inner.y, inner.width, body_h);
     let sel_rows: Vec<SelectableRow> = lines
         .iter()
@@ -1231,10 +1231,46 @@ fn draw_optimization_plan(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry
     {
         selection::highlight_selection(frame.buffer_mut(), &sel, theme);
     }
-    if !jobs.is_empty()
-        && let Some(copy_rect) = geom.inspector_copy_btn
-    {
-        draw_inspector_copy_btn(app, frame.buffer_mut(), copy_rect, bg);
+    if !jobs.is_empty() {
+        if let Some(cta_rect) = geom.inspector_cta {
+            let action_hint = i.text("key.run_checklist");
+            let hovered = app.hover.is_some_and(|p| cta_rect.contains(p));
+            let buf = frame.buffer_mut();
+            if theme.flags.ascii {
+                let cta = format!("[ {} {action_hint} ]", tokens::glyph(theme, Glyph::Enter));
+                buf.set_stringn(
+                    cta_rect.x,
+                    cta_rect.y,
+                    clip_ascii_safe(&cta, cta_rect.width as usize, true),
+                    cta_rect.width as usize,
+                    Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                );
+            } else {
+                let cta = format!("  {} {action_hint}  ", tokens::glyph(theme, Glyph::Enter));
+                let pill_w = (cta.width() as u16).min(cta_rect.width);
+                let cta_bg = if hovered {
+                    tokens::color(theme, Role::Accent2)
+                } else {
+                    tokens::color(theme, Role::Accent)
+                };
+                for col in cta_rect.x..cta_rect.x + pill_w {
+                    buf[(col, cta_rect.y)].set_symbol(" ").set_bg(cta_bg);
+                }
+                buf.set_stringn(
+                    cta_rect.x,
+                    cta_rect.y,
+                    clip_ascii_safe(&cta, pill_w as usize, false),
+                    pill_w as usize,
+                    Style::default()
+                        .fg(tokens::color(theme, Role::OnAccent))
+                        .bg(cta_bg)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+        }
+        if let Some(copy_rect) = geom.inspector_copy_btn {
+            draw_inspector_copy_btn(app, frame.buffer_mut(), copy_rect, bg);
+        }
     }
 }
 

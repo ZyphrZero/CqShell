@@ -12,7 +12,15 @@ pub fn candidate(original: &str, settings: &[(&str, String)]) -> String {
         .collect::<String>();
     let mut in_match = false;
     for line in original.split_inclusive('\n') {
-        let key = line.split_whitespace().next().unwrap_or("");
+        let trimmed = line.trim_start();
+        let key = if trimmed.starts_with('#') {
+            ""
+        } else {
+            trimmed
+                .split(|c: char| c.is_ascii_whitespace() || c == '=')
+                .next()
+                .unwrap_or("")
+        };
         if key.eq_ignore_ascii_case("match") {
             in_match = true;
         }

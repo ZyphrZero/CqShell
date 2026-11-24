@@ -108,9 +108,21 @@ pub(super) fn draw_fullscreen_inspector(app: &App, frame: &mut Frame, area: Rect
         area.height.saturating_sub(2),
     );
     match app.docker.tab {
-        DockerTab::Containers => draw_container_overview(app, frame, body, bg),
-        DockerTab::Compose => draw_compose_services(app, frame, body, bg),
-        DockerTab::Images => draw_image_overview(app, frame, body, bg),
+        DockerTab::Containers => match app.docker.container_sub {
+            ContainerSubTab::Logs => logs::draw_logs_panel(app, frame, body, false),
+            ContainerSubTab::Stats => draw_container_stats(app, frame, body, bg),
+            ContainerSubTab::Env => draw_container_env(app, frame, body, bg),
+            ContainerSubTab::Overview => draw_container_overview(app, frame, body, bg),
+        },
+        DockerTab::Compose => match app.docker.compose_sub {
+            ComposeSubTab::Logs => logs::draw_logs_panel(app, frame, body, false),
+            ComposeSubTab::Yaml => draw_compose_yaml(app, frame, body, bg),
+            ComposeSubTab::Services => draw_compose_services(app, frame, body, bg),
+        },
+        DockerTab::Images => match app.docker.image_sub {
+            ImageSubTab::Overview => draw_image_overview(app, frame, body, bg),
+            ImageSubTab::History => draw_image_history(app, frame, body, bg),
+        },
         DockerTab::Volumes => draw_volume_overview(app, frame, body, bg),
         DockerTab::Networks => draw_network_overview(app, frame, body, bg),
         DockerTab::Daemon => draw_daemon_inspector(app, frame, body, bg),
@@ -242,7 +254,12 @@ fn draw_quick_buttons(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: C
 }
 
 fn render_lines(app: &App, frame: &mut Frame, body: Rect, lines: Vec<Line<'static>>, bg: Color) {
-    let scroll = app.docker.inspector_scroll;
+    let max_scroll = lines
+        .len()
+        .saturating_sub(body.height as usize)
+        .min(u16::MAX as usize) as u16;
+    app.docker.max_inspector_scroll.set(max_scroll);
+    let scroll = app.docker.inspector_scroll.min(max_scroll);
     let para = Paragraph::new(lines)
         .style(Style::default().bg(bg))
         .scroll((scroll, 0));

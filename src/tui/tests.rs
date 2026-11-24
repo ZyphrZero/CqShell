@@ -1608,3 +1608,103 @@ fn docker_mirror_form_prefills_existing_mirrors_and_exposes_clickable_preset_chi
     .unwrap();
     assert_eq!(app.form.as_ref().unwrap().values[0].text, "clear");
 }
+
+#[test]
+fn docker_alt_arrows_reorder_category_and_focus_sidebar_overlay_works() {
+    use super::docker::fixture::fixture_docker_state;
+    use super::state::DOCKER_GROUP;
+    use crate::ops::docker::model::DockerTab;
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.docker = fixture_docker_state(app.now);
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+    app.open_docker(DockerTab::Containers, false, false);
+
+    let initial_pos = app
+        .category_order
+        .iter()
+        .position(|&g| g == DOCKER_GROUP)
+        .unwrap();
+    assert!(initial_pos > 0);
+
+    // Alt+Up in embedded Docker view moves Docker up one slot and persists to config.toml
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT))
+        .unwrap();
+    let moved_pos = app
+        .category_order
+        .iter()
+        .position(|&g| g == DOCKER_GROUP)
+        .unwrap();
+    assert_eq!(moved_pos, initial_pos - 1);
+    let saved = Preferences::read(&app.ctx.paths.preferences, false).unwrap();
+    assert_eq!(saved.category_order[moved_pos], "docker");
+
+    // Ctrl+S / Alt+D must NOT accidentally stop or delete containers
+    assert!(matches!(
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+            .unwrap(),
+        Effect::None
+    ));
+    assert!(matches!(
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::ALT))
+            .unwrap(),
+        Effect::None
+    ));
+
+    // Enter Docker Focus mode on a wide 120x36 viewport: `[` opens sidebar_overlay without collapsing docked sidebar
+    app.handle_key(key(KeyCode::Char('z'))).unwrap();
+    assert!(app.docker.fullscreen);
+    app.handle_key(key(KeyCode::Char('['))).unwrap();
+    assert!(app.sidebar_overlay);
+    assert!(!app.sidebar_collapsed);
+
+    // Alt+Down inside sidebar_overlay also reorders Docker back down
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT))
+        .unwrap();
+    assert_eq!(
+        app.category_order
+            .iter()
+            .position(|&g| g == DOCKER_GROUP)
+            .unwrap(),
+        initial_pos
+    );
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(!app.sidebar_overlay);
+
+    // Tab focuses inspector in Focus mode; exiting Focus via Esc resets focus_inspector so list cursor moves
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    assert!(app.docker.focus_inspector);
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(!app.docker.fullscreen);
+    assert!(!app.docker.focus_inspector);
+    assert_eq!(app.docker.cursor(), 0);
+    app.handle_key(key(KeyCode::Down)).unwrap();
+    assert_eq!(app.docker.cursor(), 1);
+}
+
+#[test]
+fn modal_render_priority_matches_event_routing_when_notice_opens_over_logs() {
+    let (_temp, mut app) = test_app("en-US");
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+    app.log_modal = true;
+    app.notice = Some("UNIQUE_NOTICE_SENTINEL".into());
+
+    let mut term = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    term.draw(|f| app.draw(f)).unwrap();
+    let rendered: String = term
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(
+        rendered.contains("UNIQUE_NOTICE_SENTINEL"),
+        "notice must render above log_modal to match keyboard/mouse routing"
+    );
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(app.notice.is_none());
+    assert!(app.log_modal);
+}

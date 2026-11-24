@@ -46,7 +46,7 @@ tcp.tune               TCP 缓冲区调优
 tcp.restore            撤销 TCP 调优
   恢复首次记录的 TCP 运行值和配置。
 github.proxy           GitHub 国内加速代理
-  配置并开关 GitHub 国内加速代理前缀（默认地址 https://gh-proxy.com/），加速 Mihomo、BBRv3 内核、Agent 工具、Starship 及固定脚本的 GitHub 拉取；仅作用于 GitHub 官方域名，仍严格校验 SHA-256 与 HTTPS。
+  配置并开关 GitHub 国内加速代理前缀（默认地址 https://gh-proxy.com/），加速 Mihomo、BBRv3 内核、Agent 工具、gh、Starship 及固定脚本的 GitHub 拉取；仅作用于 GitHub 官方域名，仍严格校验 SHA-256 与 HTTPS。
   gh_proxy_state=on ["on", "off"]
   gh_proxy_url=https://gh-proxy.com/ []
 clash.install          安装 / 更新 Mihomo
@@ -197,9 +197,13 @@ tools.gdu              gdu 磁盘分析
   通过 apt 安装 gdu，用于分析目录的磁盘占用。
 tools.fzf              fzf 模糊搜索
   通过 apt 安装 fzf 交互式模糊搜索工具。
+tools.git              git 版本控制
+  通过 apt 安装 git 分布式版本控制工具。
+tools.gh               gh GitHub CLI
+  从 cli/cli 官方 Release 下载最新 Linux .deb 包，校验 SHA-256 与包架构后通过 apt 安装。
 tools.install          全部安装 / 自选软件
   安装指定软件包；all 还会安装 zsh 和 Starship，但不启用提示符美化。
-  package=all ["all", "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf"]
+  package=all ["all", "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf", "git", "gh"]
 ai.pi.install          安装 / 更新 Pi
   直接下载 Pi 官方 Linux 独立二进制包，校验 SHA-256 并保留主题、WASM 等配套资源。无需 Node.js/npm；验证版本后更新当前用户的命令入口。
 ai.claude.install      安装 / 更新 Claude Code

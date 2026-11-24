@@ -727,11 +727,8 @@ pub fn mode(ctx: &Context, mode: &str, persist: bool) -> Result<()> {
     if persist {
         if matches!(current, State::Running(_)) {
             let settings = settings(ctx)?;
-            edit_mixin_inner(ctx, true, |map| {
-                map.insert(Value::String("mode".into()), Value::String(mode.into()));
-                Ok(())
-            })?;
             request(ctx, &settings, "PATCH", "/configs", &body)?;
+            super::persist_running_mode(ctx, mode)?;
             ctx.message("notice.clash_mode", format!("{mode} (live + persisted)"));
         } else {
             edit_mixin(ctx, |map| {
@@ -769,6 +766,11 @@ pub fn reload(ctx: &Context) -> Result<()> {
         Err(error) => return Err(error.into()),
     };
     let runtime = build_runtime_config(ctx)?;
+    let running_pid = match current_state {
+        State::Running(pid) => Some(pid),
+        _ => None,
+    };
+    super::tun::validate_reload(ctx, &runtime, running_pid)?;
     let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
     fs::write(candidate.path(), &runtime)?;
     validate_config(ctx, candidate.path(), true)?;

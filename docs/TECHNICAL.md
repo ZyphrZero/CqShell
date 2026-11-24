@@ -57,7 +57,7 @@ Linux 验收遵循本地构建 → SFTP 上传 → 文件大小/SHA-256 校验 �
 | 操作 | 主要系统工具 |
 | --- | --- |
 | 状态 | hostname、uname、lscpu、free、df、uptime、timedatectl、ip、tc、sysctl |
-| 软件管理 | apt-get、dpkg、dpkg-query |
+| 软件管理 | apt-get、dpkg、dpkg-query；`tools.gh` 额外使用 curl、dpkg-deb 校验官方 Release `.deb` |
 | 网络配置 | sysctl，必要时 modprobe |
 | 内核 | curl、dpkg-deb、lsinitramfs、update-grub、systemd-detect-virt；UEFI 需要 mokutil |
 | SSH | sshd、ssh-keygen、ss、systemctl |

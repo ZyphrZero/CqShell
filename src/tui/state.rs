@@ -560,6 +560,7 @@ pub struct App {
     pub(super) sidebar_overlay: bool,
     /// Scroll offset for the right inspector panel (when focused or scrolled).
     pub(super) inspector_scroll: u16,
+    pub(super) max_inspector_scroll: Cell<u16>,
     /// Checked action IDs in One-Click Optimization.
     pub(super) marked: BTreeSet<String>,
     /// Saved parameters per action ID for this session.
@@ -672,6 +673,7 @@ impl App {
             sidebar_collapsed: false,
             sidebar_overlay: false,
             inspector_scroll: 0,
+            max_inspector_scroll: Cell::new(0),
             marked: BTreeSet::new(),
             parameters: BTreeMap::new(),
             logs: VecDeque::new(),
@@ -828,6 +830,9 @@ impl App {
         if self.nav != target {
             self.nav = target;
             self.inspector_scroll = 0;
+            self.max_inspector_scroll.set(0);
+            self.docker.logs.searching = false;
+            self.docker.filtering = false;
             self.view_changed = self.now;
             if target == NavTarget::Group(DOCKER_GROUP) {
                 self.docker.active_ever = true;
@@ -849,6 +854,7 @@ impl App {
         self.docker.active_ever = true;
         self.docker.set_tab(tab);
         self.docker.fullscreen = fullscreen;
+        self.docker.focus_inspector = false;
         self.docker.launched_standalone = standalone;
         self.goto_nav(NavTarget::Group(DOCKER_GROUP));
     }
@@ -1194,8 +1200,27 @@ impl App {
         }
     }
 
+    pub(super) fn prompt_preview_max_scroll(&self, area: Rect) -> u16 {
+        let Some(preview) = &self.prompt_preview else {
+            return 0;
+        };
+        let geom = super::layout::PromptPreviewGeometry::compute_for(
+            area,
+            &self.ctx.i18n,
+            preview.style_idx,
+            preview.color_idx,
+        );
+        let body_h = geom.preview_box.height.saturating_sub(1) as usize;
+        let line_count = crate::ops::terminal::render(&preview.options())
+            .map(|t| t.lines().count())
+            .unwrap_or(0);
+        line_count.saturating_sub(body_h).min(u16::MAX as usize) as u16
+    }
+
     pub(super) fn toggle_sidebar(&mut self) {
-        if super::layout::Breakpoint::of(self.viewport.width).uses_overlay_sidebar() {
+        if super::layout::Breakpoint::of(self.viewport.width).uses_overlay_sidebar()
+            || (self.is_docker_view() && self.docker.fullscreen)
+        {
             self.sidebar_overlay = !self.sidebar_overlay;
         } else {
             self.sidebar_collapsed = !self.sidebar_collapsed;

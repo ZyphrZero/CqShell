@@ -80,7 +80,8 @@ fn common_tools_and_ai_have_individual_bilingual_entries() {
         let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         let rows = rows.as_array().unwrap();
         for package in [
-            "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf",
+            "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf", "git",
+            "gh",
         ] {
             let id = format!("tools.{package}");
             let row = rows.iter().find(|r| r["id"] == id).expect(&id);
@@ -91,6 +92,13 @@ fn common_tools_and_ai_have_individual_bilingual_entries() {
         }
         let all = rows.iter().find(|r| r["id"] == "tools.install").unwrap();
         assert_eq!(all["parameters"][0]["default"], "all");
+        assert_eq!(
+            all["parameters"][0]["choices"],
+            serde_json::json!([
+                "all", "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu",
+                "fzf", "git", "gh"
+            ])
+        );
         for id in ["ai.pi.install", "ai.claude.install", "ai.codex.install"] {
             let row = rows.iter().find(|r| r["id"] == id).expect(id);
             assert_eq!(row["group"], "ai");

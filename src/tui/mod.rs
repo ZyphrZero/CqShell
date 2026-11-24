@@ -118,6 +118,25 @@ impl Drop for TerminalGuard {
     }
 }
 
+fn drain_terminal_events() {
+    while event::poll(Duration::ZERO).unwrap_or(false) {
+        let _ = event::read();
+    }
+}
+
+/// Restores raw mode, alternate screen, and mouse capture even if an external I/O operation fails.
+struct ExternalSessionGuard<'a> {
+    terminal: &'a mut DefaultTerminal,
+}
+
+impl Drop for ExternalSessionGuard<'_> {
+    fn drop(&mut self) {
+        let _ = enter();
+        drain_terminal_events();
+        let _ = self.terminal.clear();
+    }
+}
+
 /// Borderless, unwrapped pure-text copy screen inside the Alternate Screen.
 /// Mouse capture is disabled while this screen is active so native terminal
 /// mouse drag-selection works across any number of lines with ZERO `│` borders
@@ -176,8 +195,9 @@ fn run_plain_view(
             i18n.text("ui.plain_view_hint")
         };
         let header = format!("-- {title} ({}/{}) | {status} --", top + 1, lines.len());
+        let clipped_header = render::clip_ascii_safe(&header, cols, false);
         // Dim header line (no box-drawing borders anywhere).
-        write!(out, "\x1b[7m{header}\x1b[0m\r\n")?;
+        write!(out, "\x1b[7m{clipped_header}\x1b[0m\r\n")?;
         for line in &visible {
             write!(out, "{line}\r\n")?;
         }
@@ -193,7 +213,9 @@ fn run_plain_view(
             use crossterm::event::{KeyCode, KeyModifiers};
             let max_top = lines.len().saturating_sub(1);
             match key.code {
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'Q' | 'v' | 'V') => break,
+                KeyCode::Esc
+                | KeyCode::Enter
+                | KeyCode::Char('q' | 'Q' | 'v' | 'V' | 'm' | 'M') => break,
                 KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                 KeyCode::Char('c' | 'C' | 'y' | 'Y') => {
                     let _ = clipboard::copy(content);
@@ -213,7 +235,21 @@ fn run_plain_view(
                 }
                 KeyCode::Home => top = 0,
                 KeyCode::End => {
-                    top = lines.len().saturating_sub(body_rows.min(lines.len()));
+                    let mut acc = 0usize;
+                    let mut idx = lines.len();
+                    while idx > 0 {
+                        let w = unicode_width::UnicodeWidthStr::width(lines[idx - 1]);
+                        let needed = w.div_ceil(cols).max(1);
+                        if idx < lines.len() && acc + needed > body_rows {
+                            break;
+                        }
+                        idx -= 1;
+                        acc += needed;
+                        if acc >= body_rows {
+                            break;
+                        }
+                    }
+                    top = idx;
                 }
                 _ => {}
             }
@@ -244,19 +280,22 @@ impl App {
 
         if jobs.iter().any(|(spec, _)| spec.external) {
             leave()?;
-            println!("{}", self.ctx.i18n.text("ui.external"));
-            let report = perform(&self.ctx, &task);
-            self.record_report(&report);
-            if let Err(error) = &report.result {
-                eprintln!("{}", self.ctx.i18n.error(error));
-            }
-            println!("{}", self.ctx.i18n.text("ui.return"));
-            io::stdout().flush()?;
-            let mut line = String::new();
-            io::stdin().read_line(&mut line)?;
-            enter()?;
-            terminal.clear()?;
-            self.finish(report.result);
+            let io_res = {
+                let _restore = ExternalSessionGuard { terminal };
+                println!("{}", self.ctx.i18n.text("ui.external"));
+                let report = perform(&self.ctx, &task);
+                self.record_report(&report);
+                if let Err(error) = &report.result {
+                    eprintln!("{}", self.ctx.i18n.error(error));
+                }
+                println!("{}", self.ctx.i18n.text("ui.return"));
+                let flush_res = io::stdout().flush();
+                let mut line = String::new();
+                let read_res = io::stdin().read_line(&mut line);
+                self.finish(report.result);
+                flush_res.and(read_res.map(|_| ()))
+            };
+            io_res?;
         } else {
             let (tx, rx) = mpsc::channel();
             let mut ctx = self.ctx.clone();
@@ -352,8 +391,11 @@ pub fn run_with_target(
 
             if app.completed_since_refresh {
                 monitor.refresh();
-                if app.is_docker_view() || app.docker.active_ever {
+                app.docker.invalidate_inspects();
+                if app.is_docker_view() {
                     docker_monitor.send(MonitorCmd::ForceRefresh);
+                } else if app.docker.active_ever {
+                    docker_monitor.send(MonitorCmd::RefreshOnce);
                 }
                 app.completed_since_refresh = false;
             }
@@ -416,6 +458,12 @@ pub fn run_with_target(
                 Input::Mouse(mouse) => app.handle_mouse(mouse, app.viewport),
                 Input::Resize(cols, rows) => {
                     app.viewport = ratatui::layout::Rect::new(0, 0, cols, rows);
+                    if !layout::Breakpoint::of(cols).uses_overlay_sidebar()
+                        && !app.sidebar_collapsed
+                        && !(app.is_docker_view() && app.docker.fullscreen)
+                    {
+                        app.sidebar_overlay = false;
+                    }
                     Ok(Effect::None)
                 }
                 _ => Ok(Effect::None),
@@ -427,6 +475,7 @@ pub fn run_with_target(
                     app.refreshing = Some(Instant::now());
                     monitor.refresh();
                     if app.is_docker_view() {
+                        app.docker.invalidate_inspects();
                         docker_monitor.send(MonitorCmd::ForceRefresh);
                     }
                     Ok(())
@@ -434,6 +483,7 @@ pub fn run_with_target(
                 Ok(Effect::DockerRefresh) => {
                     app.refreshing = Some(Instant::now());
                     monitor.refresh();
+                    app.docker.invalidate_inspects();
                     docker_monitor.send(MonitorCmd::ForceRefresh);
                     Ok(())
                 }
@@ -442,9 +492,13 @@ pub fn run_with_target(
                         old.stop();
                     }
                     leave()?;
-                    let exec_res = docker_actions::run_interactive_exec(&app.ctx, &spec);
-                    enter()?;
-                    terminal.clear()?;
+                    let exec_res = {
+                        let _restore = ExternalSessionGuard {
+                            terminal: &mut terminal,
+                        };
+                        docker_actions::run_interactive_exec(&app.ctx, &spec)
+                    };
+                    app.docker.invalidate_inspects();
                     docker_monitor.send(MonitorCmd::ForceRefresh);
                     exec_res
                 }

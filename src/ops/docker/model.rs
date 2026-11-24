@@ -195,6 +195,7 @@ pub struct ContainerItem {
     pub health: ContainerHealth,
     pub ports: Vec<String>,
     pub networks: Vec<String>,
+    pub mounts: Vec<String>,
     pub mounts_count: usize,
     pub size: String,
     pub size_bytes: Option<u64>,

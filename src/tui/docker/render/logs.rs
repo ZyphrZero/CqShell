@@ -84,7 +84,8 @@ pub(super) fn draw_logs_panel(app: &App, frame: &mut Frame, area: Rect, fullscre
         i.text("docker.badge.follow_off")
     };
     let search_part = if logs.searching {
-        format!("  /{}_", logs.search.text)
+        let (shown, _) = logs.search.visible(24);
+        format!("  /{shown}_")
     } else if !logs.search.text.is_empty() {
         format!("  /{}", logs.search.text)
     } else {
@@ -138,6 +139,9 @@ pub(super) fn draw_logs_panel(app: &App, frame: &mut Frame, area: Rect, fullscre
     if body_rect.height == 0 || body_rect.width < 8 {
         return;
     }
+    app.docker
+        .last_logs_viewport
+        .set((body_rect.width as usize, body_rect.height as usize));
 
     let entries = logs.filtered_lines();
     if entries.is_empty() {

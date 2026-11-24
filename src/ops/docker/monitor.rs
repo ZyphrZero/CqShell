@@ -31,6 +31,7 @@ pub enum MonitorCmd {
     Wake(DockerTab),
     SetTab(DockerTab),
     ForceRefresh,
+    RefreshOnce,
     EnableStats(bool),
     FetchContainerInspect { id: String, running: bool },
     FetchImageInspect { id: String },
@@ -120,6 +121,12 @@ impl DockerMonitor {
                             active = true;
                             left_at = None;
                             force = true;
+                        }
+                        MonitorCmd::RefreshOnce => {
+                            let next = client::fetch_snapshot(&ctx, tab, &last_snap);
+                            last_snap = next.clone();
+                            last_poll = Instant::now();
+                            let _ = evt_tx.send(DockerEvent::Snapshot(Box::new(next)));
                         }
                         MonitorCmd::EnableStats(on) => {
                             if on && !stats_enabled {
@@ -250,19 +257,33 @@ impl LogStreamer {
         let target_clone = target.clone();
 
         let handle = thread::spawn(move || {
+            let valid_token =
+                |s: &str| !s.is_empty() && !s.starts_with('-') && !s.chars().any(char::is_control);
             let args: Vec<String> = match &target_clone {
-                LogTarget::Container { id } => vec![
-                    "logs".into(),
-                    "--tail".into(),
-                    tail.to_string(),
-                    "--timestamps".into(),
-                    "--follow".into(),
-                    id.clone(),
-                ],
+                LogTarget::Container { id } => {
+                    if !valid_token(id) {
+                        let _ = tx.send(LogStreamEvent::Ended(Some("invalid container id".into())));
+                        return;
+                    }
+                    vec![
+                        "logs".into(),
+                        "--tail".into(),
+                        tail.to_string(),
+                        "--timestamps".into(),
+                        "--follow".into(),
+                        id.clone(),
+                    ]
+                }
                 LogTarget::Compose {
                     project,
                     config_files,
                 } => {
+                    if !valid_token(project) || config_files.iter().any(|f| !valid_token(f)) {
+                        let _ = tx.send(LogStreamEvent::Ended(Some(
+                            "invalid compose log target".into(),
+                        )));
+                        return;
+                    }
                     let mut a = vec!["compose".into(), "-p".into(), project.clone()];
                     for f in config_files {
                         a.push("-f".into());
@@ -349,6 +370,7 @@ impl LogStreamer {
                 stop_flag.clone(),
             );
 
+            let mut exited = None;
             loop {
                 if stop_flag.load(Ordering::SeqCst) {
                     terminate_stream_child(&mut child);
@@ -370,21 +392,24 @@ impl LogStreamer {
                         break;
                     }
                 }
-                if let Ok(Some(_status)) = child.try_wait() {
-                    // Drain any remaining buffered lines before reporting stream end.
-                    let mut tail_batch = Vec::new();
-                    while let Ok(entry) = line_rx.try_recv() {
-                        tail_batch.push(entry);
-                    }
-                    if !tail_batch.is_empty() {
-                        let _ = tx.send(LogStreamEvent::Batch(tail_batch));
-                    }
-                    let _ = tx.send(LogStreamEvent::Ended(None));
+                if let Ok(Some(status)) = child.try_wait() {
+                    exited = Some(status);
                     break;
                 }
             }
             let _ = r1.join();
             let _ = r2.join();
+            if let Some(status) = exited {
+                let mut tail_batch = Vec::new();
+                while let Ok(entry) = line_rx.try_recv() {
+                    tail_batch.push(entry);
+                }
+                if !tail_batch.is_empty() {
+                    let _ = tx.send(LogStreamEvent::Batch(tail_batch));
+                }
+                let diag = (!status.success()).then(|| format!("docker logs exited with {status}"));
+                let _ = tx.send(LogStreamEvent::Ended(diag));
+            }
         });
 
         Self {

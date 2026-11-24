@@ -132,7 +132,7 @@ fn has_net_admin(status: &str) -> Result<bool> {
     Ok(capabilities & (1 << 12) != 0)
 }
 
-fn require_native(ctx: &Context, device: &str) -> Result<()> {
+fn require_native_inner(ctx: &Context, device: &str, allow_owned_by: Option<u32>) -> Result<()> {
     ctx.root()?;
     #[cfg(target_os = "linux")]
     {
@@ -171,10 +171,16 @@ fn require_native(ctx: &Context, device: &str) -> Result<()> {
         }
         match fs::symlink_metadata(Path::new("/sys/class/net").join(device)) {
             Ok(_) => {
-                return Err(Error::new(
-                    "error.busy",
-                    format!("TUN device {device} already exists; choose an unused device name"),
-                ));
+                let owned = match allow_owned_by {
+                    Some(pid) => owns_device(pid, device).unwrap_or(false),
+                    None => false,
+                };
+                if !owned {
+                    return Err(Error::new(
+                        "error.busy",
+                        format!("TUN device {device} already exists; choose an unused device name"),
+                    ));
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
             Err(error) => return Err(error.into()),
@@ -183,9 +189,13 @@ fn require_native(ctx: &Context, device: &str) -> Result<()> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = device;
+        let _ = (device, allow_owned_by);
         Err(Error::new("error.platform", "TUN requires native Linux"))
     }
+}
+
+fn require_native(ctx: &Context, device: &str) -> Result<()> {
+    require_native_inner(ctx, device, None)
 }
 
 /// Called immediately before every process start, including manually edited
@@ -194,6 +204,19 @@ pub(super) fn validate_start(ctx: &Context, runtime: &[u8]) -> Result<()> {
     let settings = settings(&serde_yaml::from_slice(runtime)?)?;
     if settings.enabled {
         require_native(ctx, &settings.device)?;
+    }
+    Ok(())
+}
+
+/// Validates TUN schema and host requirements before hot-reloading Mihomo.
+pub(super) fn validate_reload(
+    ctx: &Context,
+    runtime: &[u8],
+    running_pid: Option<u32>,
+) -> Result<()> {
+    let settings = settings(&serde_yaml::from_slice(runtime)?)?;
+    if settings.enabled {
+        require_native_inner(ctx, &settings.device, running_pid)?;
     }
     Ok(())
 }

@@ -655,10 +655,25 @@ pub fn check(ctx: &Context, requested_version: Option<&str>, quiet: bool) -> Res
             }
             Err(err) if err.key == "error.cancelled" => return Err(err),
             Err(api_err) => {
+                let resolve_with_proxy = |raw_url: &str| -> Result<String> {
+                    let rewritten =
+                        crate::github_proxy::rewrite(raw_url, ctx.github_proxy.as_deref());
+                    let eff = curl_resolve_redirect(ctx, &rewritten)?;
+                    if let Some(proxy) = ctx.github_proxy.as_deref()
+                        && let Some(stripped) = eff.strip_prefix(proxy)
+                    {
+                        return Ok(stripped.to_owned());
+                    }
+                    Ok(eff)
+                };
                 // Fall back when the GitHub REST API is rate-limited or rejected by a proxy.
                 if let Some(tag) = &requested_tag {
                     let tag_url = format!("{}/tag/{tag}", source.release_base);
-                    let effective = curl_resolve_redirect(ctx, &tag_url).map_err(|_| api_err)?;
+                    let effective = match resolve_with_proxy(&tag_url) {
+                        Ok(url) => url,
+                        Err(e) if e.key == "error.cancelled" => return Err(e),
+                        Err(_) => return Err(api_err),
+                    };
                     let verified_tag = parse_redirect_tag(&effective, &source.release_base)?;
                     if verified_tag != *tag {
                         return Err(Error::new(
@@ -684,7 +699,11 @@ pub fn check(ctx: &Context, requested_version: Option<&str>, quiet: bool) -> Res
                     });
                 }
                 let latest_url = format!("{}/latest", source.release_base);
-                let effective = curl_resolve_redirect(ctx, &latest_url).map_err(|_| api_err)?;
+                let effective = match resolve_with_proxy(&latest_url) {
+                    Ok(url) => url,
+                    Err(e) if e.key == "error.cancelled" => return Err(e),
+                    Err(_) => return Err(api_err),
+                };
                 let tag = parse_redirect_tag(&effective, &source.release_base)?;
                 let latest_version = SemVer::parse(&tag)?.canonical_version();
                 let status = compare_versions(CURRENT_VERSION, &latest_version)?;

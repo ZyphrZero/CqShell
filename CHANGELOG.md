@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/), 
 
 ---
 
+## [v0.1.7] - 2026-11-24
+
+### Added
+- **常用工具新增 `git` 与官方 GitHub CLI（`gh`）**：新增 `tools.git`（apt 安装）与 `tools.gh`（直连 `cli/cli` 官方 Releases，严格校验稳定版标签、架构 `.deb` 文件名、SHA-256 摘要及 `dpkg-deb` 包名/架构后安装，自动走全局 GitHub 国内加速代理）；`tools.install` 全量模式扩展至 12 款工具，总运维动作增至 **99 项**。
+- **README 补充实机截图**：中英文 README 补充桌面端与移动端 TUI 实机预览截图。
+
+### Fixed
+- **安全校验与运维操作加固**：
+  - **Mihomo 代理与 TUN**：`clash.mode --set persist=on` 改为先调用控制器 `PATCH /configs` 成功后再原子写入 `mixin.yaml` 与 `runtime.yaml`；`clash.reload` 热重载前新增 `tun::validate_reload` 权限与设备归属校验（允许复用当前运行中 Mihomo 进程自身持有的 TUN 设备）；`recover_interrupted_files` 兼容合法 profile 文件名并在写回前校验备份数据完整性。
+  - **自更新代理回退**：`self_update` 在 GitHub REST API 限流或被中转服务拒绝、回退到 `/releases/latest` 或 `/releases/tag/<TAG>` 重定向查询时，自动经过已配置的 `github_proxy` 并在解析前剥离代理前缀，同时响应取消信号。
+  - **SSH 配置、公网 IP 与路径边界**：`ssh::candidate` 正确处理 `Key=Value` 写法并跳过 `#` 注释行；`system.public_ip` 为 `curl` 强制加上 `--proto-redir =https`、`--connect-timeout` 与 `64 KiB` `--max-filesize` 上限，复用严格 IP 解析并净化 ISP 控制字符，单项失败不影响其余探测；`clash.sub.import`、`clash.secret.set` 与 `ssh.key` 统一拒绝包含 `.` / `..` 的路径。
+- **Docker 后台采集、日志流与工作台稳定性**：
+  - 容器列表解析保留完整 `mounts` 列表，`cross_link_snapshot` 自动关联卷的 `used_by` 引用关系并清理失效的合成 Compose 项目；Compose `up`/`pull` 强制要求存在且合法的配置文件参数；`read_compose_file` 增加路径检查、有界 `256 KiB` 读取与控制字符净化；`docker exec` 探测容器 Shell 前先校验参数，`docker top` 兼容含空格命令。
+  - `LogStreamer` 校验容器 ID 与 Compose 参数防止选项注入，进程退出时完整排空尾行并报告非零退出码；离开 Docker 页后任务完成仅执行单次 `RefreshOnce` 避免唤醒长轮询，并在操作/刷新/外部 exec 后失效旧 inspect 缓存；外部 `docker exec -it` 使用 `ExternalSessionGuard` 确保异常退出也能恢复 TUI 终端状态。
+  - 多选容器启停/暂停/删除及卷引用保护改为基于全部选中目标判定；收敛日志与详情滚动上限；支持 Docker 页内 `Alt+↑/↓` 调序、全屏 `[` 呼出侧栏抽屉及 `i` 切换全屏详情，并修复切页/退全屏时的焦点与搜索态残留。
+- **核心 TUI 渲染与交互细节**：
+  - 统一顶层弹窗渲染优先级与 `events.rs` 事件分发栈完全一致；修复一键优化「执行清单」底部 CTA 按钮显示与空清单隐藏逻辑；精确对齐顶栏运行中状态胶囊命中区；修正说明面板与 Starship TOML 预览最大滚动上限；点击外观抽屉外侧关闭时不再误触背景控件；窗口拉宽时自动收起冗余遮罩侧栏。
+
+---
+
 ## [v0.1.6] - 2026-11-23
 
 ### Added
@@ -84,6 +104,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/), 
 
 ---
 
+[v0.1.7]: https://github.com/ZyphrZero/CqShell/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/ZyphrZero/CqShell/compare/v0.1.5...v0.1.6
 [v0.1.5]: https://github.com/ZyphrZero/CqShell/compare/v0.1.4...v0.1.5
 [v0.1.4]: https://github.com/ZyphrZero/CqShell/compare/v0.1.3...v0.1.4

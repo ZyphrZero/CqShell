@@ -130,6 +130,8 @@ const SECTIONS: &[(&str, &[Section])] = &[
                     "tools.btop",
                     "tools.gdu",
                     "tools.fzf",
+                    "tools.git",
+                    "tools.gh",
                 ],
             ),
             ("all", &["tools.install"]),

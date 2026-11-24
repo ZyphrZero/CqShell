@@ -10,26 +10,129 @@ use std::{
     time::Instant,
 };
 
-pub const PACKAGES: &[&str] = &[
-    "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf",
+pub const APT_PACKAGES: &[&str] = &[
+    "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf", "git",
 ];
+
+pub const PACKAGES: &[&str] = &[
+    "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf", "git", "gh",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GhRelease {
+    pub name: String,
+    pub url: String,
+    pub digest: String,
+}
+
+pub(crate) fn gh_deb_arch(arch: &str) -> Result<&'static str> {
+    match arch {
+        "x86_64" | "amd64" => Ok("amd64"),
+        "aarch64" | "arm64" => Ok("arm64"),
+        _ => Err(Error::new("error.input", arch)),
+    }
+}
+
+pub(crate) fn parse_gh_release(metadata: &[u8], deb_arch: &str) -> Result<GhRelease> {
+    let value: serde_json::Value = serde_json::from_slice(metadata)?;
+    if value.get("draft").is_some_and(|v| v != false)
+        || value.get("prerelease").is_some_and(|v| v != false)
+    {
+        return Err(Error::new("error.release", "gh draft/prerelease"));
+    }
+    let tag = value["tag_name"]
+        .as_str()
+        .ok_or_else(|| Error::new("error.release", "gh tag"))?;
+    let version = tag
+        .strip_prefix('v')
+        .filter(|v| {
+            !v.is_empty()
+                && !v.starts_with('.')
+                && !v.contains("..")
+                && v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+        })
+        .ok_or_else(|| Error::new("error.release", tag))?;
+    let name = format!("gh_{version}_linux_{deb_arch}.deb");
+    let assets = value["assets"]
+        .as_array()
+        .ok_or_else(|| Error::new("error.release", "gh assets"))?;
+    let found: Vec<_> = assets.iter().filter(|a| a["name"] == name).collect();
+    if found.len() != 1 {
+        return Err(Error::new("error.release", name));
+    }
+    let url = found[0]["browser_download_url"].as_str().unwrap_or("");
+    let digest = found[0]["digest"].as_str().unwrap_or("");
+    let expected_url = format!("https://github.com/cli/cli/releases/download/{tag}/{name}");
+    if url != expected_url
+        || !digest.starts_with("sha256:")
+        || digest.len() != 71
+        || !digest[7..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(Error::new("error.release", name));
+    }
+    Ok(GhRelease {
+        name,
+        url: expected_url,
+        digest: digest[7..].to_ascii_lowercase(),
+    })
+}
 
 pub fn packages(ctx: &Context, package: &str) -> Result<()> {
     let _lock = Lock::acquire(&ctx.paths.kernel_lock)?;
-    let chosen = if package == "all" {
-        PACKAGES.to_vec()
-    } else if PACKAGES.contains(&package) {
-        vec![package]
-    } else {
-        return Err(Error::new("error.input", package));
-    };
-    let mut args = vec!["install", "-y"];
-    args.extend(chosen);
-    super::packages::run(ctx, &args)?;
     if package == "all" {
+        let mut args = vec!["install", "-y"];
+        args.extend_from_slice(APT_PACKAGES);
+        super::packages::run(ctx, &args)?;
+        gh_install_unlocked(ctx)?;
         terminal_install_unlocked(ctx)?;
+        return Ok(());
     }
-    Ok(())
+    if package == "gh" {
+        return gh_install_unlocked(ctx);
+    }
+    if !APT_PACKAGES.contains(&package) {
+        return Err(Error::new("error.input", package));
+    }
+    super::packages::run(ctx, &["install", "-y", package])
+}
+
+fn gh_install_unlocked(ctx: &Context) -> Result<()> {
+    if ctx.require(&["curl"]).is_err() {
+        super::packages::run(ctx, &["install", "-y", "curl", "ca-certificates"])?;
+    }
+    ctx.require(&["dpkg-deb"])?;
+    let arch = ctx.output("uname", &["-m"])?;
+    let deb_arch = gh_deb_arch(&arch)?;
+    let work = tempfile::tempdir()?;
+    let metadata = work.path().join("release.json");
+    ctx.download(
+        "https://api.github.com/repos/cli/cli/releases/latest",
+        &metadata,
+        60,
+    )?;
+    let release = parse_gh_release(&fs::read(metadata)?, deb_arch)?;
+    let deb = work.path().join(&release.name);
+    ctx.download(&release.url, &deb, 300)?;
+    if sha256(&deb)? != release.digest {
+        return Err(Error::new("error.digest", release.name));
+    }
+    let pkg_name = ctx.output("dpkg-deb", &["-f", path(&deb)?, "Package"])?;
+    let pkg_arch = ctx.output("dpkg-deb", &["-f", path(&deb)?, "Architecture"])?;
+    if pkg_name != "gh" || pkg_arch != deb_arch {
+        return Err(Error::new(
+            "error.release",
+            format!("{pkg_name} / {pkg_arch}"),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(work.path(), fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(&deb, fs::Permissions::from_mode(0o644))?;
+    }
+    super::packages::run(ctx, &["install", "-y", path(&deb)?])?;
+    ctx.run("gh", &["--version"])
 }
 pub fn terminal_install(ctx: &Context) -> Result<()> {
     let _lock = Lock::acquire(&ctx.paths.kernel_lock)?;

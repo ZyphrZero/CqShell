@@ -269,10 +269,11 @@ impl Spec {
                 if !p["subscription_url"].is_empty() {
                     ops::clash::validate_subscription_url(&p["subscription_url"])?;
                 }
-                path.is_absolute()
-                    && !path
-                        .components()
-                        .any(|c| c == std::path::Component::ParentDir)
+                path.is_absolute() && !crate::storage::has_relative_segment(path)
+            }
+            Kind::ClashSecretSet => {
+                let path = Path::new(&p["secret_file"]);
+                path.is_absolute() && !crate::storage::has_relative_segment(path)
             }
             Kind::ClashProxyDelay => {
                 ops::clash::controller::validate_test_url(&p["delay_url"])?;
@@ -291,10 +292,7 @@ impl Spec {
                         "directory"
                     }],
                 );
-                path.is_absolute()
-                    && !path
-                        .components()
-                        .any(|c| c == std::path::Component::ParentDir)
+                path.is_absolute() && !crate::storage::has_relative_segment(path)
             }
             _ => true,
         };
@@ -1003,6 +1001,8 @@ pub fn specs() -> Vec<Spec> {
         ("tools.btop", "btop"),
         ("tools.gdu", "gdu"),
         ("tools.fzf", "fzf"),
+        ("tools.git", "git"),
+        ("tools.gh", "gh"),
     ] {
         add(id, "tools", ToolInstall(package), true, true, false, vec![]);
     }
@@ -1018,7 +1018,7 @@ pub fn specs() -> Vec<Spec> {
             "all",
             &[
                 "all", "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu",
-                "fzf",
+                "fzf", "git", "gh",
             ],
             true,
         )],

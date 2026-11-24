@@ -29,6 +29,7 @@ use ratatui::{
 };
 
 pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, geom: &DockerGeometry) {
+    app.docker.last_cmd_rect.set(None);
     let theme = &app.theme.active;
     let dk = &app.docker;
     let elapsed = app.now.saturating_duration_since(app.started);

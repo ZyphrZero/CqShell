@@ -82,22 +82,52 @@ pub fn public_ip(ctx: &Context) -> Result<()> {
     ] {
         match ctx.output(
             "curl",
-            &["--proto", "=https", "-fSs", "--max-time", "5", endpoint],
+            &[
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "-fSsL",
+                "--connect-timeout",
+                "4",
+                "--max-time",
+                "5",
+                "--max-filesize",
+                "65536",
+                endpoint,
+            ],
         ) {
             Ok(data) => {
                 if family == "ISP" {
-                    let info: serde_json::Value = serde_json::from_str(&data)?;
-                    ctx.message(
-                        "notice.public_ip",
-                        format!(
-                            "ISP: {}",
+                    let parsed = serde_json::from_str::<serde_json::Value>(&data)
+                        .map_err(|e| Error::new("error.data", e))
+                        .and_then(|info| {
                             info["org"]
                                 .as_str()
-                                .ok_or_else(|| Error::new("error.data", "ipinfo.org"))?
-                        ),
-                    );
+                                .filter(|s| !s.trim().is_empty())
+                                .map(str::to_owned)
+                                .ok_or_else(|| Error::new("error.data", "ipinfo.org"))
+                        });
+                    match parsed {
+                        Ok(org) => {
+                            ctx.message(
+                                "notice.public_ip",
+                                format!("ISP: {}", crate::runtime::sanitize(&org)),
+                            );
+                        }
+                        Err(e) => {
+                            ctx.log(ctx.i18n.error(&e));
+                            failures.push(family);
+                        }
+                    }
                 } else {
-                    ctx.message("notice.public_ip", format!("{family}: {data}"));
+                    match crate::dashboard::parse_ip(&data, family == "IPv4") {
+                        Ok(ip) => ctx.message("notice.public_ip", format!("{family}: {ip}")),
+                        Err(e) => {
+                            ctx.log(ctx.i18n.error(&e));
+                            failures.push(family);
+                        }
+                    }
                 }
             }
             Err(e) => {

@@ -375,7 +375,7 @@ impl DockerOp {
                 vec![("docker", a)]
             }
             Self::ImagePull { reference } => {
-                vec![("docker", vec!["pull".into(), reference.clone()])]
+                vec![("docker", vec!["pull".into(), reference.trim().to_owned()])]
             }
             Self::ImageRemove { ids, force, .. } => {
                 let mut a = vec!["image".into(), "rm".into()];
@@ -399,7 +399,7 @@ impl DockerOp {
                 if *ipv6 {
                     a.push("--ipv6".into());
                 }
-                a.push(name.clone());
+                a.push(name.trim().to_owned());
                 vec![("docker", a)]
             }
             Self::NetworkRemove { ids, .. } => {
@@ -506,13 +506,43 @@ impl DockerOp {
                     return Err(Error::new("error.input", format!("subnet: {subnet}")));
                 }
             }
-            Self::ComposeUp { project, .. }
-            | Self::ComposeStart { project, .. }
-            | Self::ComposeStop { project, .. }
-            | Self::ComposeRestart { project, .. }
-            | Self::ComposePull { project, .. }
-            | Self::ComposeDown { project, .. } => {
+            Self::ComposeUp {
+                project,
+                config_files,
+            }
+            | Self::ComposePull {
+                project,
+                config_files,
+            } => {
                 check_token(project, "project")?;
+                if config_files.is_empty() {
+                    return Err(Error::new("error.required", "compose config_files"));
+                }
+                for f in config_files {
+                    check_token(f, "config_file")?;
+                }
+            }
+            Self::ComposeStart {
+                project,
+                config_files,
+            }
+            | Self::ComposeStop {
+                project,
+                config_files,
+            }
+            | Self::ComposeRestart {
+                project,
+                config_files,
+            }
+            | Self::ComposeDown {
+                project,
+                config_files,
+                ..
+            } => {
+                check_token(project, "project")?;
+                for f in config_files {
+                    check_token(f, "config_file")?;
+                }
             }
             Self::Prune {
                 containers,
@@ -623,6 +653,12 @@ pub fn build_exec_args(spec: &ExecSpec, resolved_shell: &str) -> Result<Vec<Stri
 /// Runs an interactive `docker exec -it` inheriting the user's real TTY (called after TUI `leave()`).
 pub fn run_interactive_exec(ctx: &Context, spec: &ExecSpec) -> Result<()> {
     ctx.platform()?;
+    let probe_shell = if spec.shell.trim().is_empty() || spec.shell.trim() == "auto" {
+        "/bin/sh"
+    } else {
+        spec.shell.trim()
+    };
+    build_exec_args(spec, probe_shell)?;
     let shell = if spec.shell.trim().is_empty() || spec.shell.trim() == "auto" {
         detect_container_shell(ctx, &spec.container_id)
     } else {

@@ -145,7 +145,8 @@ impl App {
                     return Ok(Effect::None);
                 }
                 KeyCode::Char('d' | 'D') if self.nav != NavTarget::Overview => {
-                    self.inspector_scroll = self.inspector_scroll.saturating_add(2);
+                    let max_s = self.max_inspector_scroll.get();
+                    self.inspector_scroll = self.inspector_scroll.saturating_add(2).min(max_s);
                     return Ok(Effect::None);
                 }
                 _ => {}
@@ -159,6 +160,14 @@ impl App {
             if idle {
                 self.reorder_category(key.code == KeyCode::Down);
             }
+            return Ok(Effect::None);
+        }
+
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char(_))
+        {
             return Ok(Effect::None);
         }
 
@@ -303,9 +312,21 @@ impl App {
     }
 
     fn sidebar_overlay_key(&mut self, key: KeyEvent) -> Result<Effect> {
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Up | KeyCode::Down)
+        {
+            if self.worker.is_none() {
+                self.reorder_category(key.code == KeyCode::Down);
+            }
+            return Ok(Effect::None);
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Char('[') | KeyCode::Enter => {
                 self.sidebar_overlay = false;
+            }
+            KeyCode::Char('t' | 'T') => {
+                self.sidebar_overlay = false;
+                self.open_theme_drawer();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let order = self.nav_order();
@@ -627,6 +648,7 @@ impl App {
 
     fn prompt_preview_key(&mut self, key: KeyEvent) -> Result<Effect> {
         use crate::ops::terminal::{COLORS, SHELLS, STYLES};
+        let max_toml = self.prompt_preview_max_scroll(self.viewport);
         let Some(preview) = self.prompt_preview.as_mut() else {
             return Ok(Effect::None);
         };
@@ -661,7 +683,7 @@ impl App {
             }
             KeyCode::End => {
                 if preview.show_toml {
-                    preview.toml_scroll = u16::MAX / 2;
+                    preview.toml_scroll = max_toml;
                 } else {
                     preview.style_idx = style_count - 1;
                 }
@@ -683,7 +705,7 @@ impl App {
                 preview.toml_scroll = preview.toml_scroll.saturating_sub(8);
             }
             KeyCode::PageDown if preview.show_toml => {
-                preview.toml_scroll = preview.toml_scroll.saturating_add(8);
+                preview.toml_scroll = preview.toml_scroll.saturating_add(8).min(max_toml);
             }
             KeyCode::Enter | KeyCode::Char('a' | 'A') => {
                 return self.apply_prompt_preview();
@@ -991,7 +1013,10 @@ impl App {
                     form.index = fi;
                     if form.listed(fi) {
                         form.open_picker(String::new(), false);
-                    } else if !form.chip_field(fi) && !form.spec.fields[fi].choices.is_empty() {
+                    } else if !form.chip_field(fi)
+                        && !form.preset_chips(fi)
+                        && !form.spec.fields[fi].choices.is_empty()
+                    {
                         self.cycle_field(true);
                     }
                 }
@@ -1019,9 +1044,10 @@ impl App {
                     }
                 }
                 MouseEventKind::ScrollDown => {
+                    let max_toml = self.prompt_preview_max_scroll(area);
                     let preview = self.prompt_preview.as_mut().unwrap();
                     if preview.show_toml && geom.preview_box.contains(point) {
-                        preview.toml_scroll = preview.toml_scroll.saturating_add(3);
+                        preview.toml_scroll = preview.toml_scroll.saturating_add(3).min(max_toml);
                     } else if geom.left_pane.contains(point) {
                         let count = crate::ops::terminal::STYLES.len();
                         preview.style_idx = (preview.style_idx + 1) % count;
@@ -1185,7 +1211,9 @@ impl App {
                         } else if side.theme_btn.is_some_and(|r| r.contains(point)) {
                             self.sidebar_overlay = false;
                             self.open_theme_drawer();
-                        } else {
+                        } else if side.collapse_btn.is_some_and(|r| r.contains(point))
+                            || !side.area.contains(point)
+                        {
                             self.sidebar_overlay = false;
                         }
                     } else {
@@ -1230,8 +1258,9 @@ impl App {
                 }
                 return Ok(Effect::None);
             } else if event.kind == MouseEventKind::Down(MouseButton::Left) {
-                // Clicking outside theme drawer reverts cleanly
+                // Clicking outside theme drawer reverts cleanly without triggering background widgets
                 self.cancel_theme_drawer();
+                return Ok(Effect::None);
             }
         }
 
@@ -1333,7 +1362,8 @@ impl App {
                         self.inspector_scroll = self.inspector_scroll.saturating_sub(2);
                     }
                     MouseEventKind::ScrollDown => {
-                        self.inspector_scroll = self.inspector_scroll.saturating_add(2);
+                        let max_s = self.max_inspector_scroll.get();
+                        self.inspector_scroll = self.inspector_scroll.saturating_add(2).min(max_s);
                     }
                     MouseEventKind::Down(MouseButton::Left)
                         if wb.inspector_copy_btn.is_some_and(|btn| btn.contains(point)) =>

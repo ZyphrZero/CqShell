@@ -120,7 +120,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
                     buf,
                     *row,
                     i.text("docker.modal.pull_field"),
-                    &reference.text,
+                    reference,
                     true,
                     theme,
                     bg,
@@ -156,7 +156,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
                     buf,
                     *r0,
                     i.text("docker.modal.network_name"),
-                    &name.text,
+                    name,
                     *field == 0,
                     theme,
                     bg,
@@ -167,7 +167,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
                     buf,
                     *r1,
                     i.text("docker.modal.network_subnet"),
-                    &subnet.text,
+                    subnet,
                     *field == 1,
                     theme,
                     bg,
@@ -213,9 +213,9 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
             ..
         } => {
             let entries = [
-                (i.text("docker.modal.exec_shell"), &shell.text),
-                (i.text("docker.modal.exec_user"), &user.text),
-                (i.text("docker.modal.exec_workdir"), &workdir.text),
+                (i.text("docker.modal.exec_shell"), shell),
+                (i.text("docker.modal.exec_user"), user),
+                (i.text("docker.modal.exec_workdir"), workdir),
             ];
             for (idx, ((lbl, val), row)) in entries.iter().zip(&geom.rows).enumerate() {
                 draw_input_field(buf, *row, lbl, val, *field == idx, theme, bg);
@@ -370,7 +370,7 @@ fn draw_input_field(
     buf: &mut ratatui::buffer::Buffer,
     row: Rect,
     label: &str,
-    value: &str,
+    input: &crate::tui::input::InputBuffer,
     focused: bool,
     theme: &crate::theme::Theme,
     bg: Color,
@@ -401,24 +401,43 @@ fn draw_input_field(
         bg
     };
     fill_rect_bg(buf, row, field_bg);
-    let shown = if focused {
-        format!(" {value}_")
+    let avail = row.width.saturating_sub(2) as usize;
+    if avail == 0 {
+        return;
+    }
+    if focused {
+        let (shown, cur_col) = input.visible(avail);
+        buf.set_stringn(
+            row.x + 1,
+            row.y,
+            &shown,
+            avail,
+            Style::default().fg(tokens::selected_fg(theme)).bg(field_bg),
+        );
+        let cx = row.x + 1 + cur_col.min(avail as u16);
+        if cx < row.right() {
+            let cell = &mut buf[(cx, row.y)];
+            if cell.symbol().is_empty() || cell.symbol() == " " {
+                cell.set_symbol("_");
+            }
+            cell.set_style(
+                Style::default()
+                    .fg(tokens::color(theme, Role::OnAccent))
+                    .bg(tokens::color(theme, Role::Accent))
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
     } else {
-        format!(" {value}")
-    };
-    buf.set_stringn(
-        row.x,
-        row.y,
-        clip_ascii_safe(&shown, row.width as usize, ascii),
-        row.width as usize,
-        Style::default()
-            .fg(if focused {
-                tokens::selected_fg(theme)
-            } else {
-                tokens::color(theme, Role::Text1)
-            })
-            .bg(field_bg),
-    );
+        buf.set_stringn(
+            row.x + 1,
+            row.y,
+            clip_ascii_safe(&input.text, avail, ascii),
+            avail,
+            Style::default()
+                .fg(tokens::color(theme, Role::Text1))
+                .bg(field_bg),
+        );
+    }
 }
 
 fn draw_modal_error(

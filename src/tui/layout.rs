@@ -417,13 +417,47 @@ fn compute_topbar_hits(bar: Rect, app: &App, docked_sidebar: bool) -> TopBarHits
     }
     if app.worker.is_some() && bar.width >= 40 {
         let pill_w = topbar_running_pill_text(app, bar.width).width() as u16;
-        if bar.width >= 80 {
-            let x = bar.x + (bar.width.saturating_sub(pill_w.min(bar.width / 3))) / 2;
-            hits.running_pill = Some(Rect::new(x, bar.y, pill_w.min(bar.width / 3), 1));
-        } else {
-            let right_after_pill = lang_w + 2;
-            let x = bar.right().saturating_sub(right_after_pill + pill_w);
-            if x > hits.nav_toggle.map_or(bar.x, |r| r.right()) {
+        let mobile = bar.width < 80;
+        let sep_w = format!(
+            " {} ",
+            super::render::tokens::glyph(
+                &app.theme.active,
+                super::render::tokens::Glyph::Separator
+            )
+        )
+        .width() as u16;
+        let mut after_pill = if mobile { 1u16 } else { sep_w };
+        if bar.width >= 90
+            && let crate::dashboard::Reading::Value(host) = &app.snapshot.local.host
+            && !host.is_empty()
+        {
+            let clipped = super::render::clip_ascii_safe(host, 18, app.theme.active.flags.ascii);
+            after_pill = after_pill.saturating_add(clipped.width() as u16 + sep_w);
+        }
+        if !mobile {
+            let role_key = if app.platform_error.is_some() {
+                "ui.mode_preview"
+            } else if app.root {
+                "ui.mode_root"
+            } else {
+                "ui.mode_user"
+            };
+            let role_w = format!(
+                "{} {}",
+                super::render::tokens::glyph(
+                    &app.theme.active,
+                    super::render::tokens::Glyph::DotOn
+                ),
+                app.ctx.i18n.text(role_key)
+            )
+            .width() as u16;
+            after_pill = after_pill.saturating_add(role_w + 2);
+        }
+        after_pill = after_pill.saturating_add(lang_w + 1);
+        let right_total = pill_w.saturating_add(after_pill);
+        if bar.width > right_total {
+            let x = bar.right().saturating_sub(right_total);
+            if x >= hits.nav_toggle.map_or(bar.x, |r| r.right()) {
                 hits.running_pill = Some(Rect::new(x, bar.y, pill_w, 1));
             }
         }
@@ -743,7 +777,12 @@ fn build_workbench(area: Rect, app: &App, drawer_open: bool) -> WorkbenchGeometr
         0
     };
 
+    let show_opt_progress =
+        app.active_group() == Some(super::state::OPTIMIZATION_GROUP) && app.progress.is_some();
+    let empty_execute = matches!(app.selected_row(), Some(Row::Execute)) && app.marked.is_empty();
     let (inspector_cta, inspector_copy_btn) = if !stacked
+        && !show_opt_progress
+        && !empty_execute
         && inspector_inner.width >= 10
         && inspector_inner.height >= 6
     {

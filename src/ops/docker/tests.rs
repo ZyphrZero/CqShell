@@ -80,15 +80,22 @@ fn containers_compose_images_volumes_networks_stats_and_df_parse_and_cross_link(
     assert!(!images[0].dangling);
     assert!(images[1].dangling);
 
+    let volumes = parse_volumes_ndjson(
+        r#"{"Name":"nginx_logs","Driver":"local","Scope":"local","Mountpoint":"/var/lib/docker/volumes/nginx_logs/_data","Size":"12MB","Labels":""}
+{"Name":"unused_vol","Driver":"local","Scope":"local","Mountpoint":"/var/lib/docker/volumes/unused_vol/_data","Size":"1MB","Labels":""}"#,
+    );
     let mut snap = DockerSnapshot {
         containers,
         compose,
         images,
+        volumes,
         ..DockerSnapshot::default()
     };
     cross_link_snapshot(&mut snap);
-    // Image `nginx:1.27-alpine` cross-linked to `nginx-proxy`
+    // Image `nginx:1.27-alpine` and volume `nginx_logs` cross-linked to `nginx-proxy`
     assert_eq!(snap.images[0].used_by, vec!["nginx-proxy".to_owned()]);
+    assert_eq!(snap.volumes[0].used_by, vec!["nginx-proxy".to_owned()]);
+    assert!(snap.volumes[1].used_by.is_empty());
     // Labeled project `jobs` synthesized even though not returned by `docker compose ls`
     assert_eq!(snap.compose.len(), 2);
     assert!(
@@ -96,6 +103,14 @@ fn containers_compose_images_volumes_networks_stats_and_df_parse_and_cross_link(
             .iter()
             .any(|p| p.name == "jobs" && p.synthesized_from_labels)
     );
+    // Removing containers clears synthesized projects and resets CLI project counts
+    snap.containers.clear();
+    cross_link_snapshot(&mut snap);
+    assert_eq!(snap.compose.len(), 1);
+    assert_eq!(snap.compose[0].name, "prod-web");
+    assert_eq!(snap.compose[0].total_count, 0);
+    assert_eq!(snap.compose[0].running_count, 0);
+    assert!(snap.volumes[0].used_by.is_empty());
 
     let stats = parse_stats_ndjson(
         r#"{"ID":"a1b2c3d4e5f6001122334455","CPUPerc":"8.42%","MemUsage":"318MiB / 1.94GiB","MemPerc":"16.01%","NetIO":"142MB / 89.4MB","BlockIO":"24.1MB / 11.8MB","PIDs":"18"}"#,
@@ -174,11 +189,18 @@ fn inspect_top_engine_and_daemon_json_parsers_work() {
     assert_eq!(img_insp.history.len(), 1);
 
     let top = parse_docker_top(
-        "USER PID %CPU %MEM ELAPSED COMMAND\nroot 1 7.8 2.1 03:12:00 /app/gateway --prod\n",
+        "USER         PID %CPU %MEM     ELAPSED COMMAND\nroot           1  7.8  2.1    03:12:00 /app/gateway --prod --workers 4\nwww-data     204  0.3  0.8       14:05 nginx: worker process\n",
     );
-    assert_eq!(top.len(), 1);
+    assert_eq!(top.len(), 2);
+    assert_eq!(top[0].uid, "root");
     assert_eq!(top[0].pid, "1");
-    assert_eq!(top[0].command, "/app/gateway --prod");
+    assert_eq!(top[0].cpu, "7.8");
+    assert_eq!(top[0].mem, "2.1");
+    assert_eq!(top[0].time, "03:12:00");
+    assert_eq!(top[0].command, "/app/gateway --prod --workers 4");
+    assert_eq!(top[1].uid, "www-data");
+    assert_eq!(top[1].pid, "204");
+    assert_eq!(top[1].command, "nginx: worker process");
 }
 
 #[test]
@@ -217,7 +239,21 @@ fn confirmation_policies_and_argument_validation_enforce_safety_tiers() {
     };
     assert_eq!(prune_vols.confirm_policy(), ConfirmPolicy::Token("PRUNE"));
 
-    // Reject option injection
+    // Reject option injection & trim padded names/references in commands()
+    let padded_pull = DockerOp::ImagePull {
+        reference: "  nginx:alpine  ".into(),
+    };
+    padded_pull.validate().unwrap();
+    assert_eq!(
+        padded_pull.commands(),
+        vec![("docker", vec!["pull".into(), "nginx:alpine".into()])]
+    );
+    let empty_compose_up = DockerOp::ComposeUp {
+        project: "demo".into(),
+        config_files: vec![],
+    };
+    assert!(empty_compose_up.validate().is_err());
+
     let bad_pull = DockerOp::ImagePull {
         reference: "--platform=linux/amd64".into(),
     };

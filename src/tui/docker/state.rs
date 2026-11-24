@@ -396,19 +396,49 @@ impl LogViewState {
         self.lines.clear();
         self.scroll = 0;
         self.follow = true;
+        self.searching = false;
         self.ended = false;
     }
 
     pub fn push_batch(&mut self, entries: Vec<DockerLogEntry>) {
+        let added = entries.len();
+        let mut popped = 0usize;
         for entry in entries {
             if self.lines.len() >= MAX_DOCKER_LOG_LINES {
                 self.lines.pop_front();
+                popped += 1;
             }
             self.lines.push_back(entry);
         }
         if self.follow {
             self.scroll = 0;
+        } else if self.scroll > 0 && added > popped {
+            self.scroll = self.scroll.saturating_add(added - popped);
         }
+    }
+
+    pub fn max_scroll(&self, width: usize, visible_h: usize) -> usize {
+        use unicode_width::UnicodeWidthStr;
+        let entries = self.filtered_lines();
+        if entries.is_empty() {
+            return 0;
+        }
+        let w = width.max(8);
+        let mut total = 0usize;
+        for entry in entries {
+            if self.wrap {
+                let prefix_w = if self.timestamps {
+                    entry.timestamp.as_deref().map_or(0, |t| t.width() + 2)
+                } else {
+                    0
+                };
+                let msg_w = w.saturating_sub(prefix_w).max(8);
+                total += crate::tui::render::wrap_cells(&entry.message, msg_w).len();
+            } else {
+                total += 1;
+            }
+        }
+        total.saturating_sub(visible_h)
     }
 
     pub fn filtered_lines(&self) -> Vec<&DockerLogEntry> {
@@ -478,6 +508,8 @@ pub(in crate::tui) struct DockerState {
     pub modal: Option<DockerModal>,
     pub active_ever: bool,
     pub last_cmd_rect: Cell<Option<Rect>>,
+    pub max_inspector_scroll: Cell<u16>,
+    pub last_logs_viewport: Cell<(usize, usize)>,
 }
 
 impl Default for DockerState {
@@ -519,17 +551,33 @@ impl Default for DockerState {
             modal: None,
             active_ever: false,
             last_cmd_rect: Cell::new(None),
+            max_inspector_scroll: Cell::new(0),
+            last_logs_viewport: Cell::new((80, 16)),
         }
     }
 }
 
 impl DockerState {
+    pub fn effective_logs_max_scroll(&self) -> usize {
+        let (w, h) = self.last_logs_viewport.get();
+        self.logs.max_scroll(w, h)
+    }
+
+    pub fn invalidate_inspects(&mut self) {
+        self.container_inspects.clear();
+        self.image_inspects.clear();
+        self.compose_yamls.clear();
+        self.pending_inspect = None;
+        self.last_selected_key = None;
+    }
+
     pub fn set_tab(&mut self, tab: DockerTab) {
         if self.tab != tab {
             self.tab = tab;
             self.inspector_scroll = 0;
             self.inspector_fullscreen = false;
             self.logs.fullscreen = false;
+            self.logs.searching = false;
             self.show_raw_json = false;
             self.reveal_secrets = false;
             self.filtering = false;
@@ -830,8 +878,15 @@ impl DockerState {
         let Some(key) = self.current_item_key() else {
             return;
         };
-        // Protect built-in networks from accidental multi-select removal.
+        // Protect built-in networks and mounted volumes from accidental multi-select removal.
         if self.tab == DockerTab::Networks && self.selected_network().is_some_and(|n| n.builtin) {
+            return;
+        }
+        if self.tab == DockerTab::Volumes
+            && self
+                .selected_volume()
+                .is_some_and(|v| !v.used_by.is_empty())
+        {
             return;
         }
         let set = &mut self.selected_ids[self.tab.index()];
@@ -1035,16 +1090,28 @@ impl DockerState {
     pub fn build_action_menu(&self) -> Option<DockerModal> {
         match self.tab {
             DockerTab::Containers => {
-                let c = self.selected_container()?;
                 let (ids, names) = self.container_targets()?;
                 let multi = ids.len() > 1;
+                let first_name = names.first().cloned().unwrap_or_default();
                 let title = if multi {
-                    format!("{} ({})", c.name, ids.len())
+                    format!("{first_name} ({})", ids.len())
                 } else {
-                    c.name.clone()
+                    first_name
                 };
+                let target_states: Vec<crate::ops::docker::model::ContainerState> = self
+                    .snapshot
+                    .containers
+                    .iter()
+                    .filter(|c| ids.contains(&c.id))
+                    .map(|c| c.state)
+                    .collect();
+                let any_running = target_states.iter().any(|s| s.is_running());
+                let all_paused = !target_states.is_empty()
+                    && target_states
+                        .iter()
+                        .all(|s| *s == crate::ops::docker::model::ContainerState::Paused);
                 let mut items = Vec::new();
-                if c.state.is_running() {
+                if any_running {
                     items.push(ActionMenuItem {
                         label_key: "docker.op.stop",
                         shortcut: "s",
@@ -1077,7 +1144,7 @@ impl DockerState {
                         names: names.clone(),
                     }),
                 });
-                if c.state == crate::ops::docker::model::ContainerState::Paused {
+                if all_paused {
                     items.push(ActionMenuItem {
                         label_key: "docker.op.unpause",
                         shortcut: "p",
@@ -1093,15 +1160,21 @@ impl DockerState {
                         label_key: "docker.op.pause",
                         shortcut: "p",
                         tone: Tone::Muted,
-                        disabled_toast: (!c.state.is_running())
-                            .then_some("docker.toast.not_running"),
+                        disabled_toast: (!any_running).then_some("docker.toast.not_running"),
                         action: MenuAction::Op(DockerOp::ContainerPause {
                             ids: ids.clone(),
                             names: names.clone(),
                         }),
                     });
                 }
-                if !multi {
+                if !multi
+                    && let Some(c) = self
+                        .snapshot
+                        .containers
+                        .iter()
+                        .find(|c| c.id == ids[0])
+                        .or_else(|| self.selected_container())
+                {
                     items.push(ActionMenuItem {
                         label_key: "docker.op.exec",
                         shortcut: "e",
@@ -1132,8 +1205,15 @@ impl DockerState {
                         action: MenuAction::OpenLogs,
                     });
                 }
+                let copy_short_id = self
+                    .snapshot
+                    .containers
+                    .iter()
+                    .find(|c| c.id == ids[0])
+                    .map(|c| c.short_id.clone())
+                    .unwrap_or_else(|| ids[0].chars().take(12).collect());
                 items.push(ActionMenuItem {
-                    label_key: if c.state.is_running() {
+                    label_key: if any_running {
                         "docker.op.remove_container_force"
                     } else {
                         "docker.op.remove_container"
@@ -1144,7 +1224,7 @@ impl DockerState {
                     action: MenuAction::Op(DockerOp::ContainerRemove {
                         ids,
                         names,
-                        force: c.state.is_running(),
+                        force: any_running,
                     }),
                 });
                 items.push(ActionMenuItem {
@@ -1152,7 +1232,7 @@ impl DockerState {
                     shortcut: "y",
                     tone: Tone::Muted,
                     disabled_toast: None,
-                    action: MenuAction::Copy(c.short_id.clone()),
+                    action: MenuAction::Copy(copy_short_id),
                 });
                 Some(DockerModal::ActionMenu {
                     title,
@@ -1312,9 +1392,26 @@ impl DockerState {
                 })
             }
             DockerTab::Volumes => {
-                let vol = self.selected_volume()?;
                 let names = self.volume_targets()?;
-                let in_use = !vol.used_by.is_empty() && names.len() == 1;
+                let in_use = self
+                    .snapshot
+                    .volumes
+                    .iter()
+                    .any(|v| names.contains(&v.name) && !v.used_by.is_empty());
+                let first_vol = self
+                    .snapshot
+                    .volumes
+                    .iter()
+                    .find(|v| v.name == names[0])
+                    .or_else(|| self.selected_volume());
+                let title = if names.len() > 1 {
+                    format!("{} ({})", names[0], names.len())
+                } else {
+                    names[0].clone()
+                };
+                let copy_mount = first_vol
+                    .map(|v| v.mountpoint.clone())
+                    .unwrap_or_else(|| names[0].clone());
                 let items = vec![
                     ActionMenuItem {
                         label_key: "docker.op.remove_volume",
@@ -1335,18 +1432,28 @@ impl DockerState {
                         shortcut: "y",
                         tone: Tone::Muted,
                         disabled_toast: None,
-                        action: MenuAction::Copy(vol.mountpoint.clone()),
+                        action: MenuAction::Copy(copy_mount),
                     },
                 ];
                 Some(DockerModal::ActionMenu {
-                    title: vol.name.clone(),
+                    title,
                     items,
                     cursor: 0,
                 })
             }
             DockerTab::Networks => {
-                let net = self.selected_network()?;
                 let (ids, names) = self.network_targets()?;
+                let any_builtin = self
+                    .snapshot
+                    .networks
+                    .iter()
+                    .any(|n| ids.contains(&n.id) && n.builtin);
+                let title = if names.len() > 1 {
+                    format!("{} ({})", names[0], names.len())
+                } else {
+                    names[0].clone()
+                };
+                let copy_name = names[0].clone();
                 let items = vec![
                     ActionMenuItem {
                         label_key: "docker.op.create_network",
@@ -1359,8 +1466,7 @@ impl DockerState {
                         label_key: "docker.op.remove_network",
                         shortcut: "d",
                         tone: Tone::Danger,
-                        disabled_toast: (net.builtin && ids.len() == 1)
-                            .then_some("docker.toast.builtin_protected"),
+                        disabled_toast: any_builtin.then_some("docker.toast.builtin_protected"),
                         action: MenuAction::Op(DockerOp::NetworkRemove { ids, names }),
                     },
                     ActionMenuItem {
@@ -1375,11 +1481,11 @@ impl DockerState {
                         shortcut: "y",
                         tone: Tone::Muted,
                         disabled_toast: None,
-                        action: MenuAction::Copy(net.name.clone()),
+                        action: MenuAction::Copy(copy_name),
                     },
                 ];
                 Some(DockerModal::ActionMenu {
-                    title: net.name.clone(),
+                    title,
                     items,
                     cursor: 0,
                 })
@@ -1446,12 +1552,50 @@ impl DockerState {
     pub fn apply_event(&mut self, event: DockerEvent) {
         match event {
             DockerEvent::Snapshot(mut snap) => {
-                // Preserve live stats & sparkline history across snapshot refreshes
-                snap.stats = std::mem::take(&mut self.snapshot.stats);
-                snap.cpu_history = std::mem::take(&mut self.snapshot.cpu_history);
-                snap.mem_history = std::mem::take(&mut self.snapshot.mem_history);
+                // Invalidate cached container inspects when state/status changes or container disappears
+                let prev_states: BTreeMap<&str, (crate::ops::docker::model::ContainerState, &str)> =
+                    self.snapshot
+                        .containers
+                        .iter()
+                        .map(|c| (c.id.as_str(), (c.state, c.status.as_str())))
+                        .collect();
+                let next_states: BTreeMap<&str, (crate::ops::docker::model::ContainerState, &str)> =
+                    snap.containers
+                        .iter()
+                        .map(|c| (c.id.as_str(), (c.state, c.status.as_str())))
+                        .collect();
+                let mut reset_pending = false;
+                self.container_inspects.retain(|id, _| {
+                    let keep = next_states.get(id.as_str()) == prev_states.get(id.as_str())
+                        && next_states.contains_key(id.as_str());
+                    if !keep && self.last_selected_key.as_deref() == Some(id.as_str()) {
+                        reset_pending = true;
+                    }
+                    keep
+                });
+                if reset_pending {
+                    self.last_selected_key = None;
+                }
+
+                // Preserve live stats & sparkline history only for currently running containers
+                let running_ids: BTreeSet<&str> = snap
+                    .containers
+                    .iter()
+                    .filter(|c| c.state.is_running())
+                    .map(|c| c.id.as_str())
+                    .collect();
+                let mut stats = std::mem::take(&mut self.snapshot.stats);
+                stats.retain(|id, _| running_ids.contains(id.as_str()));
+                snap.stats = stats;
+                let mut cpu_hist = std::mem::take(&mut self.snapshot.cpu_history);
+                cpu_hist.retain(|id, _| running_ids.contains(id.as_str()));
+                snap.cpu_history = cpu_hist;
+                let mut mem_hist = std::mem::take(&mut self.snapshot.mem_history);
+                mem_hist.retain(|id, _| running_ids.contains(id.as_str()));
+                snap.mem_history = mem_hist;
                 self.snapshot = *snap;
-                // Prune stale multi-selection keys that no longer exist
+
+                // Prune stale multi-selection keys and removed image inspects
                 let c_ids: BTreeSet<&str> = self
                     .snapshot
                     .containers
@@ -1462,6 +1606,8 @@ impl DockerState {
                 let i_ids: BTreeSet<&str> =
                     self.snapshot.images.iter().map(|i| i.id.as_str()).collect();
                 self.selected_ids[2].retain(|id| i_ids.contains(id.as_str()));
+                self.image_inspects
+                    .retain(|id, _| i_ids.contains(id.as_str()));
                 let v_names: BTreeSet<&str> = self
                     .snapshot
                     .volumes

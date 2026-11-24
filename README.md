@@ -61,7 +61,7 @@
 - **现代侧边栏工作台 TUI**：独立 Bento 概览仪表盘、可折叠导航栏、增强命令面板（`/` / `Ctrl+K`）、无边框纯文本复制视图（`V`）与完整键鼠操作；4 档响应式布局最低兼容 **`40×16`**（含 iOS Termius 等移动端窄屏 SSH）。
 - **配色 × UI 样式双维解耦**：内置 **8 套配色方案 × 8 套 UI 设计语言**，支持自动探测终端深浅色、实时预览抽屉（`T`）、透明背景（`B`）、减弱动效（`M`）与自定义 TOML 主题。
 - **专属 Docker 6 标签工作台**：内置 `cqs docker` 全屏聚焦 / 侧栏嵌入双态管理界面，覆盖容器、Compose、镜像、卷、网络与守护进程；纯原生 CLI JSON 采集，零后台驻留开销。
-- **97 项结构化运维动作**：11 大功能模块 + 固定置顶的「一键优化」批处理清单，CLI 与 TUI 共用同一套参数校验、权限检查与执行引擎。
+- **99 项结构化运维动作**：11 大功能模块 + 固定置顶的「一键优化」批处理清单，CLI 与 TUI 共用同一套参数校验、权限检查与执行引擎。
 - **事务化安全边界**：全链路 HTTPS + SHA-256 校验、文件锁（`flock`）、配置预检、原子替换、before-image 恢复基线、非交互 `apt` 保护与分级口令确认；任何场景下均不会静默重启系统。
 
 ---
@@ -109,7 +109,7 @@ sudo cqs --uninstall      # 卸载默认命令（保留配置与恢复基线）
 
 | 用途 | 追加参数 |
 | --- | --- |
-| 指定版本（网关不支持 API、限流或需安装旧版/预发布版时） | `--version v0.1.6` |
+| 指定版本（网关不支持 API、限流或需安装旧版/预发布版时） | `--version v0.1.7` |
 | 安装到自定义绝对路径 | `--install-dir /opt/cqs` |
 | 安装到当前用户目录（同时去掉 `sudo`） | `--install-dir "$HOME/.local/bin"` |
 
@@ -148,7 +148,7 @@ cargo build --release --locked
 
 ## 功能一览
 
-侧边栏顶部固定 **概览仪表盘（`H`）** 与 **一键优化（`O`）**，下方包含 11 个可自由调整顺序的功能模块（共 **97 项** CLI/TUI 操作）：
+侧边栏顶部固定 **概览仪表盘（`H`）** 与 **一键优化（`O`）**，下方包含 11 个可自由调整顺序的功能模块（共 **99 项** CLI/TUI 操作）：
 
 | 模块 | 覆盖能力 |
 | --- | --- |
@@ -158,7 +158,7 @@ cargo build --release --locked
 | **内核管理** | BBRv3 Standard / Max 内核安装（最新匹配或指定 `x.y.z`）、已安装内核列表、**GRUB 单次切核启动**、安全卸载未运行第三方内核 |
 | **SSH** | 端口修改与真实监听校验（兼容 `Match`/`Include`）、导入公钥并关闭密码认证 |
 | **Docker** | **专属 6 标签 TUI 管理工作台**（容器/Compose/镜像/卷/网络/守护进程）+ 安装、镜像源、IPv6、清理与卸载 |
-| **常用工具** | `curl`、`wget`、`nano`、`unzip`、`tar`、`tmux`、`iftop`、`btop`、`gdu`、`fzf` 独立入口与一键全装 |
+| **常用工具** | `curl`、`wget`、`nano`、`unzip`、`tar`、`tmux`、`iftop`、`btop`、`gdu`、`fzf`、`git`、`gh` 独立入口与一键全装 |
 | **Agent 工具** | **Pi（`pi.dev`）**、**Claude Code**、**Codex CLI** 官方独立二进制安装/更新与版本巡检（零 Node.js/npm） |
 | **终端美化** | Starship + Bash/Zsh 提示符配置，7 种样式 × 9 套配色，TUI/CLI 只读效果预览、TOML 查看与首次基线还原 |
 | **Mihomo 代理** | 37 项全栈动作：核心、在线/本地订阅、4 款 Web 面板、GeoData 规则库、热重载/模式/测速/连接管理、DNS/TUN/systemd 与 `clashctl` 兼容 |
@@ -216,7 +216,7 @@ clashctl node use 'Proxy' 'Node A'
   cqs run ai.status
   ```
 
-- **常用工具与终端美化**：10 个常用工具支持独立入口或 `tools.install` 全量安装；**终端美化**基于 Starship，提供 7 种样式（`full`、`compact`、`box`、`ribbon`、`powerline`、`minimal`、`brackets`）与 9 套配色（`cyan`、`green`、`magenta`、`tokyo-night`、`catppuccin`、`rose-pine`、`nord`、`gruvbox`、`dracula`），在 TUI 与 CLI 均支持实时效果预览、Starship TOML 检视与首次基线还原。
+- **常用工具与终端美化**：12 个常用工具（含 `git` 及 `cli/cli` 官方 `.deb` 校验安装的 `gh`）支持独立入口或 `tools.install` 全量安装；**终端美化**基于 Starship，提供 7 种样式（`full`、`compact`、`box`、`ribbon`、`powerline`、`minimal`、`brackets`）与 9 套配色（`cyan`、`green`、`magenta`、`tokyo-night`、`catppuccin`、`rose-pine`、`nord`、`gruvbox`、`dracula`），在 TUI 与 CLI 均支持实时效果预览、Starship TOML 检视与首次基线还原。
 
 ---
 

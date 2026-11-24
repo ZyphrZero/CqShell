@@ -56,23 +56,29 @@ impl App {
 
         // 5. Fullscreen inspect overlay (Compact mode)
         if self.docker.inspector_fullscreen {
+            let max_s = self.docker.max_inspector_scroll.get();
             match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => {
+                KeyCode::Esc | KeyCode::Char('q' | 'i') => {
                     self.docker.inspector_fullscreen = false;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.docker.inspector_scroll = self.docker.inspector_scroll.saturating_sub(1);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.docker.inspector_scroll = self.docker.inspector_scroll.saturating_add(1);
+                    self.docker.inspector_scroll =
+                        self.docker.inspector_scroll.saturating_add(1).min(max_s);
                 }
                 KeyCode::PageUp => {
                     self.docker.inspector_scroll = self.docker.inspector_scroll.saturating_sub(10);
                 }
                 KeyCode::PageDown => {
-                    self.docker.inspector_scroll = self.docker.inspector_scroll.saturating_add(10);
+                    self.docker.inspector_scroll =
+                        self.docker.inspector_scroll.saturating_add(10).min(max_s);
                 }
-                KeyCode::Char('J') => self.docker.show_raw_json = !self.docker.show_raw_json,
+                KeyCode::Char('J') => {
+                    self.docker.show_raw_json = !self.docker.show_raw_json;
+                    self.docker.inspector_scroll = 0;
+                }
                 KeyCode::Char('S') => self.docker.reveal_secrets = !self.docker.reveal_secrets,
                 KeyCode::Char('y') => return Ok(self.docker_copy_current()),
                 KeyCode::Char('V' | 'M') => return Ok(self.docker_plain_view()),
@@ -81,13 +87,19 @@ impl App {
             return Ok(Effect::None);
         }
 
-        // 6. Alt+1..6 switches Docker tabs even in embedded mode
-        if key.modifiers.contains(KeyModifiers::ALT)
-            && let KeyCode::Char(d @ '1'..='6') = key.code
-        {
-            let idx = (d as u8 - b'1') as usize;
-            self.docker.set_tab(DockerTab::from_index(idx));
-            return Ok(Effect::None);
+        // 6. Alt+1..6 switches Docker tabs; Alt+Up/Down reorders the Docker sidebar category
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            if let KeyCode::Char(d @ '1'..='6') = key.code {
+                let idx = (d as u8 - b'1') as usize;
+                self.docker.set_tab(DockerTab::from_index(idx));
+                return Ok(Effect::None);
+            }
+            if matches!(key.code, KeyCode::Up | KeyCode::Down) {
+                if idle {
+                    self.reorder_category(key.code == KeyCode::Down);
+                }
+                return Ok(Effect::None);
+            }
         }
 
         // 7. Ctrl+U / Ctrl+D scroll right inspector without moving focus
@@ -103,6 +115,14 @@ impl App {
                 }
                 _ => {}
             }
+        }
+
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char(_))
+        {
+            return Ok(Effect::None);
         }
 
         match key.code {
@@ -121,6 +141,7 @@ impl App {
                     self.docker.clear_selection();
                 } else if self.docker.fullscreen && !self.docker.launched_standalone {
                     self.docker.fullscreen = false;
+                    self.docker.focus_inspector = false;
                 }
             }
 
@@ -192,28 +213,30 @@ impl App {
 
             // Vertical navigation
             KeyCode::Up | KeyCode::Char('k') => {
-                if self.docker.focus_inspector {
+                if self.docker.fullscreen && self.docker.focus_inspector {
                     self.docker_scroll_right(true, 1);
                 } else {
                     self.docker.move_cursor(false);
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.docker.focus_inspector {
+                if self.docker.fullscreen && self.docker.focus_inspector {
                     self.docker_scroll_right(false, 1);
                 } else {
                     self.docker.move_cursor(true);
                 }
             }
             KeyCode::Home => {
-                if self.docker.focus_inspector {
+                if self.docker.fullscreen && self.docker.focus_inspector {
                     self.docker.inspector_scroll = 0;
                 } else {
                     self.docker.set_cursor(0);
                 }
             }
             KeyCode::End => {
-                if !self.docker.focus_inspector {
+                if self.docker.fullscreen && self.docker.focus_inspector {
+                    self.docker.inspector_scroll = self.docker.max_inspector_scroll.get();
+                } else {
                     let count = self.docker.visible_count();
                     self.docker.set_cursor(count.saturating_sub(1));
                 }
@@ -384,10 +407,10 @@ impl App {
 
     fn docker_scroll_right(&mut self, up: bool, amount: usize) {
         if self.docker_in_embedded_logs() {
-            let total = self.docker.logs.filtered_lines().len();
+            let max_s = self.docker.effective_logs_max_scroll();
             if up {
                 self.docker.logs.follow = false;
-                self.docker.logs.scroll = self.docker.logs.scroll.saturating_add(amount).min(total);
+                self.docker.logs.scroll = self.docker.logs.scroll.saturating_add(amount).min(max_s);
             } else {
                 self.docker.logs.scroll = self.docker.logs.scroll.saturating_sub(amount);
                 if self.docker.logs.scroll == 0 {
@@ -398,8 +421,12 @@ impl App {
             self.docker.inspector_scroll =
                 self.docker.inspector_scroll.saturating_sub(amount as u16);
         } else {
-            self.docker.inspector_scroll =
-                self.docker.inspector_scroll.saturating_add(amount as u16);
+            let max_s = self.docker.max_inspector_scroll.get();
+            self.docker.inspector_scroll = self
+                .docker
+                .inspector_scroll
+                .saturating_add(amount as u16)
+                .min(max_s);
         }
     }
 
@@ -455,6 +482,8 @@ impl App {
             KeyCode::Delete => self.docker.logs.search.delete(),
             KeyCode::Left => self.docker.logs.search.left(),
             KeyCode::Right => self.docker.logs.search.right(),
+            KeyCode::Home => self.docker.logs.search.cursor = 0,
+            KeyCode::End => self.docker.logs.search.cursor = self.docker.logs.search.text.len(),
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.docker.logs.search.clear();
             }
@@ -467,14 +496,17 @@ impl App {
             }
             _ => {}
         }
+        let max_s = self.docker.effective_logs_max_scroll();
+        self.docker.logs.scroll = self.docker.logs.scroll.min(max_s);
         Ok(Effect::None)
     }
 
     fn docker_fullscreen_log_key(&mut self, key: KeyEvent) -> Result<Effect> {
-        let total = self.docker.logs.filtered_lines().len();
+        let max_s = self.docker.effective_logs_max_scroll();
         match key.code {
             KeyCode::Esc | KeyCode::Char('l' | 'q') => {
                 self.docker.logs.fullscreen = false;
+                self.docker.logs.searching = false;
             }
             KeyCode::Char('f') => {
                 self.docker.logs.follow = !self.docker.logs.follow;
@@ -514,7 +546,7 @@ impl App {
             KeyCode::Char('V' | 'M') => return Ok(self.docker_plain_view()),
             KeyCode::Up | KeyCode::Char('k') => {
                 self.docker.logs.follow = false;
-                self.docker.logs.scroll = self.docker.logs.scroll.saturating_add(1).min(total);
+                self.docker.logs.scroll = self.docker.logs.scroll.saturating_add(1).min(max_s);
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.docker.logs.scroll = self.docker.logs.scroll.saturating_sub(1);
@@ -524,7 +556,7 @@ impl App {
             }
             KeyCode::PageUp => {
                 self.docker.logs.follow = false;
-                self.docker.logs.scroll = self.docker.logs.scroll.saturating_add(14).min(total);
+                self.docker.logs.scroll = self.docker.logs.scroll.saturating_add(14).min(max_s);
             }
             KeyCode::PageDown => {
                 self.docker.logs.scroll = self.docker.logs.scroll.saturating_sub(14);
@@ -534,7 +566,7 @@ impl App {
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.docker.logs.follow = false;
-                self.docker.logs.scroll = total;
+                self.docker.logs.scroll = max_s;
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.docker.logs.scroll = 0;
@@ -587,14 +619,16 @@ impl App {
         }
         match self.docker.tab {
             DockerTab::Containers => {
-                let Some(c) = self.docker.selected_container() else {
-                    return Ok(Effect::None);
-                };
-                let running = c.state.is_running();
                 let Some((ids, names)) = self.docker.container_targets() else {
                     return Ok(Effect::None);
                 };
-                let op = if running {
+                let any_running = self
+                    .docker
+                    .snapshot
+                    .containers
+                    .iter()
+                    .any(|c| ids.contains(&c.id) && c.state.is_running());
+                let op = if any_running {
                     DockerOp::ContainerStop { ids, names }
                 } else {
                     DockerOp::ContainerStart { ids, names }
@@ -652,16 +686,20 @@ impl App {
         }
         match self.docker.tab {
             DockerTab::Containers => {
-                let Some(c) = self.docker.selected_container() else {
-                    return Ok(Effect::None);
-                };
-                let state = c.state;
                 let Some((ids, names)) = self.docker.container_targets() else {
                     return Ok(Effect::None);
                 };
-                if state == ContainerState::Paused {
+                let states: Vec<ContainerState> = self
+                    .docker
+                    .snapshot
+                    .containers
+                    .iter()
+                    .filter(|c| ids.contains(&c.id))
+                    .map(|c| c.state)
+                    .collect();
+                if !states.is_empty() && states.iter().all(|s| *s == ContainerState::Paused) {
                     self.run_docker_op(DockerOp::ContainerUnpause { ids, names })
-                } else if state.is_running() {
+                } else if states.iter().any(|s| s.is_running()) {
                     self.run_docker_op(DockerOp::ContainerPause { ids, names })
                 } else {
                     self.toast_key("docker.toast.not_running", Tone::Warning);
@@ -713,17 +751,19 @@ impl App {
         }
         match self.docker.tab {
             DockerTab::Containers => {
-                let Some(c) = self.docker.selected_container() else {
-                    return Ok(Effect::None);
-                };
-                let running = c.state.is_running();
                 let Some((ids, names)) = self.docker.container_targets() else {
                     return Ok(Effect::None);
                 };
+                let any_running = self
+                    .docker
+                    .snapshot
+                    .containers
+                    .iter()
+                    .any(|c| ids.contains(&c.id) && c.state.is_running());
                 self.run_docker_op(DockerOp::ContainerRemove {
                     ids,
                     names,
-                    force: force_or_volumes || running,
+                    force: force_or_volumes || any_running,
                 })
             }
             DockerTab::Compose => {
@@ -747,26 +787,32 @@ impl App {
                 })
             }
             DockerTab::Volumes => {
-                let Some(vol) = self.docker.selected_volume() else {
-                    return Ok(Effect::None);
-                };
                 let Some(names) = self.docker.volume_targets() else {
                     return Ok(Effect::None);
                 };
-                if names.len() == 1 && !vol.used_by.is_empty() {
+                let any_in_use = self
+                    .docker
+                    .snapshot
+                    .volumes
+                    .iter()
+                    .any(|v| names.contains(&v.name) && !v.used_by.is_empty());
+                if any_in_use {
                     self.toast_key("docker.toast.volume_in_use", Tone::Warning);
                     return Ok(Effect::None);
                 }
                 self.run_docker_op(DockerOp::VolumeRemove { names })
             }
             DockerTab::Networks => {
-                let Some(net) = self.docker.selected_network() else {
-                    return Ok(Effect::None);
-                };
                 let Some((ids, names)) = self.docker.network_targets() else {
                     return Ok(Effect::None);
                 };
-                if ids.len() == 1 && net.builtin {
+                let any_builtin = self
+                    .docker
+                    .snapshot
+                    .networks
+                    .iter()
+                    .any(|n| ids.contains(&n.id) && n.builtin);
+                if any_builtin {
                     self.toast_key("docker.toast.builtin_protected", Tone::Warning);
                     return Ok(Effect::None);
                 }
@@ -872,7 +918,11 @@ impl App {
                         self.docker.modal = None;
                         return self.execute_menu_item(chosen);
                     }
-                    KeyCode::Char(c) => {
+                    KeyCode::Char(c)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
                         let key_str = c.to_string();
                         if let Some(item) = items.iter().find(|it| it.shortcut == key_str).cloned()
                         {
@@ -986,7 +1036,12 @@ impl App {
                 KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1) % 6,
                 KeyCode::Char(' ') => match *cursor {
                     0 => *containers = !*containers,
-                    1 => *images = !*images,
+                    1 => {
+                        *images = !*images;
+                        if !*images {
+                            *all_unused_images = false;
+                        }
+                    }
                     2 => {
                         *all_unused_images = !*all_unused_images;
                         if *all_unused_images {
@@ -1166,8 +1221,23 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                let right_chips_x = dk_geom
+                    .project_chip
+                    .or(dk_geom.scope_chip)
+                    .or(dk_geom.sort_chip)
+                    .map(|r| r.x.saturating_sub(1))
+                    .unwrap_or(dk_geom.filter_bar.right());
+                let in_filter_input = dk_geom.filter_bar.contains(point) && point.x < right_chips_x;
+                if !in_filter_input {
+                    self.docker.filtering = false;
+                }
+                if in_filter_input && self.docker.tab != DockerTab::Daemon {
+                    self.docker.filtering = true;
+                    return Ok(Effect::None);
+                }
                 if dk_geom.focus_btn.is_some_and(|r| r.contains(point)) {
                     self.docker.fullscreen = !self.docker.fullscreen;
+                    self.docker.focus_inspector = false;
                     return Ok(Effect::None);
                 }
                 if let Some(tab) = dk_geom.tab_at(point) {

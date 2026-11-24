@@ -61,7 +61,7 @@
 - **Modern Sidebar Shell TUI**: Dedicated Bento Overview dashboard, collapsible sidebar, fuzzy command palette (`/` / `Ctrl+K`), borderless plain-text copy view (`V`), full mouse/keyboard support, and 4 responsive breakpoints down to **`40×16`** (including mobile SSH clients such as iOS Termius).
 - **Decoupled Themes & UI Styles**: **8 built-in color themes × 8 UI design languages**, automatic terminal light/dark detection, live preview drawer (`T`), transparent terminal background (`B`), reduced motion (`M`), and custom TOML themes.
 - **Dedicated 6-Tab Docker TUI Workspace**: Launch directly via `cqs docker` with Focus / Embedded dual modes across Containers, Compose, Images, Volumes, Networks, and Daemon — powered by native CLI JSON output with zero idle daemon overhead.
-- **97 Structured Operations**: 11 reorderable modules plus a pinned **One-Click Optimization** checklist sharing one validation, privilege, and execution engine across TUI and CLI.
+- **99 Structured Operations**: 11 reorderable modules plus a pinned **One-Click Optimization** checklist sharing one validation, privilege, and execution engine across TUI and CLI.
 - **Transactional Safety**: HTTPS-only downloads with SHA-256 verification, `flock` locks, config validation before commit, atomic replacements, before-image recovery journals, non-interactive `apt` safeguards, tiered confirmations, and zero implicit reboots.
 
 ---
@@ -109,7 +109,7 @@ Append options after `bash -s --`:
 
 | Purpose | Append |
 | --- | --- |
-| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.1.6` |
+| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.1.7` |
 | Install into a custom absolute directory | `--install-dir /opt/cqs` |
 | Install for the current user (also omit `sudo`) | `--install-dir "$HOME/.local/bin"` |
 
@@ -148,7 +148,7 @@ See [docs/RELEASING.md](docs/RELEASING.md) for publishing, CI workflows, and mir
 
 ## Feature Overview
 
-The sidebar pins **Overview (`H`)** and **Optimization (`O`)**, followed by 11 reorderable modules totaling **97** CLI/TUI actions:
+The sidebar pins **Overview (`H`)** and **Optimization (`O`)**, followed by 11 reorderable modules totaling **99** CLI/TUI actions:
 
 | Module | Capabilities |
 | --- | --- |
@@ -158,7 +158,7 @@ The sidebar pins **Overview (`H`)** and **Optimization (`O`)**, followed by 11 r
 | **Kernel** | BBRv3 Standard / Max kernel installation (latest matching or pinned `x.y.z`), installed kernel inventory, **one-time GRUB boot switch**, safe removal of non-running third-party kernels |
 | **SSH** | Port updates with active listener verification (preserving `Match`/`Include`), public key import & password auth lockdown |
 | **Docker** | **Dedicated 6-tab Docker TUI workspace** (Containers / Compose / Images / Volumes / Networks / Daemon) + install, registry mirrors, IPv6, cleanup & uninstall |
-| **Tools** | Individual installers for `curl`, `wget`, `nano`, `unzip`, `tar`, `tmux`, `iftop`, `btop`, `gdu`, `fzf`, plus install-all |
+| **Tools** | Individual installers for `curl`, `wget`, `nano`, `unzip`, `tar`, `tmux`, `iftop`, `btop`, `gdu`, `fzf`, `git`, `gh`, plus install-all |
 | **Agent Tools** | Official standalone Linux binary install/update & status checks for **Pi (`pi.dev`)**, **Claude Code**, and **Codex CLI** (zero Node.js/npm) |
 | **Prompt** | Starship + Bash/Zsh prompt setup with 7 styles × 9 palettes, live TUI/CLI preview, Starship TOML viewer, and first-baseline restore |
 | **Mihomo Proxy** | 37 full-stack actions: core, HTTPS & local YAML subscriptions, 4 Web UIs, GeoData rule sets, hot-reload / mode / delay testing / connections, DNS / TUN / systemd & `clashctl` compatibility |
@@ -216,7 +216,7 @@ See [docs/MIHOMO.md](docs/MIHOMO.md) (Chinese) for detailed commands, recovery b
   cqs run ai.status
   ```
 
-- **Common Tools & Prompt**: Individual or batch installation for 10 CLI utilities, plus Starship prompt customization for Bash/Zsh across 7 styles (`full`, `compact`, `box`, `ribbon`, `powerline`, `minimal`, `brackets`) and 9 palettes (`cyan`, `green`, `magenta`, `tokyo-night`, `catppuccin`, `rose-pine`, `nord`, `gruvbox`, `dracula`) with live TUI/CLI previews, Starship TOML inspection, and first-baseline restore.
+- **Common Tools & Prompt**: Individual or batch installation for 12 CLI utilities (including `git` and SHA-256-verified official `cli/cli` `.deb` releases for `gh`), plus Starship prompt customization for Bash/Zsh across 7 styles (`full`, `compact`, `box`, `ribbon`, `powerline`, `minimal`, `brackets`) and 9 palettes (`cyan`, `green`, `magenta`, `tokyo-night`, `catppuccin`, `rose-pine`, `nord`, `gruvbox`, `dracula`) with live TUI/CLI previews, Starship TOML inspection, and first-baseline restore.
 
 ---
 

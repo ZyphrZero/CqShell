@@ -11,11 +11,20 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+/// Returns true if `path` contains any `.` or `..` segment, including interior
+/// or trailing `.` segments that `Path::components()` normalizes away.
+pub fn has_relative_segment(path: &Path) -> bool {
+    path.components()
+        .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+        || path
+            .to_string_lossy()
+            .split(['/', '\\'])
+            .any(|seg| matches!(seg, "." | ".."))
+}
+
 pub fn check_path(path: &Path, file: bool) -> Result<()> {
     if !path.is_absolute()
-        || path
-            .components()
-            .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+        || has_relative_segment(path)
         || path.to_string_lossy().chars().any(char::is_control)
     {
         return Err(Error::new("error.path", path.display()));

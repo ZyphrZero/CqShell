@@ -267,14 +267,15 @@ pub(super) fn draw(app: &App, frame: &mut Frame) {
         );
     }
 
-    if app.command_palette.is_some() {
-        modals::draw_palette(app, frame, area, modal_alpha);
-    } else if app.log_modal {
-        logs::draw_modal(app, frame, area, modal_alpha);
-    } else if app.help {
-        modals::draw_help(app, frame, area, modal_alpha);
-    } else if app.notice.is_some() {
-        modals::draw_notice(app, frame, area, modal_alpha);
+    // Render topmost active modal matching the exact priority order in `tui/events.rs`:
+    // Confirmation -> Loading -> Picker/Form -> PromptPreview -> DockerModal ->
+    // Notice -> Help -> FullLogs -> CommandPalette.
+    if app.confirmation.is_some() {
+        modals::draw_confirmation(app, frame, area, modal_alpha);
+    } else if let Some(loading) = &app.loading {
+        if app.now.saturating_duration_since(loading.started) >= fx::LOADING_DELAY {
+            modals::draw_loading(app, frame, area, loading, modal_alpha);
+        }
     } else if let Some(form) = &app.form {
         if form.picker.is_some() {
             modals::draw_picker(app, frame, area, form, modal_alpha);
@@ -285,14 +286,14 @@ pub(super) fn draw(app: &App, frame: &mut Frame) {
         terminal_preview::draw_studio_modal(app, frame, area, preview, modal_alpha);
     } else if app.docker_has_modal() {
         super::docker::render::modals::draw(app, frame, area, modal_alpha);
-    } else if let Some(loading) = &app.loading
-        && app.now.saturating_duration_since(loading.started) >= fx::LOADING_DELAY
-    {
-        modals::draw_loading(app, frame, area, loading, modal_alpha);
-    }
-
-    if app.confirmation.is_some() {
-        modals::draw_confirmation(app, frame, area, modal_alpha);
+    } else if app.notice.is_some() {
+        modals::draw_notice(app, frame, area, modal_alpha);
+    } else if app.help {
+        modals::draw_help(app, frame, area, modal_alpha);
+    } else if app.log_modal {
+        logs::draw_modal(app, frame, area, modal_alpha);
+    } else if app.command_palette.is_some() {
+        modals::draw_palette(app, frame, area, modal_alpha);
     }
 }
 

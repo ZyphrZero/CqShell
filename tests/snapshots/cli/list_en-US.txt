@@ -46,7 +46,7 @@ tcp.tune               Tune TCP buffers
 tcp.restore            Restore TCP settings
   Restore the first recorded TCP runtime values and configuration.
 github.proxy           GitHub acceleration proxy
-  Configure and toggle an HTTPS GitHub acceleration proxy prefix (default https://gh-proxy.com/) for Mihomo, BBRv3 kernels, Agent tools, Starship, and pinned GitHub scripts. Applies only to canonical GitHub hosts while keeping strict HTTPS and SHA-256 verification.
+  Configure and toggle an HTTPS GitHub acceleration proxy prefix (default https://gh-proxy.com/) for Mihomo, BBRv3 kernels, Agent tools, gh, Starship, and pinned GitHub scripts. Applies only to canonical GitHub hosts while keeping strict HTTPS and SHA-256 verification.
   gh_proxy_state=on ["on", "off"]
   gh_proxy_url=https://gh-proxy.com/ []
 clash.install          Install / update Mihomo
@@ -197,9 +197,13 @@ tools.gdu              gdu disk usage analyzer
   Install gdu through apt to analyze directory disk usage.
 tools.fzf              fzf fuzzy finder
   Install the fzf interactive fuzzy finder through apt.
+tools.git              git version control
+  Install the git distributed version control system through apt.
+tools.gh               gh GitHub CLI
+  Download the latest official Linux .deb from cli/cli Releases, verify SHA-256 and architecture, and install through apt.
 tools.install          Install all / choose a package
   Install a selected package; all also installs zsh and Starship without enabling prompt customization.
-  package=all ["all", "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf"]
+  package=all ["all", "curl", "wget", "nano", "unzip", "tar", "tmux", "iftop", "btop", "gdu", "fzf", "git", "gh"]
 ai.pi.install          Install / update Pi
   Download the official standalone Pi Linux binary package, verify SHA-256 and retain themes, WASM and other resources. No Node.js/npm required. Verify the version before updating the current user's command.
 ai.claude.install      Install / update Claude Code

@@ -57,6 +57,7 @@ pub(in crate::tui) struct DockerGeometry {
     pub project_chip: Option<Rect>,
     pub table_header: Rect,
     pub col_hits: Vec<(Rect, usize)>,
+    pub compose_warn_y: Option<u16>,
     pub list_inner: Rect,
     pub list_scroll: usize,
     pub batch_bar: Option<Rect>,
@@ -125,6 +126,7 @@ impl DockerGeometry {
                 project_chip: None,
                 table_header: Rect::default(),
                 col_hits: Vec::new(),
+                compose_warn_y: None,
                 list_inner: Rect::default(),
                 list_scroll: 0,
                 batch_bar: None,
@@ -239,12 +241,24 @@ impl DockerGeometry {
 
         let show_batch = dk.selected_count() > 0 && list_area.height >= 8;
         let batch_h = u16::from(show_batch);
-        let rows_y = if has_header {
+        let base_rows_y = if has_header {
             header_y + 1
         } else {
             list_area.y + pad_top
         };
         let rows_bottom = list_area.bottom().saturating_sub(pad_bot + batch_h);
+        let no_compose_plugin = dk.tab == DockerTab::Compose
+            && dk
+                .snapshot
+                .engine
+                .as_ref()
+                .is_some_and(|e| e.compose_version.is_none());
+        let (compose_warn_y, rows_y) =
+            if no_compose_plugin && rows_bottom.saturating_sub(base_rows_y) >= 3 {
+                (Some(base_rows_y), base_rows_y + 1)
+            } else {
+                (None, base_rows_y)
+            };
         let list_inner = Rect::new(
             list_x,
             rows_y.min(rows_bottom),
@@ -306,6 +320,7 @@ impl DockerGeometry {
             project_chip,
             table_header,
             col_hits,
+            compose_warn_y,
             list_inner,
             list_scroll,
             batch_bar,
@@ -557,39 +572,58 @@ fn build_col_hits(header: Rect, tab: DockerTab) -> Vec<(Rect, usize)> {
     }
     match tab {
         DockerTab::Containers => {
-            let mut hits = vec![
-                (Rect::new(header.x, header.y, 7, 1), 0), // State
-                (
-                    Rect::new(
-                        header.x + 7,
-                        header.y,
-                        header.width.saturating_sub(21).max(8),
-                        1,
-                    ),
-                    1,
-                ), // Name
-            ];
+            let mut hits = vec![(Rect::new(header.x, header.y, 5, 1), 0)];
             if header.width >= 38 {
                 let cpu_x = header.right().saturating_sub(13);
+                let name_w = cpu_x.saturating_sub(header.x + 5).max(6);
+                hits.push((Rect::new(header.x + 5, header.y, name_w, 1), 1));
                 hits.push((Rect::new(cpu_x, header.y, 6, 1), 2));
                 hits.push((Rect::new(cpu_x + 6, header.y, 7, 1), 3));
+            } else {
+                hits.push((
+                    Rect::new(header.x + 5, header.y, header.width.saturating_sub(5), 1),
+                    1,
+                ));
             }
             hits
         }
-        DockerTab::Images | DockerTab::Volumes | DockerTab::Networks => {
-            let split = header.width.saturating_sub(16).max(10);
-            vec![
-                (Rect::new(header.x, header.y, split, 1), 0),
-                (
-                    Rect::new(
-                        header.x + split,
-                        header.y,
-                        header.width.saturating_sub(split),
-                        1,
+        DockerTab::Images | DockerTab::Volumes => {
+            if header.width >= 40 {
+                let sz_x = header.right().saturating_sub(18);
+                let refs_x = sz_x + 8;
+                vec![
+                    (
+                        Rect::new(header.x, header.y, sz_x.saturating_sub(header.x), 1),
+                        0,
                     ),
-                    1,
-                ),
-            ]
+                    (Rect::new(sz_x, header.y, 8, 1), 1),
+                    (
+                        Rect::new(refs_x, header.y, header.right().saturating_sub(refs_x), 1),
+                        2,
+                    ),
+                ]
+            } else {
+                vec![(header, 0)]
+            }
+        }
+        DockerTab::Networks => {
+            if header.width >= 38 {
+                let drv_x = header.right().saturating_sub(20);
+                let cnt_x = drv_x + 9;
+                vec![
+                    (
+                        Rect::new(header.x, header.y, drv_x.saturating_sub(header.x), 1),
+                        0,
+                    ),
+                    (Rect::new(drv_x, header.y, 9, 1), 1),
+                    (
+                        Rect::new(cnt_x, header.y, header.right().saturating_sub(cnt_x), 1),
+                        2,
+                    ),
+                ]
+            } else {
+                vec![(header, 0)]
+            }
         }
         _ => Vec::new(),
     }

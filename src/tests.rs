@@ -130,6 +130,119 @@ fn individual_package_entries_keep_the_fixed_package_and_shared_lock() {
 }
 
 #[test]
+fn gh_release_parser_requires_canonical_stable_deb_and_valid_sha256() {
+    assert_eq!(tools::gh_deb_arch("x86_64").unwrap(), "amd64");
+    assert_eq!(tools::gh_deb_arch("amd64").unwrap(), "amd64");
+    assert_eq!(tools::gh_deb_arch("aarch64").unwrap(), "arm64");
+    assert_eq!(tools::gh_deb_arch("arm64").unwrap(), "arm64");
+    for unsupported in ["armv7l", "riscv64", ""] {
+        assert_eq!(
+            tools::gh_deb_arch(unsupported).unwrap_err().key,
+            "error.input"
+        );
+    }
+
+    let digest_upper = "A1B2C3D4".repeat(8);
+    let valid = |arch: &str| {
+        let name = format!("gh_2.67.0_linux_{arch}.deb");
+        serde_json::json!({
+            "tag_name": "v2.67.0",
+            "draft": false,
+            "prerelease": false,
+            "assets": [
+                {
+                    "name": format!("gh_2.67.0_linux_{arch}.tar.gz"),
+                    "browser_download_url": format!("https://github.com/cli/cli/releases/download/v2.67.0/gh_2.67.0_linux_{arch}.tar.gz"),
+                    "digest": format!("sha256:{}", "f".repeat(64)),
+                },
+                {
+                    "name": name,
+                    "browser_download_url": format!("https://github.com/cli/cli/releases/download/v2.67.0/{name}"),
+                    "digest": format!("sha256:{digest_upper}"),
+                }
+            ]
+        })
+    };
+    for arch in ["amd64", "arm64"] {
+        let parsed =
+            tools::parse_gh_release(&serde_json::to_vec(&valid(arch)).unwrap(), arch).unwrap();
+        assert_eq!(parsed.name, format!("gh_2.67.0_linux_{arch}.deb"));
+        assert_eq!(
+            parsed.url,
+            format!(
+                "https://github.com/cli/cli/releases/download/v2.67.0/gh_2.67.0_linux_{arch}.deb"
+            )
+        );
+        assert_eq!(parsed.digest, digest_upper.to_ascii_lowercase());
+    }
+
+    for case in 0..10 {
+        let mut bad = valid("amd64");
+        match case {
+            0 => bad["draft"] = serde_json::json!(true),
+            1 => bad["prerelease"] = serde_json::json!(true),
+            2 => bad["tag_name"] = serde_json::json!("2.67.0"),
+            3 => bad["tag_name"] = serde_json::json!("v2..67.0"),
+            4 => bad["tag_name"] = serde_json::json!("v.2.67.0"),
+            5 => bad["tag_name"] = serde_json::json!("v2.67.0/evil"),
+            6 => {
+                bad["assets"][1]["browser_download_url"] = serde_json::json!(
+                    "https://github.com/evil/cli/releases/download/v2.67.0/gh_2.67.0_linux_amd64.deb"
+                );
+            }
+            7 => bad["assets"][1]["digest"] = serde_json::json!("md5:deadbeef"),
+            8 => {
+                bad["assets"][1]["digest"] = serde_json::json!(format!("sha256:{}", "z".repeat(64)))
+            }
+            9 => {
+                let dup = bad["assets"][1].clone();
+                bad["assets"].as_array_mut().unwrap().push(dup);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            tools::parse_gh_release(&serde_json::to_vec(&bad).unwrap(), "amd64")
+                .unwrap_err()
+                .key,
+            "error.release",
+            "case {case}"
+        );
+    }
+    assert_eq!(
+        tools::parse_gh_release(&serde_json::to_vec(&valid("amd64")).unwrap(), "arm64")
+            .unwrap_err()
+            .key,
+        "error.release"
+    );
+}
+
+#[test]
+fn ssh_candidate_and_path_preflight_handle_equals_syntax_and_curdir() {
+    let original = "# Port=22\nPort=2222\nPermitRootLogin=yes\nMatch=User backup\nPort=2222\n";
+    let updated = ssh::candidate(original, &[("Port", "55520".into())]);
+    assert!(updated.starts_with("Port 55520\n"));
+    assert!(updated.contains("# Port=22\n"));
+    assert!(!updated.contains("\nPort=2222\nPermitRootLogin=yes\n"));
+    assert!(updated.contains("Match=User backup\nPort=2222\n"));
+
+    let io_spec = actions::find("test.io").unwrap();
+    assert!(
+        io_spec
+            .parameters(&BTreeMap::from([("directory".into(), "/var/tmp/.".into())]))
+            .is_err()
+    );
+    let secret_spec = actions::find("clash.secret.set").unwrap();
+    assert!(
+        secret_spec
+            .parameters(&BTreeMap::from([(
+                "secret_file".into(),
+                "relative.txt".into()
+            )]))
+            .is_err()
+    );
+}
+
+#[test]
 fn catalogs_cover_all_action_and_field_labels() {
     for locale in ["zh-CN", "en-US"] {
         let i = I18n::load(Some(locale), None).unwrap();
@@ -1025,12 +1138,12 @@ printf '%s\n' "$*" >> "$CQS_TEST_ROOT/packages"
 test ! -e "$CQS_TEST_ROOT/fail_packages"
 "#,
         );
-        for package in tools::PACKAGES {
+        for package in tools::APT_PACKAGES {
             tools::packages(&ctx, package).unwrap();
         }
         let calls = fs::read_to_string(temp.path().join("packages")).unwrap();
-        assert_eq!(calls.lines().count(), tools::PACKAGES.len());
-        for (call, package) in calls.lines().zip(tools::PACKAGES) {
+        assert_eq!(calls.lines().count(), tools::APT_PACKAGES.len());
+        for (call, package) in calls.lines().zip(tools::APT_PACKAGES) {
             let (packages, options) = call.split_once(" -o ").unwrap();
             assert_eq!(packages, format!("install -y {package}"));
             assert!(options.contains("Dpkg::Use-Pty=0"));
@@ -1039,6 +1152,104 @@ test ! -e "$CQS_TEST_ROOT/fail_packages"
         assert_eq!(
             tools::packages(&ctx, "curl").unwrap_err().key,
             "error.command"
+        );
+    }
+
+    #[test]
+    fn gh_package_verifies_release_digest_deb_metadata_and_installs_via_apt() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = boundary(temp.path());
+        ctx.github_proxy = Some(crate::github_proxy::DEFAULT_URL.into());
+        let deb_payload = b"fake-gh-deb-payload";
+        let deb_file = temp.path().join("fixture.deb");
+        fs::write(&deb_file, deb_payload).unwrap();
+        let digest = crate::runtime::sha256(&deb_file).unwrap();
+        let release_json = serde_json::json!({
+            "tag_name": "v2.67.0",
+            "draft": false,
+            "prerelease": false,
+            "assets": [{
+                "name": "gh_2.67.0_linux_amd64.deb",
+                "browser_download_url": "https://github.com/cli/cli/releases/download/v2.67.0/gh_2.67.0_linux_amd64.deb",
+                "digest": format!("sha256:{digest}"),
+            }]
+        });
+        fs::write(
+            temp.path().join("release.json"),
+            serde_json::to_vec(&release_json).unwrap(),
+        )
+        .unwrap();
+
+        executable(
+            &temp.path().join("bin/uname"),
+            "#!/bin/sh\nprintf 'x86_64\\n'\n",
+        );
+        executable(
+            &temp.path().join("bin/curl"),
+            r#"#!/bin/sh
+out=""
+last=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    out="$1"
+  fi
+  last="$1"
+  shift
+done
+printf '%s\n' "$last" >> "$CQS_TEST_ROOT/urls"
+case "$last" in
+  *api.github.com/repos/cli/cli/releases/latest) cp "$CQS_TEST_ROOT/release.json" "$out" ;;
+  *gh_2.67.0_linux_amd64.deb)
+    if [ -e "$CQS_TEST_ROOT/bad_digest" ]; then
+      printf 'corrupted' > "$out"
+    else
+      cp "$CQS_TEST_ROOT/fixture.deb" "$out"
+    fi ;;
+  *) exit 98 ;;
+esac
+"#,
+        );
+        executable(
+            &temp.path().join("bin/dpkg-deb"),
+            r#"#!/bin/sh
+case "$3" in
+  Package) printf 'gh\n' ;;
+  Architecture)
+    if [ -e "$CQS_TEST_ROOT/bad_arch" ]; then printf 'arm64\n'; else printf 'amd64\n'; fi ;;
+  *) exit 97 ;;
+esac
+"#,
+        );
+        executable(
+            &temp.path().join("bin/apt-get"),
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$CQS_TEST_ROOT/packages\"\n",
+        );
+        executable(
+            &temp.path().join("bin/gh"),
+            "#!/bin/sh\nprintf 'gh version 2.67.0\\n'\n",
+        );
+
+        tools::packages(&ctx, "gh").unwrap();
+        let urls = fs::read_to_string(temp.path().join("urls")).unwrap();
+        assert_eq!(
+            urls.lines().collect::<Vec<_>>(),
+            vec![
+                "https://gh-proxy.com/https://api.github.com/repos/cli/cli/releases/latest",
+                "https://gh-proxy.com/https://github.com/cli/cli/releases/download/v2.67.0/gh_2.67.0_linux_amd64.deb",
+            ]
+        );
+        let calls = fs::read_to_string(temp.path().join("packages")).unwrap();
+        assert!(calls.contains("/gh_2.67.0_linux_amd64.deb -o Dpkg::Use-Pty=0"));
+
+        fs::write(temp.path().join("bad_digest"), "").unwrap();
+        assert_eq!(tools::packages(&ctx, "gh").unwrap_err().key, "error.digest");
+        fs::remove_file(temp.path().join("bad_digest")).unwrap();
+
+        fs::write(temp.path().join("bad_arch"), "").unwrap();
+        assert_eq!(
+            tools::packages(&ctx, "gh").unwrap_err().key,
+            "error.release"
         );
     }
 
