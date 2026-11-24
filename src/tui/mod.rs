@@ -56,7 +56,9 @@ use crate::{
     runtime::{Context, Event},
 };
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event as Input, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event as Input, KeyEventKind, MouseEventKind,
+    },
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -91,36 +93,83 @@ fn perform(ctx: &Context, task: &Task) -> actions::BatchReport {
     }
 }
 
+const MAX_DRAIN_EVENTS: usize = 4096;
+const MAX_COALESCED_EVENTS: usize = 256;
+
+fn flush_tty_input() {
+    #[cfg(unix)]
+    unsafe {
+        libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH);
+    }
+}
+
+fn drain_terminal_events() {
+    for _ in 0..MAX_DRAIN_EVENTS {
+        if !event::poll(Duration::ZERO).unwrap_or(false) {
+            break;
+        }
+        if event::read().is_err() {
+            break;
+        }
+    }
+    flush_tty_input();
+}
+
+fn disable_raw_mode_retry() -> io::Result<()> {
+    loop {
+        match terminal::disable_raw_mode() {
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            other => return other,
+        }
+    }
+}
+
+fn disable_mouse_capture() -> io::Result<()> {
+    let mut stdout = io::stdout();
+    execute!(stdout, DisableMouseCapture).and_then(|()| stdout.flush())
+}
+
 fn enter() -> io::Result<()> {
     terminal::enable_raw_mode()?;
-    execute!(
-        io::stdout(),
+    let mut stdout = io::stdout();
+    if let Err(err) = execute!(
+        stdout,
         EnterAlternateScreen,
         EnableMouseCapture,
         crossterm::cursor::Hide
     )
+    .and_then(|()| stdout.flush())
+    {
+        let _ = leave();
+        return Err(err);
+    }
+    Ok(())
 }
 
 fn leave() -> io::Result<()> {
-    terminal::disable_raw_mode()?;
-    execute!(
-        io::stdout(),
+    // Disable mouse capture and leave the alternate screen while raw mode (ECHO off)
+    // is still active so in-flight mouse packets are never echoed. DisableMouseCapture
+    // is emitted both before and after LeaveAlternateScreen for terminals that track
+    // DEC mouse modes per screen buffer.
+    let mut stdout = io::stdout();
+    let screen_res = execute!(
+        stdout,
         DisableMouseCapture,
         LeaveAlternateScreen,
+        DisableMouseCapture,
         crossterm::cursor::Show
     )
+    .and_then(|()| stdout.flush());
+    drain_terminal_events();
+    let raw_res = disable_raw_mode_retry();
+    flush_tty_input();
+    screen_res.and(raw_res)
 }
 
 struct TerminalGuard;
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = leave();
-    }
-}
-
-fn drain_terminal_events() {
-    while event::poll(Duration::ZERO).unwrap_or(false) {
-        let _ = event::read();
     }
 }
 
@@ -137,6 +186,59 @@ impl Drop for ExternalSessionGuard<'_> {
     }
 }
 
+fn is_coalescible_input(input: &Input) -> bool {
+    match input {
+        Input::Mouse(mouse) => {
+            matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_))
+        }
+        Input::Resize(_, _) | Input::FocusGained | Input::FocusLost => true,
+        Input::Key(key) => key.kind != KeyEventKind::Press,
+        #[allow(unreachable_patterns)]
+        _ => false,
+    }
+}
+
+fn dispatch_input(app: &mut App, input: Input) -> Result<Effect> {
+    match input {
+        Input::Key(key) if key.kind == KeyEventKind::Press => app.handle_key(key),
+        Input::Mouse(mouse) => app.handle_mouse(mouse, app.viewport),
+        Input::Resize(cols, rows) => {
+            app.viewport = ratatui::layout::Rect::new(0, 0, cols, rows);
+            if !layout::Breakpoint::of(cols).uses_overlay_sidebar()
+                && !app.sidebar_collapsed
+                && !(app.is_docker_view() && app.docker.fullscreen)
+            {
+                app.sidebar_overlay = false;
+            }
+            Ok(Effect::None)
+        }
+        _ => Ok(Effect::None),
+    }
+}
+
+fn drain_input_batch<I>(
+    app: &mut App,
+    first: Input,
+    mut next_ready: I,
+) -> io::Result<Result<Effect>>
+where
+    I: FnMut() -> io::Result<Option<Input>>,
+{
+    let mut current = first;
+    for step in 0..MAX_COALESCED_EVENTS {
+        let coalescible = is_coalescible_input(&current);
+        let effect = dispatch_input(app, current);
+        if !coalescible || !matches!(effect, Ok(Effect::None)) || step + 1 == MAX_COALESCED_EVENTS {
+            return Ok(effect);
+        }
+        let Some(next) = next_ready()? else {
+            return Ok(Ok(Effect::None));
+        };
+        current = next;
+    }
+    Ok(Ok(Effect::None))
+}
+
 /// Borderless, unwrapped pure-text copy screen inside the Alternate Screen.
 /// Mouse capture is disabled while this screen is active so native terminal
 /// mouse drag-selection works across any number of lines with ZERO `│` borders
@@ -150,11 +252,17 @@ fn run_plain_view(
     struct MouseRestoreGuard;
     impl Drop for MouseRestoreGuard {
         fn drop(&mut self) {
-            let _ = execute!(io::stdout(), EnableMouseCapture, crossterm::cursor::Hide);
+            drain_terminal_events();
+            let mut stdout = io::stdout();
+            let _ = execute!(stdout, EnableMouseCapture, crossterm::cursor::Hide)
+                .and_then(|()| stdout.flush());
         }
     }
 
-    execute!(io::stdout(), DisableMouseCapture, crossterm::cursor::Hide)?;
+    let mut stdout = io::stdout();
+    execute!(stdout, DisableMouseCapture, crossterm::cursor::Hide)?;
+    stdout.flush()?;
+    drain_terminal_events();
     let _restore = MouseRestoreGuard;
 
     let lines: Vec<&str> = if content.is_empty() {
@@ -345,9 +453,7 @@ pub fn run_with_target(
     let _guard = TerminalGuard;
 
     // Drain any residual terminal query replies before entering the interactive loop.
-    while event::poll(Duration::ZERO)? {
-        let _ = event::read()?;
-    }
+    drain_terminal_events();
 
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout()))?;
@@ -453,21 +559,14 @@ pub fn run_with_target(
             if !event::poll(app.frame_interval())? {
                 continue;
             }
-            let effect = match event::read()? {
-                Input::Key(key) if key.kind == KeyEventKind::Press => app.handle_key(key),
-                Input::Mouse(mouse) => app.handle_mouse(mouse, app.viewport),
-                Input::Resize(cols, rows) => {
-                    app.viewport = ratatui::layout::Rect::new(0, 0, cols, rows);
-                    if !layout::Breakpoint::of(cols).uses_overlay_sidebar()
-                        && !app.sidebar_collapsed
-                        && !(app.is_docker_view() && app.docker.fullscreen)
-                    {
-                        app.sidebar_overlay = false;
-                    }
-                    Ok(Effect::None)
+            let first = event::read()?;
+            let effect = drain_input_batch(&mut app, first, || {
+                if event::poll(Duration::ZERO)? {
+                    event::read().map(Some)
+                } else {
+                    Ok(None)
                 }
-                _ => Ok(Effect::None),
-            };
+            })?;
             let outcome = match effect {
                 Ok(Effect::Quit) => break,
                 Ok(Effect::Run(task)) => app.start_task(&mut terminal, task),
@@ -518,6 +617,11 @@ pub fn run_with_target(
         Ok(())
     })();
 
+    // Stop terminal mouse reporting immediately before joining background workers/monitors,
+    // while keeping raw mode (ECHO off) active until TerminalGuard drops last.
+    let _ = disable_mouse_capture();
+    drain_terminal_events();
+
     if let Some(streamer) = log_streamer.take() {
         streamer.stop();
     }
@@ -528,6 +632,11 @@ pub fn run_with_target(
             .join()
             .map_err(|_| Error::new("error.io", "worker panicked"))?;
     }
+    drop(app);
+    drop(docker_monitor);
+    drop(monitor);
+    drop(terminal);
+    drop(_guard);
     result
 }
 

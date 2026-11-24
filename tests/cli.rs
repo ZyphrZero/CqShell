@@ -267,7 +267,7 @@ fn tui_pty(exit_key: Option<&[u8]>) {
         0
     );
     let mut master = unsafe { File::from_raw_fd(master) };
-    let slave = unsafe { File::from_raw_fd(slave) };
+    let mut slave = unsafe { File::from_raw_fd(slave) };
     let mut before = std::mem::MaybeUninit::<libc::termios>::uninit();
     assert_eq!(
         unsafe { libc::tcgetattr(slave.as_raw_fd(), before.as_mut_ptr()) },
@@ -374,7 +374,10 @@ sys.exit(23)
                 master.write_all(b"1\r\x1bOQ").unwrap();
                 started_task = true;
             } else {
-                master.write_all(b"q").unwrap();
+                // Simulate SGR any-event mouse motion arriving right before and after `q`.
+                master
+                    .write_all(b"\x1b[<35;59;21M\x1b[<35;60;22Mq\x1b[<35;64;24M\x1b[<35;65;24M")
+                    .unwrap();
                 quit = true;
             }
         }
@@ -383,6 +386,12 @@ sys.exit(23)
             quit = true;
         }
         if let Some(status) = child.try_wait().unwrap() {
+            while let Ok(n) = master.read(&mut buffer) {
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..n]);
+            }
             assert!(status.success(), "{}", String::from_utf8_lossy(&bytes));
             break;
         }
@@ -427,6 +436,29 @@ sys.exit(23)
         after.c_lflag & (libc::ICANON | libc::ECHO),
         before.c_lflag & (libc::ICANON | libc::ECHO)
     );
+    assert!(
+        bytes.windows(8).any(|w| w == b"\x1b[?1003l")
+            && bytes.windows(8).any(|w| w == b"\x1b[?1006l"),
+        "TUI exit must disable SGR and any-event mouse tracking"
+    );
+    if exit_key.is_none() {
+        assert!(
+            !bytes.windows(9).any(|w| w == b"35;64;24M"),
+            "Trailing mouse tracking sequences must not echo on exit"
+        );
+        unsafe {
+            libc::fcntl(slave.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
+        }
+        let mut leaked = [0u8; 64];
+        match slave.read(&mut leaked) {
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+            Ok(n) => panic!(
+                "Unread input leaked to parent shell after TUI exit: {:?}",
+                String::from_utf8_lossy(&leaked[..n])
+            ),
+            Err(err) => panic!("Unexpected PTY slave read error after TUI exit: {err}"),
+        }
+    }
 }
 
 #[test]

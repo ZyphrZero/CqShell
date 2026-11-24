@@ -529,6 +529,9 @@ impl Monitor {
             while !public_stop.load(Ordering::SeqCst) {
                 match public_receive.recv_timeout(Duration::from_millis(100)) {
                     Ok(()) => {
+                        if public_stop.load(Ordering::SeqCst) {
+                            break;
+                        }
                         let snapshot = query_public(&probe);
                         if let Ok(mut state) = public_state.lock() {
                             state.public = snapshot;
@@ -605,6 +608,7 @@ impl Drop for Monitor {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = self.refresh.send(());
+        let _ = self.public.try_send(());
         for thread in self.threads.drain(..) {
             if thread.join().is_err() {
                 eprintln!("dashboard worker panicked");

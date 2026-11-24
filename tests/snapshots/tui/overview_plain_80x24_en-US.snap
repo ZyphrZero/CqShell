@@ -2,7 +2,7 @@
 # size 80x24
 # theme plain
 # locale en-US
-  = Nav  * CqShell v0.1.7 | Overview                          * USER   English  
+  = Nav  * CqShell v0.1.8 | Overview                          * USER   English  
 +-[System & resources]-----------------+ +-[Network & proxy]-------------------+
 | CPU    [#---------]  12%  2C | ::::: | | BBR   o Disabled | available / v... |
 | Memory [######----]  63%    1.2/1.9G | | TCP   o not configured | fq_codel   |

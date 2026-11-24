@@ -49,7 +49,7 @@ curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
 
 外层和内部下载必须使用同一显式选择的代理；只代理外层 curl，不能改变安装器后续请求。`sudo` 可能清除环境变量，因此示例通过参数传递。未指定代理时保持直连；代理失败会报错，不自动尝试其他站点或直连。
 
-不少中转服务只允许下载资源，会拒绝 `/releases/latest` 网页。代理模式改用 `${GH_PROXY}https://api.github.com/repos/<owner>/<repo>/releases/latest`，从响应中提取并校验唯一的未转义 `tag_name` 字段，再下载该固定标签的安装包及 `.sha256`。没有引入 jq / Python 安装依赖。若服务不支持 API、限流或缓存未更新，使用 `--version v0.1.7` 跳过版本查询。支持 GitHub 仓库形式的 `CQS_RELEASE_BASE_URL`，不允许把下载代理与非 GitHub 镜像地址叠加。
+不少中转服务只允许下载资源，会拒绝 `/releases/latest` 网页。代理模式改用 `${GH_PROXY}https://api.github.com/repos/<owner>/<repo>/releases/latest`，从响应中提取并校验唯一的未转义 `tag_name` 字段，再下载该固定标签的安装包及 `.sha256`。没有引入 jq / Python 安装依赖。若服务不支持 API、限流或缓存未更新，使用 `--version v0.1.8` 跳过版本查询。支持 GitHub 仓库形式的 `CQS_RELEASE_BASE_URL`，不允许把下载代理与非 GitHub 镜像地址叠加。
 
 代理必须是 HTTPS 地址，不接受用户信息、查询参数、片段或空白字符。TLS、禁止 HTTP 降级、文件名检查、SHA-256 与二进制版本检查仍然生效。代理传输程序和校验文件，必须选择可信服务；SHA-256 用于完整性检查，不替代对下载来源的信任。此设置只在本次安装中生效，不保存系统或 CqShell 运行时代理配置。
 
@@ -64,11 +64,11 @@ curl --disable --proto '=https' --proto-redir '=https' --tlsv1.2 -fL \
 ## 发布一个版本
 
 1. 修改 `Cargo.toml` 的 `package.version`，运行 Cargo 更新并提交对应的 `Cargo.lock`。确保源码、翻译、安装器、文档和 `.github/workflows/` 全部提交并推送；工作流只读取标签指向的提交，不包含本地未提交修改。
-2. 对需要发布的提交打标签。标签必须严格等于 `v` 加 `Cargo.toml` 版本，例如当前 `0.1.7` 对应：
+2. 对需要发布的提交打标签。标签必须严格等于 `v` 加 `Cargo.toml` 版本，例如当前 `0.1.8` 对应：
 
    ```bash
-   git tag -a v0.1.7 -m "CqShell v0.1.7"
-   git push origin v0.1.7
+   git tag -a v0.1.8 -m "CqShell v0.1.8"
+   git push origin v0.1.8
    ```
 
 3. 在 Actions 查看 `Build and release Linux binaries`。检查和两个架构的构建全部通过后，流程创建草稿、上传全部文件，再发布 Release。`0.2.0-rc.1` 这样的版本会标记为预发布，用户必须指定 `--version v0.2.0-rc.1` 安装。

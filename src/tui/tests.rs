@@ -1708,3 +1708,70 @@ fn modal_render_priority_matches_event_routing_when_notice_opens_over_logs() {
     assert!(app.notice.is_none());
     assert!(app.log_modal);
 }
+
+#[test]
+fn drain_input_batch_coalesces_mouse_motion_flood_before_quit_and_clicks() {
+    use crossterm::event::Event as Input;
+    use ratatui::layout::Position;
+    use std::collections::VecDeque;
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.viewport = Rect::new(0, 0, 120, 36);
+
+    let moved = |col: u16, row: u16| {
+        Input::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: col,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+
+    // 1. A burst of hover movements followed by `q` resolves in a single batch without
+    //    consuming trailing mouse packets queued behind `q`.
+    let mut queue = VecDeque::from(vec![
+        moved(60, 22),
+        moved(65, 24),
+        moved(74, 26),
+        Input::Key(key(KeyCode::Char('q'))),
+        moved(80, 28),
+    ]);
+    let first = moved(59, 21);
+    let effect = super::drain_input_batch(&mut app, first, || Ok(queue.pop_front()))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(effect, Effect::Quit));
+    assert_eq!(app.hover, Some(Position::new(74, 26)));
+    assert_eq!(
+        queue.len(),
+        1,
+        "events queued after Quit must not be dispatched"
+    );
+
+    // 2. Non-coalescible mouse Down stops the batch immediately so the next frame redraws
+    //    updated geometry before subsequent events are processed.
+    let mut queue = VecDeque::from(vec![
+        moved(20, 10),
+        Input::Mouse(click(22, 10)),
+        moved(30, 12),
+    ]);
+    let effect = super::drain_input_batch(&mut app, moved(18, 10), || Ok(queue.pop_front()))
+        .unwrap()
+        .unwrap();
+    let _ = effect;
+    assert_eq!(app.hover, Some(Position::new(22, 10)));
+    assert_eq!(queue.len(), 1);
+
+    // 3. Continuous motion floods are bounded per frame without dropping any read event.
+    let total = super::MAX_COALESCED_EVENTS + 10;
+    let mut queue: VecDeque<Input> = (1..total).map(|i| moved(i as u16, 5)).collect();
+    let effect = super::drain_input_batch(&mut app, moved(0, 5), || Ok(queue.pop_front()))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(effect, Effect::None));
+    assert_eq!(
+        app.hover,
+        Some(Position::new((super::MAX_COALESCED_EVENTS - 1) as u16, 5))
+    );
+    assert_eq!(queue.len(), 10);
+}

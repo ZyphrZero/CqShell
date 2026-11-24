@@ -323,7 +323,12 @@ pub fn main_entry() -> i32 {
     ctx.github_proxy = github_proxy;
     #[cfg(unix)]
     {
-        for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
+        for signal in [
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGTERM,
+            signal_hook::consts::SIGHUP,
+            signal_hook::consts::SIGQUIT,
+        ] {
             if let Err(e) = signal_hook::flag::register(signal, ctx.cancel.clone()) {
                 eprintln!("{}", ctx.i18n.error(&e.into()));
                 return 1;

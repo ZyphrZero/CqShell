@@ -109,7 +109,7 @@ Append options after `bash -s --`:
 
 | Purpose | Append |
 | --- | --- |
-| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.1.7` |
+| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.1.8` |
 | Install into a custom absolute directory | `--install-dir /opt/cqs` |
 | Install for the current user (also omit `sudo`) | `--install-dir "$HOME/.local/bin"` |
 

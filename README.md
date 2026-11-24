@@ -109,7 +109,7 @@ sudo cqs --uninstall      # 卸载默认命令（保留配置与恢复基线）
 
 | 用途 | 追加参数 |
 | --- | --- |
-| 指定版本（网关不支持 API、限流或需安装旧版/预发布版时） | `--version v0.1.7` |
+| 指定版本（网关不支持 API、限流或需安装旧版/预发布版时） | `--version v0.1.8` |
 | 安装到自定义绝对路径 | `--install-dir /opt/cqs` |
 | 安装到当前用户目录（同时去掉 `sudo`） | `--install-dir "$HOME/.local/bin"` |
 
