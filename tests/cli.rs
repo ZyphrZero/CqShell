@@ -61,6 +61,9 @@ fn noninteractive_start_and_unknown_actions_fail_without_writes() {
         &["run", "bbr.enable", "--set", "qdisc=invalid"],
         &["run", "test.ip", "--set", "ip_family=ipv4;id"],
         &["run", "test.ip", "--set", "full_ip=yes"],
+        &["run", "test.ai", "--set", "report_mode=json"],
+        &["run", "test.ai", "--set", "target_ip=-j"],
+        &["run", "test.ai", "--set", "target_ip=127.0.0.1"],
         &["batch", "ssh.key"],
     ] {
         let output = cli(temp.path()).args(args).output().unwrap();
@@ -175,6 +178,23 @@ fn list_json_exposes_stable_ids_and_parameter_schema() {
     assert_eq!(quality["parameters"][0]["default"], "dual");
     assert_eq!(quality["parameters"][1]["name"], "full_ip");
     assert_eq!(quality["parameters"][1]["default"], "off");
+    let ai_check = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "test.ai")
+        .unwrap();
+    assert!(ai_check["label"].as_str().unwrap().contains("ipforai.cc"));
+    assert_eq!(ai_check["group"], "tests");
+    assert_eq!(ai_check["root"], false);
+    assert_eq!(ai_check["mutates"], false);
+    assert_eq!(ai_check["interactive"], true);
+    assert_eq!(ai_check["parameters"][0]["name"], "report_mode");
+    assert_eq!(ai_check["parameters"][0]["default"], "standard");
+    assert_eq!(ai_check["parameters"][1]["name"], "share_link");
+    assert_eq!(ai_check["parameters"][1]["default"], "off");
+    assert_eq!(ai_check["parameters"][2]["name"], "target_ip");
+    assert_eq!(ai_check["parameters"][2]["required"], false);
     let kernel = rows
         .as_array()
         .unwrap()

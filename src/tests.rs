@@ -347,6 +347,7 @@ fn every_literal_translation_key_exists() {
         include_str!("tui/render/modals.rs"),
         include_str!("dashboard.rs"),
         include_str!("ops/ai.rs"),
+        include_str!("ops/ai_check.rs"),
         include_str!("ops/clash.rs"),
         include_str!("ops/clash/controller.rs"),
         include_str!("ops/clash/geodata.rs"),
@@ -486,6 +487,8 @@ fn batch_parameter_preflight_rejects_invalid_ranges_before_execution() {
         ("tcp.tune", "rtt", "0"),
         ("system.timezone", "timezone", "../x"),
         ("ssh.key", "public_key", "relative.pub"),
+        ("test.ai", "target_ip", "127.0.0.1"),
+        ("test.ai", "target_ip", "not-an-ip"),
     ] {
         assert!(
             actions::find(id)

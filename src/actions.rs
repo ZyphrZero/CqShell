@@ -90,6 +90,7 @@ pub enum Kind {
     DockerUninstall,
     Speedtest,
     IpTest,
+    AiTest,
     RouteTest,
     Performance,
     Connectivity,
@@ -282,6 +283,12 @@ impl Spec {
             }
             Kind::ClashSettingsConfigure => {
                 ops::clash::settings::validate_mixed_port(&p["mixed_port"])?;
+                true
+            }
+            Kind::AiTest => {
+                if !p["target_ip"].is_empty() {
+                    ops::ai_check::validate_target_ip(&p["target_ip"])?;
+                }
                 true
             }
             Kind::SshKey | Kind::Io => {
@@ -1163,6 +1170,19 @@ pub fn specs() -> Vec<Spec> {
             field("full_ip", "off", &["off", "on"], true),
         ],
     );
+    add(
+        "test.ai",
+        "tests",
+        AiTest,
+        false,
+        false,
+        true,
+        vec![
+            field("report_mode", "standard", ops::ai_check::REPORT_MODES, true),
+            field("share_link", "off", &["off", "on"], true),
+            field("target_ip", "", &[], false),
+        ],
+    );
     add("test.route", "tests", RouteTest, true, true, true, vec![]);
     add(
         "test.performance",
@@ -1463,6 +1483,7 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
         DockerUninstall => ops::docker::uninstall(ctx, p["purge_data"] == "on"),
         Speedtest => ops::tools::speedtest(ctx),
         IpTest => ops::ip_quality::run(ctx, &p["ip_family"], &p["full_ip"]),
+        AiTest => ops::ai_check::run(ctx, &p["report_mode"], &p["share_link"], &p["target_ip"]),
         RouteTest => {
             ops::tools::remote(ctx, "https://nxtrace.org/nt")?;
             ctx.passthrough("nexttrace", &["--fast-trace", "--tcp"])

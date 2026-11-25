@@ -1795,6 +1795,45 @@
   },
   {
     "available": true,
+    "description": "使用 ipforai.cc/sh 只读检测公网出口画像、Claude/ChatGPT/Gemini/Grok 网页与 API 分流及耗时、IPv6 泄漏、本机 DNS、遥测鉴权域名、TLS/SYN/双端 RTT 与出口基础分。默认关闭在线分享短链生成；脚本经语法校验后接管终端执行。",
+    "group": "tests",
+    "id": "test.ai",
+    "interactive": true,
+    "label": "AI 服务检测 · ipforai.cc",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [
+          "standard",
+          "detail",
+          "summary",
+          "markdown"
+        ],
+        "default": "standard",
+        "name": "report_mode",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "share_link",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "target_ip",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "使用上游脚本安装 NextTrace，然后执行 TCP 快速回程测试。",
     "group": "tests",
     "id": "test.route",

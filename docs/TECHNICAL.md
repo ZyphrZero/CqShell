@@ -5,7 +5,7 @@
 ## 架构
 
 ```text
-main → cli → actions → ops/{system,network,kernel,ssh,docker,terminal,tools,ai}
+main → cli → actions → ops/{system,network,kernel,ssh,docker,terminal,tools,ai,ai_check}
           ↘ tui ↗          ↘ runtime / storage
                 i18n ← locales/*.toml
 ```
@@ -18,7 +18,7 @@ main → cli → actions → ops/{system,network,kernel,ssh,docker,terminal,tool
 - `ops/docker/` 与 `tui/docker/` 实现专属 Docker TUI 管理工作台与 `cqs docker [--tab TAB] [--embedded]` 直达入口：后端全部使用原生 `docker` / `docker compose` CLI（`--format json` / NDJSON，双路径兼容 JSON 数组与 NDJSON，无 `tokio` 异步依赖，天然支持 Rootless、`DOCKER_HOST` 与 Context），配合按需唤醒 / 离开 10 秒自动休眠的后台 `DockerMonitor` 线程、单飞防堆积限时查询、120 ms 防抖 Inspect 懒加载、带 `setsid` 进程组回收的有界 `LogStreamer`（上限 5,000 行、单行 4 KiB 截断与控制序列净化），以及基于纯 `test -x` 静态探测（零 `sh -c`）的交互式 `docker exec -it` TTY 交接；前端在侧边栏 `5 Docker` 嵌入与全屏聚焦（`z` / `F`）双态间无缝切换，覆盖容器、Compose、镜像、卷、网络与守护进程 6 大标签页、多选批量操作、敏感环境变量默认脱敏（`Shift+S` 显隐且切容器重置）、L0–L3 分级确认（卷删除/大批量删除/含卷 Prune 强制口令确认）与原有 6 项 `docker.*` 事务动作的完整兼容。
 - `storage` 管理锁、路径检查、同目录临时文件、权限与所有者保留、fsync、原子替换和文件事务日志。
 - `i18n` 加载 TOML，严格校验键集合与占位符。操作 ID、枚举值和恢复记录不受语言影响。
-- `ops` 中的 JSON、cgroup、发布元数据、配置合并、SHA-256 和提示符生成均由 Rust 实现。`ops/ip_quality.rs` 专门接入 xykt/IPQuality，参数使用固定枚举，语言随界面，默认隐私模式；入口脚本固定版本并校验摘要/语法后交还终端执行。其外部数据源、依赖询问及更新流程见 [IPQuality 接入](IPQUALITY.md)。Python 仅用于测试中的本地 TLS 服务。
+- `ops` 中的 JSON、cgroup、发布元数据、配置合并、SHA-256 和提示符生成均由 Rust 实现。`ops/ip_quality.rs` 专门接入 xykt/IPQuality，参数使用固定枚举，语言随界面，默认隐私模式；入口脚本固定版本并校验摘要/语法后交还终端执行。其外部数据源、依赖询问及更新流程见 [IPQuality 接入](IPQUALITY.md)。`ops/ai_check.rs` 接入 `https://ipforai.cc/sh` 只读 AI 服务与分流检测，校验枚举参数与可选目标 IP，默认传入 `--no-share` 关闭在线短链上传，确认后经 HTTPS 下载并通过 `sh -n` 语法校验再交还终端运行。Python 仅用于测试中的本地 TLS 服务。
 - `ops/ai.rs` 直接安装 Pi、Claude Code 和 Codex 的 Linux x86_64 / ARM64 二进制，不执行 Shell / npm / Node 安装器。固定官方元数据入口 → 稳定版 / 架构筛选 → 展示实际版本与摘要并确认 → HTTPS 下载与 SHA-256 / 大小校验 → 安全解压 → ELF / 资源布局 / 实际版本检查 → 原子切换符号链接。Pi/Codex 要求 GitHub 资产提供 SHA-256，Claude 使用官方 manifest；不允许无校验或 npm 降级。安装在普通工作线程运行，支持非交互 CLI；HOME 与当前用户路径一致，拒绝普通用户通过 sudo 安装，直接 root 登录除外。
 
 默认分发一个二进制，无数据库或后台 daemon。语言文件可选外置；apt/dpkg、systemd、sysctl、OpenSSH 和 Docker 仍负责各自的原生操作。

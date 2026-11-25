@@ -254,6 +254,11 @@ test.ip                IP 质量体检 · xykt/IPQuality
   使用 xykt/IPQuality 检测 IP 类型、风险评分/因子、流媒体/AI 解锁和邮件连通性。支持双栈/IPv4/IPv6，语言跟随界面。禁用在线报告上传，默认隐藏部分 IP。脚本会接管终端，缺少依赖时可能询问安装。
   ip_family=dual ["dual", "ipv4", "ipv6"]
   full_ip=off ["off", "on"]
+test.ai                AI 服务检测 · ipforai.cc
+  使用 ipforai.cc/sh 只读检测公网出口画像、Claude/ChatGPT/Gemini/Grok 网页与 API 分流及耗时、IPv6 泄漏、本机 DNS、遥测鉴权域名、TLS/SYN/双端 RTT 与出口基础分。默认关闭在线分享短链生成；脚本经语法校验后接管终端执行。
+  report_mode=standard ["standard", "detail", "summary", "markdown"]
+  share_link=off ["off", "on"]
+  target_ip= []
 test.route             回程路由测试
   使用上游脚本安装 NextTrace，然后执行 TCP 快速回程测试。
 test.performance       YABS 性能测试

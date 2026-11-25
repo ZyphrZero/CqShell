@@ -1795,6 +1795,45 @@
   },
   {
     "available": true,
+    "description": "Run ipforai.cc/sh to read-only check exit IP profile, Claude/ChatGPT/Gemini/Grok web & API routing and latency, IPv6 leaks, local DNS, telemetry/auth hosts, TLS/SYN/RTT relay signals and base score. Online share-link upload is off by default; validates sh syntax before terminal handoff (upstream report output is in Chinese).",
+    "group": "tests",
+    "id": "test.ai",
+    "interactive": true,
+    "label": "AI service check · ipforai.cc",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [
+          "standard",
+          "detail",
+          "summary",
+          "markdown"
+        ],
+        "default": "standard",
+        "name": "report_mode",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "share_link",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "target_ip",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "Install NextTrace with its upstream script, then run a fast TCP trace.",
     "group": "tests",
     "id": "test.route",

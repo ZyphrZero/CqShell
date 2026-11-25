@@ -61,7 +61,7 @@
 - **现代侧边栏工作台 TUI**：独立 Bento 概览仪表盘、可折叠导航栏、增强命令面板（`/` / `Ctrl+K`）、无边框纯文本复制视图（`V`）与完整键鼠操作；4 档响应式布局最低兼容 **`40×16`**（含 iOS Termius 等移动端窄屏 SSH）。
 - **配色 × UI 样式双维解耦**：内置 **8 套配色方案 × 8 套 UI 设计语言**，支持自动探测终端深浅色、实时预览抽屉（`T`）、透明背景（`B`）、减弱动效（`M`）与自定义 TOML 主题。
 - **专属 Docker 6 标签工作台**：内置 `cqs docker` 全屏聚焦 / 侧栏嵌入双态管理界面，覆盖容器、Compose、镜像、卷、网络与守护进程；纯原生 CLI JSON 采集，零后台驻留开销。
-- **99 项结构化运维动作**：11 大功能模块 + 固定置顶的「一键优化」批处理清单，CLI 与 TUI 共用同一套参数校验、权限检查与执行引擎。
+- **100 项结构化运维动作**：11 大功能模块 + 固定置顶的「一键优化」批处理清单，CLI 与 TUI 共用同一套参数校验、权限检查与执行引擎。
 - **事务化安全边界**：全链路 HTTPS + SHA-256 校验、文件锁（`flock`）、配置预检、原子替换、before-image 恢复基线、非交互 `apt` 保护与分级口令确认；任何场景下均不会静默重启系统。
 
 ---
@@ -148,7 +148,7 @@ cargo build --release --locked
 
 ## 功能一览
 
-侧边栏顶部固定 **概览仪表盘（`H`）** 与 **一键优化（`O`）**，下方包含 11 个可自由调整顺序的功能模块（共 **99 项** CLI/TUI 操作）：
+侧边栏顶部固定 **概览仪表盘（`H`）** 与 **一键优化（`O`）**，下方包含 11 个可自由调整顺序的功能模块（共 **100 项** CLI/TUI 操作）：
 
 | 模块 | 覆盖能力 |
 | --- | --- |
@@ -162,7 +162,7 @@ cargo build --release --locked
 | **Agent 工具** | **Pi（`pi.dev`）**、**Claude Code**、**Codex CLI** 官方独立二进制安装/更新与版本巡检（零 Node.js/npm） |
 | **终端美化** | Starship + Bash/Zsh 提示符配置，7 种样式 × 9 套配色，TUI/CLI 只读效果预览、TOML 查看与首次基线还原 |
 | **Mihomo 代理** | 37 项全栈动作：核心、在线/本地订阅、4 款 Web 面板、GeoData 规则库、热重载/模式/测速/连接管理、DNS/TUN/systemd 与 `clashctl` 兼容 |
-| **服务器测试** | Speedtest、**xykt/IPQuality**（默认隐私模式）、NextTrace、YABS、网络连通性与磁盘 I/O 测试 |
+| **服务器测试** | Speedtest、**xykt/IPQuality**（默认隐私模式）、**ipforai.cc AI 服务检测**（默认关闭短链上传）、NextTrace、YABS、网络连通性与磁盘 I/O 测试 |
 | **CqShell** | 在线版本检查、校验式原子自更新、`cqs` 系统命令安装与卸载 |
 
 ---
@@ -226,6 +226,7 @@ clashctl node use 'Proxy' 'Node A'
 - **BBR / BBRv3 与 TCP 调优**：在当前内核直接启用 BBR 及队列算法，或安装 BBRv3 Standard / Max 内核；安装后展示目标内核与验证步骤，由用户决定是否手动重启，支持 GRUB 单次切核与未运行内核卸载。
 - **GitHub 国内加速代理**：默认关闭；可通过 TUI 快捷键 `P`、`cqs run github.proxy`、`--gh-proxy` 或 `CQS_GH_PROXY` / `GH_PROXY` 开启（预设 `https://gh-proxy.com/`）。仅重写官方 HTTPS GitHub 域名，`api.github.com` 遇限流时自动回退直连，不转发非 GitHub 域名与订阅链接。
 - **IP 质量体检（xykt/IPQuality）**：支持双栈 / 仅 IPv4 / 仅 IPv6，跟随中英文界面语言；默认传入 `-p` 关闭在线报告上传并隐藏完整 IP，脚本经固定版本 SHA-256 与语法检查后执行（详见 [docs/IPQUALITY.md](docs/IPQUALITY.md)）。
+- **AI 服务检测（ipforai.cc）**：通过 HTTPS 拉取 `https://ipforai.cc/sh` 并经 `sh -n` 语法校验后运行，只读排查公网出口画像、Claude / ChatGPT / Gemini / Grok 网页与 API 分流、IPv6 泄漏、本机 DNS、遥测鉴权域名与双端 RTT；可选标准/扩展/摘要/论坛 Markdown 模式及指定 IP 查询，默认传入 `--no-share` 关闭在线分享短链上传。
 
 ---
 
@@ -336,6 +337,7 @@ sudo cqs batch system.update tcp.tune bbr.enable --set tcp.tune.rtt=80
 cqs run kernel.list
 sudo cqs run kernel.install --set profile=standard
 cqs run test.ip --set ip_family=ipv4
+cqs run test.ai --set report_mode=detail
 
 # 常用工具与终端美化
 sudo cqs run tools.tmux
@@ -401,6 +403,7 @@ cargo run --release --example tui_snapshot -- target/previews/status.json 120 36
 - [kejilion/sh](https://github.com/kejilion/sh) — 系统管理工具参考
 - [nelvko/clashctl](https://github.com/nelvko/clashctl) — Mihomo 代理管理与命令交互参考
 - [xykt/IPQuality](https://github.com/xykt/IPQuality) — IP 质量体检执行项目
+- [xjokerabab/ipforai](https://github.com/xjokerabab/ipforai) — AI 网络环境与服务分流检测（`ipforai.cc`）
 
 ---
 

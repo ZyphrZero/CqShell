@@ -254,6 +254,11 @@ test.ip                IP quality · xykt/IPQuality
   Use xykt/IPQuality for IP type, risk scores/factors, streaming/AI access and mail checks. Choose dual-stack/IPv4/IPv6; language follows the UI. Online report upload is disabled; full IP display is off by default. The script takes over the terminal and may ask to install missing dependencies.
   ip_family=dual ["dual", "ipv4", "ipv6"]
   full_ip=off ["off", "on"]
+test.ai                AI service check · ipforai.cc
+  Run ipforai.cc/sh to read-only check exit IP profile, Claude/ChatGPT/Gemini/Grok web & API routing and latency, IPv6 leaks, local DNS, telemetry/auth hosts, TLS/SYN/RTT relay signals and base score. Online share-link upload is off by default; validates sh syntax before terminal handoff (upstream report output is in Chinese).
+  report_mode=standard ["standard", "detail", "summary", "markdown"]
+  share_link=off ["off", "on"]
+  target_ip= []
 test.route             Return-route test
   Install NextTrace with its upstream script, then run a fast TCP trace.
 test.performance       YABS benchmark

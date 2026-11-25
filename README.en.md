@@ -61,7 +61,7 @@
 - **Modern Sidebar Shell TUI**: Dedicated Bento Overview dashboard, collapsible sidebar, fuzzy command palette (`/` / `Ctrl+K`), borderless plain-text copy view (`V`), full mouse/keyboard support, and 4 responsive breakpoints down to **`40×16`** (including mobile SSH clients such as iOS Termius).
 - **Decoupled Themes & UI Styles**: **8 built-in color themes × 8 UI design languages**, automatic terminal light/dark detection, live preview drawer (`T`), transparent terminal background (`B`), reduced motion (`M`), and custom TOML themes.
 - **Dedicated 6-Tab Docker TUI Workspace**: Launch directly via `cqs docker` with Focus / Embedded dual modes across Containers, Compose, Images, Volumes, Networks, and Daemon — powered by native CLI JSON output with zero idle daemon overhead.
-- **99 Structured Operations**: 11 reorderable modules plus a pinned **One-Click Optimization** checklist sharing one validation, privilege, and execution engine across TUI and CLI.
+- **100 Structured Operations**: 11 reorderable modules plus a pinned **One-Click Optimization** checklist sharing one validation, privilege, and execution engine across TUI and CLI.
 - **Transactional Safety**: HTTPS-only downloads with SHA-256 verification, `flock` locks, config validation before commit, atomic replacements, before-image recovery journals, non-interactive `apt` safeguards, tiered confirmations, and zero implicit reboots.
 
 ---
@@ -148,7 +148,7 @@ See [docs/RELEASING.md](docs/RELEASING.md) for publishing, CI workflows, and mir
 
 ## Feature Overview
 
-The sidebar pins **Overview (`H`)** and **Optimization (`O`)**, followed by 11 reorderable modules totaling **99** CLI/TUI actions:
+The sidebar pins **Overview (`H`)** and **Optimization (`O`)**, followed by 11 reorderable modules totaling **100** CLI/TUI actions:
 
 | Module | Capabilities |
 | --- | --- |
@@ -162,7 +162,7 @@ The sidebar pins **Overview (`H`)** and **Optimization (`O`)**, followed by 11 r
 | **Agent Tools** | Official standalone Linux binary install/update & status checks for **Pi (`pi.dev`)**, **Claude Code**, and **Codex CLI** (zero Node.js/npm) |
 | **Prompt** | Starship + Bash/Zsh prompt setup with 7 styles × 9 palettes, live TUI/CLI preview, Starship TOML viewer, and first-baseline restore |
 | **Mihomo Proxy** | 37 full-stack actions: core, HTTPS & local YAML subscriptions, 4 Web UIs, GeoData rule sets, hot-reload / mode / delay testing / connections, DNS / TUN / systemd & `clashctl` compatibility |
-| **Tests** | Speedtest, **xykt/IPQuality** (privacy mode by default), NextTrace, YABS, connectivity & disk I/O benchmarks |
+| **Tests** | Speedtest, **xykt/IPQuality** (privacy mode by default), **ipforai.cc AI service check** (share-link upload off by default), NextTrace, YABS, connectivity & disk I/O benchmarks |
 | **CqShell** | Update checks, verified atomic self-update, and command install/uninstall |
 
 ---
@@ -226,6 +226,7 @@ See [docs/MIHOMO.md](docs/MIHOMO.md) (Chinese) for detailed commands, recovery b
 - **BBR / BBRv3 & TCP Tuning**: Enable BBR and qdiscs on the running kernel, or install BBRv3 Standard/Max kernels with explicit reboot confirmation, one-time GRUB boot switching, and non-running kernel removal.
 - **GitHub Acceleration Proxy**: Off by default; configure via TUI hotkey `P`, `cqs run github.proxy`, `--gh-proxy`, or `CQS_GH_PROXY`/`GH_PROXY` (preset `https://gh-proxy.com/`). Rewrites only canonical HTTPS GitHub hosts, falls back cleanly on `api.github.com` proxy rate limits, and never touches non-GitHub URLs or proxy subscriptions.
 - **IP Quality Check (xykt/IPQuality)**: Supports dual-stack, IPv4-only, and IPv6-only checks matching the UI language, passes `-p` by default to disable online report uploads and mask full IPs, and verifies pinned script SHA-256 and Bash syntax before execution ([docs/IPQUALITY.md](docs/IPQUALITY.md)).
+- **AI Service Check (ipforai.cc)**: Downloads `https://ipforai.cc/sh` over HTTPS and validates `sh -n` syntax before terminal handoff, running read-only checks for exit IP profiles, Claude / ChatGPT / Gemini / Grok web & API routing, IPv6 leaks, local DNS, telemetry/auth domains, and dual-end RTT; supports `standard`/`detail`/`summary`/`markdown` modes and optional target-IP lookup while disabling online share-link uploads (`--no-share`) by default.
 
 ---
 
@@ -330,6 +331,7 @@ sudo cqs batch system.update tcp.tune bbr.enable --set tcp.tune.rtt=80
 cqs run kernel.list
 sudo cqs run kernel.install --set profile=standard
 cqs run test.ip --set ip_family=ipv4
+cqs run test.ai --set report_mode=detail
 
 # Tools & prompt previews
 sudo cqs run tools.tmux
@@ -395,6 +397,7 @@ Upstream inspirations and integrations:
 - [kejilion/sh](https://github.com/kejilion/sh) — system management reference
 - [nelvko/clashctl](https://github.com/nelvko/clashctl) — Mihomo proxy management and CLI ergonomics reference
 - [xykt/IPQuality](https://github.com/xykt/IPQuality) — IP quality benchmark runner
+- [xjokerabab/ipforai](https://github.com/xjokerabab/ipforai) — AI network environment and service routing checker (`ipforai.cc`)
 
 ---
 
