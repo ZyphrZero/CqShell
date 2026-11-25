@@ -511,11 +511,11 @@ fn validate_https_url(url: &str) -> Result<()> {
 
 /// Retry transient `ETXTBSY` (`ExecutableFileBusy`) errors that can occur on Linux when another
 /// thread forks while this thread has just finished writing a newly unpacked executable.
-fn retry_executable_busy<T>(
+pub(crate) fn retry_executable_busy<T>(
     ctx: &Context,
     mut op: impl FnMut() -> std::io::Result<T>,
 ) -> std::io::Result<T> {
-    const BACKOFF_MS: [u64; 5] = [5, 10, 20, 40, 80];
+    const BACKOFF_MS: [u64; 6] = [5, 10, 20, 40, 80, 160];
     let mut attempt = 0usize;
     loop {
         match op() {

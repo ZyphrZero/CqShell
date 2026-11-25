@@ -70,8 +70,7 @@ fn run_readonly(
         }
     }
 
-    let mut child = cmd
-        .spawn()
+    let mut child = crate::runtime::retry_executable_busy(ctx, || cmd.spawn())
         .map_err(|e| Error::new("error.command", format!("{program}: {e}")))?;
     let mut out_pipe = child.stdout.take();
     let mut err_pipe = child.stderr.take();

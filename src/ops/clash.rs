@@ -206,8 +206,7 @@ fn start_inner(ctx: &Context, report: bool) -> Result<()> {
             });
         }
     }
-    let mut child = command
-        .spawn()
+    let mut child = crate::runtime::retry_executable_busy(ctx, || command.spawn())
         .map_err(|e| Error::new("error.command", format!("{binary}: {e}")))?;
     let pid = child.id();
     let Some(start_time) = process_start_time(pid) else {

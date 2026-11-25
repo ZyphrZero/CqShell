@@ -1,7 +1,10 @@
 use std::{
     fs,
+    io::ErrorKind,
     path::Path,
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
+    thread,
+    time::Duration,
 };
 
 fn cli(home: &Path) -> Command {
@@ -17,6 +20,25 @@ fn cli(home: &Path) -> Command {
         .env_remove("CQS_CLASH_BINARY")
         .stdin(Stdio::null());
     command
+}
+
+/// Retry transient `ETXTBSY` (`ExecutableFileBusy`) on Linux when a sibling test thread forks
+/// while a freshly copied executable is closing its writable descriptor.
+fn output_retry(command: &mut Command) -> Output {
+    const BACKOFF_MS: [u64; 6] = [5, 10, 20, 40, 80, 160];
+    let mut attempt = 0usize;
+    loop {
+        match command.output() {
+            Ok(output) => return output,
+            Err(err)
+                if err.kind() == ErrorKind::ExecutableFileBusy && attempt < BACKOFF_MS.len() =>
+            {
+                thread::sleep(Duration::from_millis(BACKOFF_MS[attempt]));
+                attempt += 1;
+            }
+            Err(err) => panic!("failed to execute {command:?}: {err}"),
+        }
+    }
 }
 
 #[test]
@@ -35,11 +57,7 @@ fn compatibility_help_and_shell_initialization_are_bilingual_and_read_only() {
             vec!["clashctl", "shell-init", "--shell", "zsh"],
             vec!["clashctl", "shell-init", "--shell", "fish"],
         ] {
-            let output = cli(temp.path())
-                .args(["--lang", locale])
-                .args(&args)
-                .output()
-                .unwrap();
+            let output = output_retry(cli(temp.path()).args(["--lang", locale]).args(&args));
             assert!(
                 output.status.success(),
                 "{args:?}: {}",
@@ -73,7 +91,7 @@ fn unsupported_commands_and_non_shell_proxy_switches_fail_without_writes() {
         vec!["clashctl", "sub", "update", "name", "--all"],
         vec!["clashctl", "sub", "use"],
     ] {
-        let output = cli(temp.path()).args(&args).output().unwrap();
+        let output = output_retry(cli(temp.path()).args(&args));
         assert!(!output.status.success(), "{args:?}");
         assert!(output.stdout.is_empty(), "{args:?}");
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
@@ -174,11 +192,7 @@ clashversion >/dev/null
     );
     let alias = temp.path().join("clashctl");
     std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_cqs"), &alias).unwrap();
-    let output = Command::new(&alias)
-        .arg("help")
-        .env("HOME", temp.path())
-        .output()
-        .unwrap();
+    let output = output_retry(Command::new(&alias).arg("help").env("HOME", temp.path()));
     assert!(
         output.status.success(),
         "{}",
@@ -186,11 +200,7 @@ clashversion >/dev/null
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("shell-init"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("clashctl clashctl"));
-    let output = Command::new(alias)
-        .arg("--help")
-        .env("HOME", temp.path())
-        .output()
-        .unwrap();
+    let output = output_retry(Command::new(alias).arg("--help").env("HOME", temp.path()));
     assert!(output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stdout).contains("Usage: clashctl [OPTIONS] [COMMAND]")
@@ -203,21 +213,31 @@ fn shell_initializer_quotes_executable_paths_without_command_injection() {
     let temp = tempfile::tempdir().unwrap();
     let executable = temp.path().join("cqs ' $literal");
     fs::copy(env!("CARGO_BIN_EXE_cqs"), &executable).unwrap();
-    let output = Command::new(&executable)
-        .args(["clashctl", "shell-init", "--shell", "bash"])
-        .env("HOME", temp.path())
-        .output()
-        .unwrap();
-    assert!(output.status.success());
+    let output = output_retry(
+        Command::new(&executable)
+            .args(["clashctl", "shell-init", "--shell", "bash"])
+            .env("HOME", temp.path()),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let init = temp.path().join("quoted-init.sh");
     fs::write(&init, output.stdout).unwrap();
-    let output = Command::new("bash")
-        .args(["--noprofile", "--norc", "-c", "set -eu; source \"$1\"; export http_proxy=old; clashoff; test -z \"${http_proxy+x}\"; clashversion", "--"])
-        .arg(init)
-        .env("HOME", temp.path())
-        .env("CQS_CLASH_HOME", temp.path().join("clash"))
-        .output()
-        .unwrap();
+    let output = output_retry(
+        Command::new("bash")
+            .args([
+                "--noprofile",
+                "--norc",
+                "-c",
+                "set -eu; source \"$1\"; export http_proxy=old; clashoff; test -z \"${http_proxy+x}\"; clashversion",
+                "--",
+            ])
+            .arg(init)
+            .env("HOME", temp.path())
+            .env("CQS_CLASH_HOME", temp.path().join("clash")),
+    );
     assert!(
         output.status.success(),
         "{}",

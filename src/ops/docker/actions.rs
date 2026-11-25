@@ -665,13 +665,13 @@ pub fn run_interactive_exec(ctx: &Context, spec: &ExecSpec) -> Result<()> {
         spec.shell.trim().to_owned()
     };
     let args = build_exec_args(spec, &shell)?;
-    let status = Command::new("docker")
-        .args(&args)
+    let mut cmd = Command::new("docker");
+    cmd.args(&args)
         .envs(&ctx.environment)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
+        .stderr(Stdio::inherit());
+    let status = crate::runtime::retry_executable_busy(ctx, || cmd.status())
         .map_err(|e| Error::new("error.command", format!("docker exec: {e}")))?;
     if !status.success() && !matches!(status.code(), Some(0 | 130)) {
         return Err(Error::new(

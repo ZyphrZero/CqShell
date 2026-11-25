@@ -321,7 +321,7 @@ impl LogStreamer {
                 }
             }
 
-            let mut child = match cmd.spawn() {
+            let mut child = match crate::runtime::retry_executable_busy(&ctx, || cmd.spawn()) {
                 Ok(c) => c,
                 Err(err) => {
                     let _ = tx.send(LogStreamEvent::Ended(Some(err.to_string())));
