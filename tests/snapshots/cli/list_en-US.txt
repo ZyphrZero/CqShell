@@ -89,7 +89,7 @@ clash.sub.remove       Remove subscription
 clash.controller.status Controller configuration
   Show the configured controller endpoint and whether authentication is set; never display the secret.
 clash.controller.configure Configure controller
-  While stopped, configure an IP or localhost and port, validate it, and transactionally save the Mixin.
+  Configure an IP or localhost and port, validate and transactionally save Mixin, and automatically restart Mihomo when running (with rollback on failure).
   controller_address=127.0.0.1:9090 []
 clash.proxies          List proxy groups and nodes
   Query the configured controller for proxy groups, members and current selections.
@@ -106,27 +106,27 @@ clash.connections      Inspect / close connections
   Show active connection count, upload/download totals, memory and top active sessions; optionally close all active connections.
   close_all=off ["off", "on"]
 clash.secret.generate  Generate controller secret
-  While stopped, generate a random controller secret and save it in the private Mixin without displaying it.
+  Generate a random controller secret, save it in private Mixin without displaying it, and automatically restart Mihomo when running.
 clash.secret.set       Set secret from private file
-  While stopped, read the secret from a private file to keep plaintext out of command arguments; use mode 0600 on Linux.
+  Read the secret from a private file (mode 0600 on Linux) to keep plaintext out of arguments, and automatically restart Mihomo when running.
   secret_file= []
 clash.secret.clear     Clear controller secret
-  While stopped, clear authentication; only a loopback controller may be used without a secret.
+  Clear controller authentication (loopback controllers only) and automatically restart Mihomo when running.
 clash.panel.status     Web dashboard status and URL
   Check dashboard resources and show its URL without a secret. Loopback endpoints require local access or an SSH tunnel.
 clash.panel.install    Install / switch Web dashboard
-  Download a verified Web dashboard (Zashboard default, MetaCubeXD, Yacd-Meta or Razord-Meta), check SHA-256 and safely extract it, then validate external-ui while Mihomo is stopped.
+  Download a verified Web dashboard (Zashboard default, MetaCubeXD, Yacd-Meta or Razord-Meta), verify SHA-256, extract safely, update external-ui, and automatically restart Mihomo when running.
   panel=zashboard ["zashboard", "metacubexd", "yacd", "razord"]
   version= []
 clash.panel.remove     Uninstall Web dashboard
-  While Mihomo is stopped, clear external-ui from Mixin and delete CqShell-managed dashboard files under resources/ui.
+  Clear external-ui from Mixin, remove CqShell-managed dashboard files under resources/ui, and automatically restart Mihomo when running.
 clash.geodata.status   GeoData database status
   Inspect installed geoip.metadb, geosite.dat, country.mmdb, geoip.dat and GeoLite2-ASN.mmdb files and sizes in Mihomo resources.
 clash.geodata.update   Update GeoData databases
   Download official MetaCubeX/meta-rules-dat files (standard, lite or full preset), verify exact size and SHA-256, and replace them atomically. Respects the GitHub acceleration proxy.
   geodata_preset=standard ["standard", "lite", "full"]
 clash.settings.configure Core proxy settings
-  While Mihomo is stopped, configure mixed-port, LAN access, IPv6, HTTP/TLS/QUIC domain sniffing and log level in Mixin with Mihomo validation.
+  Configure mixed-port, LAN access, IPv6, HTTP/TLS/QUIC domain sniffing and log level in Mixin, automatically hot-reloading or restarting Mihomo when running.
   mixed_port=7890 []
   allow_lan=off ["off", "on"]
   clash_ipv6=off ["off", "on"]
@@ -135,18 +135,18 @@ clash.settings.configure Core proxy settings
 clash.dns.status       DNS configuration status
   Read the effective Mihomo DNS state, enhanced-mode, IPv6 toggle, nameservers and fallback count.
 clash.dns.configure    Configure DNS preset
-  While Mihomo is stopped, configure fake-ip, redir-host or off with China DoH (Alibaba/DNSPod + Cloudflare/Google fallback) or Global DoH presets and standard fake-ip-filter.
+  Configure fake-ip, redir-host or off with China DoH (Alibaba/DNSPod + Cloudflare/Google fallback) or Global DoH presets and standard fake-ip-filter, automatically hot-reloading or restarting Mihomo when running.
   dns_mode=fake-ip ["fake-ip", "redir-host", "off"]
   dns_preset=china ["china", "global"]
   dns_ipv6=off ["off", "on"]
 clash.mixin.status     View Mixin overrides
   Display persistent Mixin overrides with controller secrets and proxy authentication credentials redacted.
 clash.mixin.reset      Reset Mixin overrides
-  While Mihomo is stopped, remove persistent Mixin overrides and rebuild the runtime config while preserving subscriptions and resources.
+  Remove persistent Mixin overrides and rebuild the runtime config while preserving subscriptions and resources, automatically restarting Mihomo when running.
 clash.socks.status     SOCKS5 / 5h inbound status
   Inspect the dedicated SOCKS5 / SOCKS5h inbound listener state, bind address and port, UDP relay, outbound routing, redacted URI templates and private credential file path.
 clash.socks.configure  Configure SOCKS5 / 5h inbound
-  Visually configure the dedicated SOCKS5 / SOCKS5h inbound listener (port, listen IP, UDP, direct or rule outbound, and enforced non-loopback authentication), with zero-downtime hot-reload when Mihomo is running with a controller.
+  Visually configure the dedicated SOCKS5 / SOCKS5h inbound listener (port, listen IP, UDP, direct or rule outbound, and enforced non-loopback authentication), automatically hot-reloading or restarting Mihomo when running.
   socks_enabled=on ["on", "off"]
   socks_port=10808 ["10808", "21080", "1080"]
   socks_listen=0.0.0.0 ["0.0.0.0", "::", "127.0.0.1"]
@@ -162,7 +162,7 @@ clash.socks.auth.set   Set SOCKS5 credentials from file
 clash.tun.status       TUN configuration and ownership
   Read TUN settings, link state and process ownership.
 clash.tun.configure    Configure TUN mode
-  Configure TUN while stopped. Enabling requires native Linux, root, NET_ADMIN and an available device; WSL and containers are rejected.
+  Configure and validate TUN settings (enabling requires native Linux, root, NET_ADMIN and an available device; rejects WSL/containers), automatically restarting Mihomo when running.
   enabled=off ["on", "off"]
   tun_stack=mixed ["system", "gvisor", "mixed"]
   tun_device=cqs-tun []

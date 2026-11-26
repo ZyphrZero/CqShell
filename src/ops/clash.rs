@@ -311,6 +311,10 @@ fn reap_child(ctx: &Context, mut child: std::process::Child) {
 }
 
 pub fn stop(ctx: &Context) -> Result<()> {
+    stop_inner(ctx, true)
+}
+
+fn stop_inner(ctx: &Context, report: bool) -> Result<()> {
     if service::stop_managed(ctx)? {
         return Ok(());
     }
@@ -321,7 +325,9 @@ pub fn stop(ctx: &Context) -> Result<()> {
         State::Stopped | State::NotInstalled => {
             storage::remove_file(&ctx.paths.clash_pid)?;
             storage::remove_file(&ctx.paths.clash_pid_start)?;
-            ctx.message("notice.clash_stopped", "already stopped");
+            if report {
+                ctx.message("notice.clash_stopped", "already stopped");
+            }
             return Ok(());
         }
         State::Unknown => return Err(unknown_process()),
@@ -333,7 +339,9 @@ pub fn stop(ctx: &Context) -> Result<()> {
             State::Stopped => {
                 storage::remove_file(&ctx.paths.clash_pid)?;
                 storage::remove_file(&ctx.paths.clash_pid_start)?;
-                ctx.message("notice.clash_stopped", format!("PID {pid}"));
+                if report {
+                    ctx.message("notice.clash_stopped", format!("PID {pid}"));
+                }
                 return Ok(());
             }
             State::Running(_) | State::Unknown => (),
@@ -348,6 +356,23 @@ pub fn stop(ctx: &Context) -> Result<()> {
         "error.command",
         format!("Mihomo did not stop after SIGTERM (PID {pid})"),
     ))
+}
+
+/// Restart a running Mihomo instance (managed systemd unit or direct child process).
+pub(super) fn restart_running(ctx: &Context) -> Result<()> {
+    if service::restart_managed(ctx)? {
+        return Ok(());
+    }
+    stop_inner(ctx, false)?;
+    start_inner(ctx, false)
+}
+
+/// Start Mihomo without emitting user-facing start notices (used during failure rollback).
+pub(super) fn start_silently(ctx: &Context) -> Result<()> {
+    if service::start_managed(ctx)? {
+        return Ok(());
+    }
+    start_inner(ctx, false)
 }
 
 pub fn proxy_env(ctx: &Context, enabled: bool, shell: &str) -> Result<String> {
@@ -418,7 +443,7 @@ pub fn install(ctx: &Context, requested: &str) -> Result<()> {
     recover_interrupted_files(ctx)?;
     if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "stop Mihomo before replacing its executable",
         ));
     }
@@ -884,7 +909,7 @@ pub fn subscription_update(ctx: &Context, name: &str) -> Result<()> {
         .ok_or_else(|| Error::new("error.input", format!("unknown subscription: {name}")))?;
     if profiles.profiles[index] != profile {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "subscription changed while its update was downloading; retry the update",
         ));
     }
@@ -926,7 +951,7 @@ pub fn subscription_remove(ctx: &Context, name: &str) -> Result<()> {
         && matches!(state(ctx)?, State::Running(_) | State::Unknown)
     {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "stop Mihomo or select another subscription before removing the current subscription",
         ));
     }
@@ -1437,13 +1462,49 @@ fn validate_subscription_runtime(ctx: &Context, bytes: &[u8]) -> Result<()> {
     validate_with_mihomo(ctx, candidate.path())
 }
 
-/// Persist user overrides separately from subscription data. Validation occurs
-/// before either file is published; the journal covers both files on a crash.
-fn edit_mixin(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MixinApplyMode {
+    /// Hot-reload via REST when running with a controller, falling back to automatic restart.
+    HotReloadOrRestart,
+    /// Restart Mihomo automatically when running so listener/secret/panel/TUN changes apply.
+    RestartIfRunning,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MixinApplied {
+    SavedWhileStopped,
+    HotReloaded,
+    Restarted,
+}
+
+impl MixinApplied {
+    pub(super) fn suffix(self) -> &'static str {
+        match self {
+            Self::SavedWhileStopped => "saved; start Mihomo to apply",
+            Self::HotReloaded => "saved and hot-reloaded into running Mihomo",
+            Self::Restarted => "saved and applied (Mihomo restarted)",
+        }
+    }
+}
+
+/// Persist user overrides separately from subscription data, automatically applying
+/// changes to a running Mihomo instance (hot-reload or restart) with full rollback on failure.
+pub(super) fn edit_mixin_and_apply(
     ctx: &Context,
+    mode: MixinApplyMode,
     edit: impl FnOnce(&mut serde_yaml::Mapping) -> Result<()>,
-) -> Result<()> {
-    edit_mixin_inner(ctx, false, edit)
+) -> Result<MixinApplied> {
+    commit_mixin_and_apply(ctx, mode, false, &[], edit)
+}
+
+/// Remove persistent Mixin overrides and optional extra files (e.g. `socks5.auth`),
+/// automatically applying the rebuilt runtime config if Mihomo is running.
+pub(super) fn reset_mixin_and_apply(
+    ctx: &Context,
+    mode: MixinApplyMode,
+    extra_updates: &[(PathBuf, Option<storage::Saved>)],
+) -> Result<MixinApplied> {
+    commit_mixin_and_apply(ctx, mode, true, extra_updates, |_| Ok(()))
 }
 
 fn persist_running_mode(ctx: &Context, mode: &str) -> Result<()> {
@@ -1484,75 +1545,148 @@ fn persist_running_mode(ctx: &Context, mode: &str) -> Result<()> {
     commit_files(ctx, &updates)
 }
 
-fn edit_mixin_inner(
+fn commit_mixin_and_apply(
     ctx: &Context,
-    allow_running: bool,
+    mode: MixinApplyMode,
+    clear_mixin: bool,
+    extra_updates: &[(PathBuf, Option<storage::Saved>)],
     edit: impl FnOnce(&mut serde_yaml::Mapping) -> Result<()>,
-) -> Result<()> {
+) -> Result<MixinApplied> {
     ctx.check()?;
-    let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
-    recover_interrupted_files(ctx)?;
-    match state(ctx)? {
-        State::Unknown => return Err(unknown_process()),
-        State::Running(_) if !allow_running => {
-            return Err(Error::new(
-                "error.busy",
-                "stop Mihomo before changing persistent settings",
-            ));
+    let (was_running, prev_ctrl, runtime, rollback_files) = {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        recover_interrupted_files(ctx)?;
+        let was_running = match state(ctx)? {
+            State::Unknown => return Err(unknown_process()),
+            State::Running(_) => true,
+            State::Stopped | State::NotInstalled => false,
+        };
+        ensure_layout(ctx)?;
+        storage::check_path(&ctx.paths.clash_mixin, true)?;
+        storage::check_path(&ctx.paths.clash_runtime, true)?;
+        for (path, _) in extra_updates {
+            storage::check_path(path, true)?;
         }
-        _ => (),
-    }
-    ensure_layout(ctx)?;
-    storage::check_path(&ctx.paths.clash_mixin, true)?;
-    let mut mixin = if ctx.paths.clash_mixin.is_file() {
-        serde_yaml::from_slice::<Value>(&fs::read(&ctx.paths.clash_mixin)?)
-            .map_err(|_| Error::new("error.data", "invalid Mixin YAML"))?
-    } else {
-        Value::Mapping(Default::default())
-    };
-    let map = mixin
-        .as_mapping_mut()
-        .ok_or_else(|| Error::new("error.data", "Mixin root must be a map"))?;
-    edit(map)?;
-    let runtime = runtime_with_mixin(ctx, mixin.clone())?;
-    let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
-    fs::write(candidate.path(), &runtime)?;
-    validate_config(ctx, candidate.path(), true)?;
-    // Mihomo may echo YAML values in diagnostics, so avoid streaming secrets.
-    if ctx.paths.clash_binary.is_file() {
-        require_binary(ctx)?;
-        let output = ctx.command(
-            &path_string(&ctx.paths.clash_binary)?,
-            &[
-                "-d",
-                &path_string(&ctx.paths.clash_resources)?,
-                "-f",
-                &path_string(candidate.path())?,
-                "-t",
-            ],
-            false,
-        )?;
-        if !output.status.success() {
-            return Err(Error::new(
-                "error.verify",
-                "Mihomo rejected settings; previous configuration retained",
+
+        let prev_ctrl = if was_running && mode == MixinApplyMode::HotReloadOrRestart {
+            controller::effective_settings(ctx).ok().flatten()
+        } else {
+            None
+        };
+
+        let mut rollback = Vec::with_capacity(2 + extra_updates.len());
+        if was_running {
+            rollback.push((
+                ctx.paths.clash_mixin.clone(),
+                storage::Saved::capture(&ctx.paths.clash_mixin)?,
             ));
+            rollback.push((
+                ctx.paths.clash_runtime.clone(),
+                storage::Saved::capture(&ctx.paths.clash_runtime)?,
+            ));
+            for (path, _) in extra_updates {
+                rollback.push((path.clone(), storage::Saved::capture(path)?));
+            }
         }
-    }
-    let bytes = serde_yaml::to_string(&mixin)?.into_bytes();
-    commit_files(
-        ctx,
-        &[
-            (
+
+        let mixin = if clear_mixin {
+            Value::Mapping(Default::default())
+        } else {
+            let mut value = if ctx.paths.clash_mixin.is_file() {
+                serde_yaml::from_slice::<Value>(&fs::read(&ctx.paths.clash_mixin)?)
+                    .map_err(|_| Error::new("error.data", "invalid Mixin YAML"))?
+            } else {
+                Value::Mapping(Default::default())
+            };
+            let map = value
+                .as_mapping_mut()
+                .ok_or_else(|| Error::new("error.data", "Mixin root must be a map"))?;
+            edit(map)?;
+            value
+        };
+
+        let runtime = runtime_with_mixin(ctx, mixin.clone())?;
+        let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+        fs::write(candidate.path(), &runtime)?;
+        validate_config(ctx, candidate.path(), true)?;
+        // Mihomo may echo YAML values in diagnostics, so avoid streaming secrets.
+        if ctx.paths.clash_binary.is_file() {
+            require_binary(ctx)?;
+            let output = ctx.command(
+                &path_string(&ctx.paths.clash_binary)?,
+                &[
+                    "-d",
+                    &path_string(&ctx.paths.clash_resources)?,
+                    "-f",
+                    &path_string(candidate.path())?,
+                    "-t",
+                ],
+                false,
+            )?;
+            if !output.status.success() {
+                return Err(Error::new(
+                    "error.verify",
+                    "Mihomo rejected settings; previous configuration retained",
+                ));
+            }
+        }
+
+        let mut updates = Vec::with_capacity(2 + extra_updates.len());
+        if clear_mixin {
+            updates.push((ctx.paths.clash_mixin.clone(), None));
+        } else {
+            let bytes = serde_yaml::to_string(&mixin)?.into_bytes();
+            updates.push((
                 ctx.paths.clash_mixin.clone(),
                 Some(storage::Saved::new(&bytes, 0o600)),
-            ),
-            (
-                ctx.paths.clash_runtime.clone(),
-                Some(storage::Saved::new(&runtime, 0o600)),
-            ),
-        ],
-    )
+            ));
+        }
+        updates.extend(extra_updates.iter().cloned());
+        updates.push((
+            ctx.paths.clash_runtime.clone(),
+            Some(storage::Saved::new(&runtime, 0o600)),
+        ));
+        commit_files(ctx, &updates)?;
+        (was_running, prev_ctrl, runtime, rollback)
+    };
+
+    if !was_running {
+        return Ok(MixinApplied::SavedWhileStopped);
+    }
+
+    if mode == MixinApplyMode::HotReloadOrRestart
+        && let Some(ctrl) = prev_ctrl
+        && controller::push_runtime(ctx, &ctrl, &runtime).is_ok()
+    {
+        return Ok(MixinApplied::HotReloaded);
+    }
+
+    let apply_result = (|| -> Result<()> {
+        restart_running(ctx)?;
+        if let Ok(parsed) = serde_yaml::from_slice::<Value>(&runtime)
+            && let Ok(Some(next_ctrl)) = controller::from_config(&parsed)
+        {
+            controller::wait_until_listening(ctx, &next_ctrl, Duration::from_millis(1500))?;
+        }
+        Ok(())
+    })();
+
+    match apply_result {
+        Ok(()) => Ok(MixinApplied::Restarted),
+        Err(err) => {
+            let recovery = ctx.recovery();
+            if let Ok(_lock) = Lock::acquire(&recovery.paths.clash_lock) {
+                let _ = commit_files(&recovery, &rollback_files);
+            }
+            if !matches!(state(&recovery), Ok(State::Running(_))) {
+                let _ = start_silently(&recovery);
+            }
+            Err(Error::new(
+                err.key,
+                format!("{}; previous configuration restored", err.detail),
+            ))
+        }
+    }
 }
 
 fn merge_config(mut base: Value, mixin: Value) -> Result<Value> {

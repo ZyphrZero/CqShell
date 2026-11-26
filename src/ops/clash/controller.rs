@@ -170,7 +170,7 @@ pub fn status(ctx: &Context) -> Result<()> {
 
 pub fn configure(ctx: &Context, address: &str) -> Result<()> {
     socket_address(address)?;
-    edit_mixin(ctx, |map| {
+    let applied = edit_mixin_and_apply(ctx, MixinApplyMode::RestartIfRunning, |map| {
         map.insert(
             Value::String("external-controller".into()),
             Value::String(address.into()),
@@ -179,8 +179,69 @@ pub fn configure(ctx: &Context, address: &str) -> Result<()> {
     })?;
     ctx.message(
         "notice.clash_controller",
-        "configuration saved; start Mihomo to apply",
+        format!("{address} ({})", applied.suffix()),
     );
+    Ok(())
+}
+
+/// Pick an available loopback controller address (`127.0.0.1:9090..=9099`, defaulting to `9090`).
+pub(super) fn pick_loopback_controller_address() -> String {
+    for port in 9090u16..=9099 {
+        if std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok() {
+            return format!("127.0.0.1:{port}");
+        }
+    }
+    "127.0.0.1:9090".into()
+}
+
+/// One-click helper for the Mihomo TUI workspace: enable a loopback-only REST controller
+/// (`127.0.0.1:9090`, or the first free port in `9090..=9099`) and restart Mihomo automatically.
+pub(crate) fn enable_loopback_and_apply(ctx: &Context) -> Result<String> {
+    if let Ok(Some(existing)) = effective_settings(ctx) {
+        return Ok(existing.bind_address);
+    }
+    let address = pick_loopback_controller_address();
+    let _ = edit_mixin_and_apply(ctx, MixinApplyMode::RestartIfRunning, |map| {
+        map.insert(
+            Value::String("external-controller".into()),
+            Value::String(address.clone()),
+        );
+        validate_override(ctx, map)
+    })?;
+    Ok(address)
+}
+
+/// Wait briefly for a freshly restarted Mihomo process to accept connections on its REST socket.
+/// Fails immediately if the Mihomo process exits during startup; otherwise returns once ready
+/// (or after timeout if the process remains running).
+pub(super) fn wait_until_listening(
+    ctx: &Context,
+    settings: &Settings,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        ctx.check()?;
+        if TcpStream::connect_timeout(&settings.socket, Duration::from_millis(120)).is_ok() {
+            return Ok(());
+        }
+        match state(ctx)? {
+            State::Running(_) => {}
+            State::Stopped | State::NotInstalled => {
+                let log_tail = logs::startup_tail(ctx).unwrap_or_default();
+                return Err(Error::new(
+                    "error.command",
+                    format!(
+                        "Mihomo exited before controller {} became ready: {}",
+                        settings.address,
+                        tail(&log_tail)
+                    ),
+                ));
+            }
+            State::Unknown => return Err(unknown_process()),
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
     Ok(())
 }
 
@@ -244,14 +305,11 @@ pub fn secret_clear(ctx: &Context) -> Result<()> {
 
 fn save_secret(ctx: &Context, secret: &str) -> Result<()> {
     valid_secret(secret)?;
-    edit_mixin(ctx, |map| {
+    let applied = edit_mixin_and_apply(ctx, MixinApplyMode::RestartIfRunning, |map| {
         map.insert(Value::String("secret".into()), Value::String(secret.into()));
         validate_override(ctx, map)
     })?;
-    ctx.message(
-        "notice.clash_secret",
-        "configuration saved; start Mihomo to apply",
-    );
+    ctx.message("notice.clash_secret", applied.suffix());
     Ok(())
 }
 
@@ -746,13 +804,13 @@ pub fn mode(ctx: &Context, mode: &str, persist: bool) -> Result<()> {
             super::persist_running_mode(ctx, mode)?;
             ctx.message("notice.clash_mode", format!("{mode} (live + persisted)"));
         } else {
-            edit_mixin(ctx, |map| {
+            let applied = edit_mixin_and_apply(ctx, MixinApplyMode::HotReloadOrRestart, |map| {
                 map.insert(Value::String("mode".into()), Value::String(mode.into()));
                 Ok(())
             })?;
             ctx.message(
                 "notice.clash_mode",
-                format!("{mode} (saved to Mixin; start Mihomo to apply)"),
+                format!("{mode} ({})", applied.suffix()),
             );
         }
     } else {
@@ -2563,5 +2621,102 @@ mod tests {
         for idx in 0..reqs.len() {
             assert!(req_str(idx).contains("Authorization: Bearer meta-secret\r\n"));
         }
+    }
+
+    #[test]
+    fn enable_loopback_and_apply_saves_loopback_controller_and_is_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(&ctx.paths.clash_config, "mode: direct\nmixed-port: 7890\n").unwrap();
+
+        let first = enable_loopback_and_apply(&ctx).unwrap();
+        assert!(
+            first.starts_with("127.0.0.1:909"),
+            "unexpected addr: {first}"
+        );
+        let settings = effective_settings(&ctx).unwrap().unwrap();
+        assert!(settings.bind_loopback);
+        assert_eq!(settings.bind_address, first);
+
+        // Calling again keeps the already-configured address unchanged.
+        let second = enable_loopback_and_apply(&ctx).unwrap();
+        assert_eq!(second, first);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn configure_while_running_restarts_automatically_and_rolls_back_on_restart_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::create_dir_all(ctx.paths.clash_binary.parent().unwrap()).unwrap();
+        fs::write(&ctx.paths.clash_config, "mode: direct\nmixed-port: 7890\n").unwrap();
+
+        // Compile a tiny native ELF stub via `rustc` so `/proc/<pid>/cmdline` preserves
+        // `argv[0] == clash_binary` (shebang scripts rewrite argv[0] to `/bin/sh`).
+        let fail_sentinel = temp.path().join("fail-start");
+        let stub_src = temp.path().join("mihomo_stub.rs");
+        fs::write(
+            &stub_src,
+            format!(
+                "use std::{{env, path::Path, process, thread, time::Duration}};\n\
+                 fn main() {{\n\
+                     if env::args().any(|a| a == \"-t\") {{ return; }}\n\
+                     if Path::new({:?}).exists() {{ process::exit(1); }}\n\
+                     loop {{ thread::sleep(Duration::from_millis(50)); }}\n\
+                 }}\n",
+                fail_sentinel
+            ),
+        )
+        .unwrap();
+        let compiled = Command::new("rustc")
+            .args(["--edition=2021", "-o"])
+            .arg(&ctx.paths.clash_binary)
+            .arg(&stub_src)
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "failed to compile Mihomo stub: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+
+        // Start running without any external-controller configured.
+        start(&ctx).unwrap();
+        let pid_before = match state(&ctx).unwrap() {
+            State::Running(pid) => pid,
+            other => panic!("expected Running, got {other:?}"),
+        };
+        assert!(effective_settings(&ctx).unwrap().is_none());
+
+        // Configure controller while running: must succeed and restart automatically (new PID).
+        configure(&ctx, "127.0.0.1:19098").unwrap();
+        let pid_after = match state(&ctx).unwrap() {
+            State::Running(pid) => pid,
+            other => panic!("expected Running after auto-restart, got {other:?}"),
+        };
+        assert_ne!(pid_before, pid_after);
+        let applied = effective_settings(&ctx).unwrap().unwrap();
+        assert_eq!(applied.bind_address, "127.0.0.1:19098");
+
+        // Now force startup failure on the next change and verify automatic file rollback.
+        fs::write(&fail_sentinel, b"1").unwrap();
+        let err = configure(&ctx, "127.0.0.1:19099").unwrap_err();
+        assert!(
+            err.detail.contains("previous configuration restored"),
+            "unexpected error detail: {}",
+            err.detail
+        );
+        let mixin: Value =
+            serde_yaml::from_slice(&fs::read(&ctx.paths.clash_mixin).unwrap()).unwrap();
+        assert_eq!(mixin["external-controller"], "127.0.0.1:19098");
+        let runtime: Value =
+            serde_yaml::from_slice(&fs::read(&ctx.paths.clash_runtime).unwrap()).unwrap();
+        assert_eq!(runtime["external-controller"], "127.0.0.1:19098");
+        assert!(!ctx.paths.clash_data.join("pending.json").exists());
+
+        let _ = fs::remove_file(&fail_sentinel);
+        let _ = stop(&ctx);
     }
 }

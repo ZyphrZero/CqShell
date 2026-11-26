@@ -50,6 +50,7 @@ pub enum ClashActionTag {
     RemoveProfile,
     UpdateProvider,
     HealthcheckProvider,
+    EnableLocalController,
 }
 
 #[derive(Debug)]
@@ -103,6 +104,7 @@ pub enum ClashMonitorCmd {
     UpdateRuleProvider {
         name: String,
     },
+    EnableLocalController,
     ProbeExit,
     RouteChanged,
     FetchLogs,
@@ -360,6 +362,9 @@ impl ClashMonitor {
                         ClashMonitorCmd::ForceRefresh => {
                             active = true;
                             left_at = None;
+                            cached_settings = None;
+                            version_cached.clear();
+                            uptime_anchor = None;
                             force_full = true;
                             force_rules = tab == ClashTab::Rules;
                             force_providers = matches!(
@@ -586,6 +591,16 @@ impl ClashMonitor {
                                     controller::update_rule_provider(&c, &name)?;
                                     Ok(name)
                                 },
+                            );
+                        }
+                        ClashMonitorCmd::EnableLocalController => {
+                            spawn_action(
+                                &ctx,
+                                &evt_tx,
+                                &self_tx,
+                                ClashActionTag::EnableLocalController,
+                                false,
+                                |c| controller::enable_loopback_and_apply(&c),
                             );
                         }
                         ClashMonitorCmd::ProbeExit => {

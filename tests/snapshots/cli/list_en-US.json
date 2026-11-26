@@ -613,7 +613,7 @@
   },
   {
     "available": true,
-    "description": "While stopped, configure an IP or localhost and port, validate it, and transactionally save the Mixin.",
+    "description": "Configure an IP or localhost and port, validate and transactionally save Mixin, and automatically restart Mihomo when running (with rollback on failure).",
     "group": "clash",
     "id": "clash.controller.configure",
     "interactive": false,
@@ -722,7 +722,7 @@
   },
   {
     "available": true,
-    "description": "While stopped, generate a random controller secret and save it in the private Mixin without displaying it.",
+    "description": "Generate a random controller secret, save it in private Mixin without displaying it, and automatically restart Mihomo when running.",
     "group": "clash",
     "id": "clash.secret.generate",
     "interactive": false,
@@ -734,7 +734,7 @@
   },
   {
     "available": true,
-    "description": "While stopped, read the secret from a private file to keep plaintext out of command arguments; use mode 0600 on Linux.",
+    "description": "Read the secret from a private file (mode 0600 on Linux) to keep plaintext out of arguments, and automatically restart Mihomo when running.",
     "group": "clash",
     "id": "clash.secret.set",
     "interactive": false,
@@ -753,7 +753,7 @@
   },
   {
     "available": true,
-    "description": "While stopped, clear authentication; only a loopback controller may be used without a secret.",
+    "description": "Clear controller authentication (loopback controllers only) and automatically restart Mihomo when running.",
     "group": "clash",
     "id": "clash.secret.clear",
     "interactive": false,
@@ -777,7 +777,7 @@
   },
   {
     "available": true,
-    "description": "Download a verified Web dashboard (Zashboard default, MetaCubeXD, Yacd-Meta or Razord-Meta), check SHA-256 and safely extract it, then validate external-ui while Mihomo is stopped.",
+    "description": "Download a verified Web dashboard (Zashboard default, MetaCubeXD, Yacd-Meta or Razord-Meta), verify SHA-256, extract safely, update external-ui, and automatically restart Mihomo when running.",
     "group": "clash",
     "id": "clash.panel.install",
     "interactive": false,
@@ -807,7 +807,7 @@
   },
   {
     "available": true,
-    "description": "While Mihomo is stopped, clear external-ui from Mixin and delete CqShell-managed dashboard files under resources/ui.",
+    "description": "Clear external-ui from Mixin, remove CqShell-managed dashboard files under resources/ui, and automatically restart Mihomo when running.",
     "group": "clash",
     "id": "clash.panel.remove",
     "interactive": false,
@@ -854,7 +854,7 @@
   },
   {
     "available": true,
-    "description": "While Mihomo is stopped, configure mixed-port, LAN access, IPv6, HTTP/TLS/QUIC domain sniffing and log level in Mixin with Mihomo validation.",
+    "description": "Configure mixed-port, LAN access, IPv6, HTTP/TLS/QUIC domain sniffing and log level in Mixin, automatically hot-reloading or restarting Mihomo when running.",
     "group": "clash",
     "id": "clash.settings.configure",
     "interactive": false,
@@ -924,7 +924,7 @@
   },
   {
     "available": true,
-    "description": "While Mihomo is stopped, configure fake-ip, redir-host or off with China DoH (Alibaba/DNSPod + Cloudflare/Google fallback) or Global DoH presets and standard fake-ip-filter.",
+    "description": "Configure fake-ip, redir-host or off with China DoH (Alibaba/DNSPod + Cloudflare/Google fallback) or Global DoH presets and standard fake-ip-filter, automatically hot-reloading or restarting Mihomo when running.",
     "group": "clash",
     "id": "clash.dns.configure",
     "interactive": false,
@@ -977,7 +977,7 @@
   },
   {
     "available": true,
-    "description": "While Mihomo is stopped, remove persistent Mixin overrides and rebuild the runtime config while preserving subscriptions and resources.",
+    "description": "Remove persistent Mixin overrides and rebuild the runtime config while preserving subscriptions and resources, automatically restarting Mihomo when running.",
     "group": "clash",
     "id": "clash.mixin.reset",
     "interactive": false,
@@ -1001,7 +1001,7 @@
   },
   {
     "available": true,
-    "description": "Visually configure the dedicated SOCKS5 / SOCKS5h inbound listener (port, listen IP, UDP, direct or rule outbound, and enforced non-loopback authentication), with zero-downtime hot-reload when Mihomo is running with a controller.",
+    "description": "Visually configure the dedicated SOCKS5 / SOCKS5h inbound listener (port, listen IP, UDP, direct or rule outbound, and enforced non-loopback authentication), automatically hot-reloading or restarting Mihomo when running.",
     "group": "clash",
     "id": "clash.socks.configure",
     "interactive": false,
@@ -1122,7 +1122,7 @@
   },
   {
     "available": true,
-    "description": "Configure TUN while stopped. Enabling requires native Linux, root, NET_ADMIN and an available device; WSL and containers are rejected.",
+    "description": "Configure and validate TUN settings (enabling requires native Linux, root, NET_ADMIN and an available device; rejects WSL/containers), automatically restarting Mihomo when running.",
     "group": "clash",
     "id": "clash.tun.configure",
     "interactive": false,

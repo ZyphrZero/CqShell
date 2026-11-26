@@ -148,6 +148,14 @@ pub(in crate::tui) struct ToolsGeom {
 }
 
 #[derive(Debug, Clone)]
+pub(in crate::tui) struct UnavailableGeom {
+    pub body: Rect,
+    pub card: Rect,
+    pub cta: Option<Rect>,
+    pub secondary_cta: Option<Rect>,
+}
+
+#[derive(Debug, Clone)]
 pub(in crate::tui) enum ClashBodyGeom {
     Overview(OverviewGeom),
     Proxies(ProxiesGeom),
@@ -157,7 +165,7 @@ pub(in crate::tui) enum ClashBodyGeom {
     Tools(ToolsGeom),
     TrafficFullscreen(TrafficFullscreenGeom),
     Fullscreen(Rect),
-    Unavailable { body: Rect, cta: Option<Rect> },
+    Unavailable(UnavailableGeom),
 }
 
 #[derive(Debug, Clone)]
@@ -244,35 +252,7 @@ impl ClashGeometry {
             ClashTab::Overview | ClashTab::Proxies | ClashTab::Connections | ClashTab::Rules
         );
         if needs_controller && !cl.snapshot.availability.is_ready() {
-            let cta = if matches!(
-                cl.snapshot.availability,
-                ClashAvailability::NotInstalled
-                    | ClashAvailability::Stopped
-                    | ClashAvailability::ControllerUnconfigured
-            ) && body_rect.height >= 6
-                && body_rect.width >= 20
-            {
-                let card_w = body_rect
-                    .width
-                    .saturating_sub(if body_rect.width < 48 { 2 } else { 6 })
-                    .min(68)
-                    .max(20.min(body_rect.width));
-                let card_h = 9u16
-                    .min(body_rect.height.saturating_sub(2))
-                    .max(6.min(body_rect.height));
-                let card_x = body_rect.x + (body_rect.width.saturating_sub(card_w)) / 2;
-                let card_y = body_rect.y + (body_rect.height.saturating_sub(card_h)) / 2;
-                let btn_y = card_y + card_h.saturating_sub(2);
-                let btn_w = 24u16.min(card_w.saturating_sub(4));
-                Some(Rect::new(
-                    card_x + card_w.saturating_sub(btn_w) / 2,
-                    btn_y,
-                    btn_w,
-                    1,
-                ))
-            } else {
-                None
-            };
+            let unavail = build_unavailable(body_rect, cl, i);
             return Self {
                 area,
                 tab_bar,
@@ -281,10 +261,7 @@ impl ClashGeometry {
                 tab_overflow_right,
                 focus_btn,
                 tab_rule_y,
-                body: ClashBodyGeom::Unavailable {
-                    body: body_rect,
-                    cta,
-                },
+                body: ClashBodyGeom::Unavailable(unavail),
             };
         }
 
@@ -309,6 +286,96 @@ impl ClashGeometry {
             tab_rule_y,
             body,
         }
+    }
+}
+
+fn build_unavailable(body: Rect, cl: &ClashState, i: &I18n) -> UnavailableGeom {
+    let is_no_ctrl = matches!(
+        cl.snapshot.availability,
+        ClashAvailability::ControllerUnconfigured
+    );
+    let enabling_ctrl = is_no_ctrl && cl.busy_hint.as_deref() == Some("controller");
+    let card_w = body
+        .width
+        .saturating_sub(if body.width < 48 { 2 } else { 6 })
+        .min(if is_no_ctrl { 72 } else { 68 })
+        .max(20.min(body.width));
+    let target_h = if is_no_ctrl { 10u16 } else { 9u16 };
+    let card_h = target_h
+        .min(body.height.saturating_sub(2))
+        .max(6.min(body.height));
+    let card_x = body.x + (body.width.saturating_sub(card_w)) / 2;
+    let card_y = body.y + (body.height.saturating_sub(card_h)) / 2;
+    let card = Rect::new(card_x, card_y, card_w, card_h);
+
+    let (cta, secondary_cta) = if matches!(
+        cl.snapshot.availability,
+        ClashAvailability::NotInstalled
+            | ClashAvailability::Stopped
+            | ClashAvailability::ControllerUnconfigured
+    ) && card_h >= 6
+        && card_w >= 20
+    {
+        let inner_w = card_w.saturating_sub(4);
+        let btn_y = card_y + card_h.saturating_sub(2);
+        let primary_label = match cl.snapshot.availability {
+            ClashAvailability::NotInstalled => {
+                format!(" [Enter] {} ", i.text("clash.avail.cta_install"))
+            }
+            ClashAvailability::Stopped => {
+                format!(" [Enter] {} ", i.text("clash.avail.cta_start"))
+            }
+            ClashAvailability::ControllerUnconfigured => {
+                if enabling_ctrl {
+                    format!(" * {} ", i.text("clash.avail.enabling_ctrl"))
+                } else {
+                    format!(" [Enter] {} ", i.text("clash.avail.cta_configure"))
+                }
+            }
+            _ => String::new(),
+        };
+        let primary_w = (primary_label.width() as u16).max(16).min(inner_w);
+        if is_no_ctrl && !enabling_ctrl {
+            let sec_label = format!(" [c] {} ", i.text("clash.avail.cta_custom"));
+            let sec_w = (sec_label.width() as u16).max(12);
+            if primary_w + 2 + sec_w <= inner_w {
+                let total_w = primary_w + 2 + sec_w;
+                let start_x = card_x + card_w.saturating_sub(total_w) / 2;
+                (
+                    Some(Rect::new(start_x, btn_y, primary_w, 1)),
+                    Some(Rect::new(start_x + primary_w + 2, btn_y, sec_w, 1)),
+                )
+            } else {
+                (
+                    Some(Rect::new(
+                        card_x + card_w.saturating_sub(primary_w) / 2,
+                        btn_y,
+                        primary_w,
+                        1,
+                    )),
+                    None,
+                )
+            }
+        } else {
+            (
+                Some(Rect::new(
+                    card_x + card_w.saturating_sub(primary_w) / 2,
+                    btn_y,
+                    primary_w,
+                    1,
+                )),
+                None,
+            )
+        }
+    } else {
+        (None, None)
+    };
+
+    UnavailableGeom {
+        body,
+        card,
+        cta,
+        secondary_cta,
     }
 }
 

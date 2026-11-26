@@ -116,7 +116,7 @@ cqs --yes run clash.start
 cqs --yes run clash.panel.install --set version=v1.273.1
 ```
 
-安装到新的资源目录，验证后切换 `external-ui` 引用。旧目录保留，安装失败不替换原面板。如果未配置控制器，安装会启用 `127.0.0.1:9090`。默认访问地址为 `http://127.0.0.1:9090/ui/`；以 `clash.panel.status` 的实际输出为准。更改配置后需要启动 Mihomo，单独安装静态资源不会启动服务器。
+安装到新的资源目录，验证后切换 `external-ui` 引用。旧目录保留，安装失败不替换原面板。如果未配置控制器，安装会启用 `127.0.0.1:9090`。默认访问地址为 `http://127.0.0.1:9090/ui/`；以 `clash.panel.status` 的实际输出为准。若 Mihomo 正在运行，提交成功后会自动重启内核生效（失败自动回滚）；未运行时则仅保存配置，等待下次启动。
 
 远程服务器的回环地址可通过 SSH 本地转发访问：
 
@@ -129,21 +129,19 @@ ssh -L 9090:127.0.0.1:9090 user@server
 ## 控制器、密钥与节点
 
 ```bash
-cqs --yes run clash.stop
 cqs --yes run clash.controller.configure --set controller_address=127.0.0.1:9090
 cqs --yes run clash.secret.generate
 cqs run clash.controller.status
-cqs --yes run clash.start
 cqs run clash.proxies
 cqs --yes run clash.proxy.select --set proxy_group='Proxy' --set proxy_node='Node A'
 ```
 
+上述持久化配置变更（控制器、密钥、端口/DNS、面板、SOCKS5、TUN 与 Mixin 重置）在 Mihomo 运行中均无需手动停机：预检通过并事务保存后会自动热重载或重启内核生效，若重启失败则自动回滚配置并恢复原进程。在 `cqs mihomo` 面板中，若 Mihomo 运行中尚未启用本机控制口，直接按 `Enter` 即可一键开启 `127.0.0.1` 回环控制器并自动重启内核进入实时图谱（按 `c` 可自定义监听地址）。
+
 生成密钥保存在私有 Mixin 的 `secret` 字段，不输出明文。需要在面板中输入时，可在可信编辑器中读取该字段；也可以先在权限 `0600` 的私有文件中准备密钥，再执行：
 
 ```bash
-cqs --yes run clash.stop
 cqs --yes run clash.secret.set --set secret_file=/absolute/path/to/private-secret
-cqs --yes run clash.start
 ```
 
 `secret_file` 只移除结尾的一次 LF/CRLF，限制密钥为至多 1024 字节、不含空格的可打印 ASCII。密钥内容不应直接成为 CLI 参数。`clash.secret.clear` 仅允许控制器未配置或监听回环地址时清除密钥；非回环地址必须先配置密钥。地址仅支持 IP 或 `localhost` 加端口，不支持任意主机名、URL、Unix socket 或 HTTPS 控制器。通配监听地址的本机 API 请求使用对应回环地址。

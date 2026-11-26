@@ -59,8 +59,8 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, geom: &ClashGeometry) {
                 connections::draw_fullscreen_inspector(app, frame, *full);
             }
         }
-        ClashBodyGeom::Unavailable { body, cta } => {
-            draw_unavailable_guidance(app, frame, *body, *cta, bg);
+        ClashBodyGeom::Unavailable(unavail) => {
+            draw_unavailable_guidance(app, frame, unavail, bg);
         }
         ClashBodyGeom::Overview(ov) => overview::draw(app, frame, ov),
         ClashBodyGeom::Proxies(px) => proxies::draw(app, frame, px),
@@ -229,29 +229,20 @@ fn draw_header_and_tabs(app: &App, frame: &mut Frame, geom: &ClashGeometry, bg: 
 fn draw_unavailable_guidance(
     app: &App,
     frame: &mut Frame,
-    body: Rect,
-    cta: Option<Rect>,
+    geom: &super::layout::UnavailableGeom,
     bg: Color,
 ) {
-    if body.width < 16 || body.height < 4 {
+    let body = geom.body;
+    let card = geom.card;
+    if body.width < 16 || body.height < 4 || card.width < 16 || card.height < 4 {
         return;
     }
     let theme = &app.theme.active;
     let i = &app.ctx.i18n;
     let ascii = theme.flags.ascii;
     let avail = &app.clash.snapshot.availability;
-
-    let card_w = body
-        .width
-        .saturating_sub(if body.width < 48 { 2 } else { 6 })
-        .min(68)
-        .max(20.min(body.width));
-    let card_h = 9u16
-        .min(body.height.saturating_sub(2))
-        .max(6.min(body.height));
-    let card_x = body.x + (body.width.saturating_sub(card_w)) / 2;
-    let card_y = body.y + (body.height.saturating_sub(card_h)) / 2;
-    let card = Rect::new(card_x, card_y, card_w, card_h);
+    let enabling_ctrl = matches!(avail, ClashAvailability::ControllerUnconfigured)
+        && app.clash.busy_hint.as_deref() == Some("controller");
 
     tokens::draw_surface_card_fx(
         frame,
@@ -266,40 +257,62 @@ fn draw_unavailable_guidance(
     let cbg = surface_bg(theme, Role::SurfaceAlt);
     let buf = frame.buffer_mut();
 
-    let (title, detail, cta_label, tone) = match avail {
+    let (title, detail, cta_text, secondary_text, tone) = match avail {
         ClashAvailability::Loading => (
             format!("{} {}", app.spin(), i.text("clash.avail.loading_title")),
             i.text("clash.avail.loading_desc").to_owned(),
+            None,
             None,
             Tone::Info,
         ),
         ClashAvailability::NotInstalled => (
             i.text("clash.avail.not_installed_title").to_owned(),
             i.text("clash.avail.not_installed_desc").to_owned(),
-            Some(i.text("clash.avail.cta_install")),
+            Some(format!(" [Enter] {} ", i.text("clash.avail.cta_install"))),
+            None,
             Tone::Warning,
         ),
         ClashAvailability::Stopped => (
             i.text("clash.avail.stopped_title").to_owned(),
             i.text("clash.avail.stopped_desc").to_owned(),
-            Some(i.text("clash.avail.cta_start")),
+            Some(format!(" [Enter] {} ", i.text("clash.avail.cta_start"))),
+            None,
             Tone::Warning,
         ),
-        ClashAvailability::ControllerUnconfigured => (
-            i.text("clash.avail.no_ctrl_title").to_owned(),
-            i.text("clash.avail.no_ctrl_desc").to_owned(),
-            Some(i.text("clash.avail.cta_configure")),
-            Tone::Warning,
-        ),
+        ClashAvailability::ControllerUnconfigured => {
+            if enabling_ctrl {
+                (
+                    format!("{} {}", app.spin(), i.text("clash.avail.enabling_ctrl")),
+                    i.text("clash.avail.no_ctrl_desc").to_owned(),
+                    Some(format!(
+                        " {} {} ",
+                        app.spin(),
+                        i.text("clash.avail.enabling_ctrl")
+                    )),
+                    None,
+                    Tone::Info,
+                )
+            } else {
+                (
+                    i.text("clash.avail.no_ctrl_title").to_owned(),
+                    i.text("clash.avail.no_ctrl_desc").to_owned(),
+                    Some(format!(" [Enter] {} ", i.text("clash.avail.cta_configure"))),
+                    Some(format!(" [c] {} ", i.text("clash.avail.cta_custom"))),
+                    Tone::Warning,
+                )
+            }
+        }
         ClashAvailability::ControllerUnreachable(err) => (
             i.text("clash.avail.unreachable_title").to_owned(),
             err.clone(),
+            None,
             None,
             Tone::Danger,
         ),
         ClashAvailability::UnknownProcess => (
             i.text("clash.avail.unknown_title").to_owned(),
             i.text("clash.avail.unknown_desc").to_owned(),
+            None,
             None,
             Tone::Danger,
         ),
@@ -336,10 +349,13 @@ fn draw_unavailable_guidance(
         );
     }
 
-    if let (Some(btn), Some(lbl)) = (cta, cta_label) {
-        let text = format!(" [Enter] {lbl} ");
-        let hovered = app.hover.is_some_and(|p| btn.contains(p));
-        draw_pill_chip(buf, btn, &text, true, hovered, theme, cbg);
+    if let (Some(btn), Some(text)) = (geom.cta, cta_text.as_deref()) {
+        let hovered = !enabling_ctrl && app.hover.is_some_and(|p| btn.contains(p));
+        draw_pill_chip(buf, btn, text, !enabling_ctrl, hovered, theme, cbg);
+        if let (Some(sec_btn), Some(sec_text)) = (geom.secondary_cta, secondary_text.as_deref()) {
+            let sec_hovered = app.hover.is_some_and(|p| sec_btn.contains(p));
+            draw_pill_chip(buf, sec_btn, sec_text, false, sec_hovered, theme, cbg);
+        }
     } else if card.height >= 5 {
         let hint = i.text("clash.avail.offline_tabs_hint");
         buf.set_stringn(

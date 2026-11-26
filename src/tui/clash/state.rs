@@ -1093,6 +1093,9 @@ impl ClashState {
                             ClashActionTag::HealthcheckProvider => {
                                 i18n.format("clash.toast.provider_checked", &[("name", &info)])
                             }
+                            ClashActionTag::EnableLocalController => {
+                                i18n.format("clash.toast.controller_enabled", &[("addr", &info)])
+                            }
                         };
                         Some((msg, Tone::Success))
                     }

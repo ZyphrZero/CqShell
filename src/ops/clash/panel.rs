@@ -774,20 +774,22 @@ pub fn install(ctx: &Context, panel: &str, requested: &str) -> Result<()> {
         }
     };
 
-    if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
-        return Err(Error::new(
-            "error.busy",
-            "stop Mihomo before installing its panel",
-        ));
+    if matches!(state(ctx)?, State::Unknown) {
+        return Err(unknown_process());
     }
     let archive = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
     download_release_asset(ctx, &release.url, archive.path(), release.size)?;
     let bytes = fs::read(archive.path())?;
-    publish(ctx, &release, &bytes)?;
+    let applied = publish(ctx, &release, &bytes)?;
+    let suffix = match applied {
+        MixinApplied::SavedWhileStopped => "start Mihomo to serve /ui/",
+        MixinApplied::HotReloaded => "hot-reloaded; /ui/ is ready",
+        MixinApplied::Restarted => "applied (Mihomo restarted); /ui/ is ready",
+    };
     ctx.message(
         "notice.clash_panel",
         format!(
-            "{} {}; start Mihomo to serve /ui/",
+            "{} {}; {suffix}",
             release.panel.display_name(),
             release.version
         ),
@@ -795,7 +797,7 @@ pub fn install(ctx: &Context, panel: &str, requested: &str) -> Result<()> {
     Ok(())
 }
 
-fn publish(ctx: &Context, release: &Release, bytes: &[u8]) -> Result<()> {
+fn publish(ctx: &Context, release: &Release, bytes: &[u8]) -> Result<MixinApplied> {
     if bytes.len() as u64 != release.size || sha256_hex(bytes) != release.digest {
         return Err(Error::new("error.digest", "panel archive"));
     }
@@ -820,7 +822,7 @@ fn publish(ctx: &Context, release: &Release, bytes: &[u8]) -> Result<()> {
     )?;
     let external_ui = path_string(destination.path())?;
     let configured_controller = controller::address(ctx)?.is_some();
-    let result = edit_mixin(ctx, |map| {
+    let result = edit_mixin_and_apply(ctx, MixinApplyMode::RestartIfRunning, |map| {
         map.insert(
             Value::String("external-ui".into()),
             Value::String(external_ui),
@@ -843,13 +845,10 @@ fn publish(ctx: &Context, release: &Release, bytes: &[u8]) -> Result<()> {
 pub fn remove(ctx: &Context) -> Result<()> {
     ctx.check()?;
     ensure_layout(ctx)?;
-    if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
-        return Err(Error::new(
-            "error.busy",
-            "stop Mihomo before removing its panel",
-        ));
+    if matches!(state(ctx)?, State::Unknown) {
+        return Err(unknown_process());
     }
-    edit_mixin(ctx, |map| {
+    let applied = edit_mixin_and_apply(ctx, MixinApplyMode::RestartIfRunning, |map| {
         let key = Value::String("external-ui".into());
         map.remove(&key);
         let runtime = runtime_with_mixin(ctx, Value::Mapping(map.clone()))?;
@@ -864,6 +863,7 @@ pub fn remove(ctx: &Context) -> Result<()> {
         }
         Ok(())
     })?;
+    let _ = applied;
     let panels = ctx.paths.clash_resources.join("ui");
     if panels.exists() {
         storage::check_path(&panels, false)?;

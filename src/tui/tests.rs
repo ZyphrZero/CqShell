@@ -3371,3 +3371,136 @@ fn clash_outbound_ip_detection_modal_hide_ip_copy_and_generation_guard_work() {
         );
     }
 }
+
+#[test]
+fn clash_controller_unconfigured_one_click_enable_custom_form_and_pure_ascii_work() {
+    use crate::ops::clash::{
+        model::{ClashAvailability, ClashSnapshot, ClashTab},
+        monitor::{ClashActionTag, ClashEvent, ClashMonitorCmd},
+    };
+    use crate::tui::clash::layout::ClashBodyGeom;
+    use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
+
+    let click = |x: u16, y: u16| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.open_clash(ClashTab::Overview, false, false);
+    app.clash.snapshot = ClashSnapshot {
+        availability: ClashAvailability::ControllerUnconfigured,
+        ..ClashSnapshot::default()
+    };
+
+    // 1. Wide/compact/mobile breakpoints render one-click CTA and custom action cleanly
+    for (w, h) in [(120u16, 36u16), (80, 24), (59, 24), (40, 16)] {
+        let rendered = render_clash_frame_text(&mut app, w, h);
+        assert!(
+            rendered.contains("尚未开启本机控制接口") || rendered.contains("一键启用"),
+            "missing unconfigured guidance at {w}x{h}:\n{rendered}"
+        );
+    }
+    let wide = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        wide.contains("一键启用本机控制"),
+        "missing primary CTA:\n{wide}"
+    );
+    assert!(
+        wide.contains("自定义地址..."),
+        "missing secondary CTA:\n{wide}"
+    );
+
+    // 2. Pressing Enter triggers one-click EnableLocalController without opening form/modal
+    let eff = app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::EnableLocalController)
+    ));
+    assert!(app.form.is_none());
+    assert_eq!(app.clash.busy_hint.as_deref(), Some("controller"));
+
+    // Duplicate Enter while enabling is ignored
+    let dup = app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(matches!(dup, super::state::Effect::None));
+    let enabling_text = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        enabling_text.contains("正在启用控制器并自动重启"),
+        "expected busy status while enabling:\n{enabling_text}"
+    );
+
+    // ActionDone clears busy_hint and formats success toast with bound address
+    let toast = app.clash.apply_event(
+        ClashEvent::ActionDone {
+            tag: ClashActionTag::EnableLocalController,
+            result: Ok("127.0.0.1:9090".into()),
+        },
+        &app.ctx.i18n,
+    );
+    assert!(app.clash.busy_hint.is_none());
+    let (msg, tone) = toast.expect("expected success toast");
+    assert_eq!(tone, super::state::Tone::Success);
+    assert!(msg.contains("127.0.0.1:9090"), "unexpected toast: {msg}");
+
+    // 3. Mouse click on primary CTA triggers EnableLocalController; click on secondary opens form
+    let area = Rect::new(0, 0, 120, 36);
+    let _ = render_clash_frame_text(&mut app, 120, 36);
+    let regions = super::layout::LayoutRegions::compute(area, &app);
+    let geom = regions.clash.expect("clash geometry");
+    let (cta_rect, sec_rect) = match geom.body {
+        ClashBodyGeom::Unavailable(u) => (
+            u.cta.expect("primary cta rect"),
+            u.secondary_cta.expect("secondary cta rect"),
+        ),
+        other => panic!("expected Unavailable geometry, got {other:?}"),
+    };
+    let click_primary = app
+        .handle_mouse(click(cta_rect.x + 1, cta_rect.y), area)
+        .unwrap();
+    assert!(matches!(
+        click_primary,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::EnableLocalController)
+    ));
+    app.clash.busy_hint = None;
+
+    let _ = app
+        .handle_mouse(click(sec_rect.x + 1, sec_rect.y), area)
+        .unwrap();
+    let form = app.form.as_ref().expect("expected custom controller form");
+    assert_eq!(form.spec.id, "clash.controller.configure");
+    app.form = None;
+
+    // Keyboard `c` also opens custom controller form
+    let _ = app.handle_key(key(KeyCode::Char('c'))).unwrap();
+    assert_eq!(
+        app.form.as_ref().expect("form via c").spec.id,
+        "clash.controller.configure"
+    );
+
+    // 4. Plain ASCII theme in en-US is 100% pure 7-bit ASCII across all breakpoints & busy state
+    let (_temp_en, mut app_en) = test_app("en-US");
+    app_en
+        .preview_theme("plain", Background::Detected((0, 0, 0)))
+        .unwrap();
+    app_en.open_clash(ClashTab::Overview, false, false);
+    app_en.clash.snapshot = ClashSnapshot {
+        availability: ClashAvailability::ControllerUnconfigured,
+        ..ClashSnapshot::default()
+    };
+    for busy in [false, true] {
+        app_en.clash.busy_hint = if busy {
+            Some("controller".into())
+        } else {
+            None
+        };
+        for (w, h) in [(120u16, 36u16), (80, 24), (59, 24), (40, 16)] {
+            let text = render_clash_frame_text(&mut app_en, w, h);
+            assert!(
+                text.is_ascii(),
+                "non-ASCII in plain ControllerUnconfigured (busy={busy}) at {w}x{h}:\n{text}"
+            );
+        }
+    }
+}

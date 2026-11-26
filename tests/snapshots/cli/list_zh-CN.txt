@@ -89,7 +89,7 @@ clash.sub.remove       删除订阅
 clash.controller.status 查看控制器配置
   只读显示控制器地址及密钥是否已设置，不显示密钥。
 clash.controller.configure 配置控制器地址
-  停止 Mihomo 后设置 IP 或 localhost 与端口；校验成功后事务保存 Mixin。
+  设置控制器 IP 或 localhost 与端口；校验并事务保存 Mixin，Mihomo 运行中将自动重启生效，失败自动回滚。
   controller_address=127.0.0.1:9090 []
 clash.proxies          查看策略组与节点
   通过配置的控制器查询策略组、节点和当前选择。
@@ -106,27 +106,27 @@ clash.connections      查看 / 断开活跃连接
   查看当前活跃连接数、累计上下行流量、内存占用及热门连接明细，可选一键断开全部连接。
   close_all=off ["off", "on"]
 clash.secret.generate  生成控制器密钥
-  停止 Mihomo 后生成随机密钥并保存到私有 Mixin；不在日志显示内容。
+  生成随机密钥并保存到私有 Mixin（不输出明文）；Mihomo 运行中将自动重启生效，失败自动回滚。
 clash.secret.set       从私有文件设置密钥
-  停止 Mihomo 后读取私有文件中的密钥，避免将明文放入命令参数；Linux 文件须为 0600。
+  读取私有文件中的密钥（Linux 须为 0600），避免明文进入命令参数；Mihomo 运行中将自动重启生效。
   secret_file= []
 clash.secret.clear     清除控制器密钥
-  停止 Mihomo 后清除认证密钥；仅允许回环控制器地址。
+  清除控制器认证密钥（仅允许回环地址）；Mihomo 运行中将自动重启生效。
 clash.panel.status     Web 控制台地址与状态
   检查静态面板资源，显示不含密钥的控制台 URL。回环地址需在本机或 SSH 隧道中访问。
 clash.panel.install    安装 / 切换 Web 控制台面板
-  下载官方校验的 Web 面板（默认 Zashboard，另支持 MetaCubeXD、Yacd-Meta、Razord-Meta），校验 SHA-256 并安全解压，验证后更新 external-ui；请先停止 Mihomo。
+  下载官方校验的 Web 面板（默认 Zashboard，另支持 MetaCubeXD、Yacd-Meta、Razord-Meta），校验 SHA-256 并安全解压；验证后更新 external-ui，Mihomo 运行中将自动重启生效。
   panel=zashboard ["zashboard", "metacubexd", "yacd", "razord"]
   version= []
 clash.panel.remove     卸载 Web 控制台面板
-  停止 Mihomo 后清除 Mixin 中的 external-ui，并删除 CqShell 在 resources/ui 下管理的面板文件。
+  清除 Mixin 中的 external-ui 并删除 CqShell 在 resources/ui 下管理的面板文件；Mihomo 运行中将自动重启生效。
 clash.geodata.status   查看 GeoData 规则库状态
   检查 Mihomo 资源目录中 geoip.metadb、geosite.dat、country.mmdb、geoip.dat 与 GeoLite2-ASN.mmdb 的存在状态与体积。
 clash.geodata.update   更新 GeoData 规则库
   从官方 MetaCubeX/meta-rules-dat 下载 standard / lite / full 预设文件，校验精确体积与 SHA-256 后原子替换；自动支持 GitHub 加速代理。
   geodata_preset=standard ["standard", "lite", "full"]
 clash.settings.configure 核心代理设置
-  停止 Mihomo 后在 Mixin 中配置混合端口、局域网共享、IPv6、HTTP/TLS/QUIC 域名嗅探与日志级别，并校验生效。
+  在 Mixin 中配置混合端口、局域网共享、IPv6、HTTP/TLS/QUIC 域名嗅探与日志级别；校验保存后，Mihomo 运行中将自动热重载或重启生效。
   mixed_port=7890 []
   allow_lan=off ["off", "on"]
   clash_ipv6=off ["off", "on"]
@@ -135,18 +135,18 @@ clash.settings.configure 核心代理设置
 clash.dns.status       查看 DNS 配置状态
   只读查看当前生效的 Mihomo DNS 开关、增强模式、IPv6 解析、上游 nameserver 与 fallback 数量。
 clash.dns.configure    配置 DNS 预设
-  停止 Mihomo 后配置 fake-ip / redir-host / 关闭，内置国内分流 DoH（阿里/腾讯 + Cloudflare/Google 回落）或海外 DoH 预设与常见 fake-ip-filter。
+  配置 fake-ip / redir-host / 关闭，内置国内分流 DoH（阿里/腾讯 + Cloudflare/Google 回落）或海外 DoH 预设与常见 fake-ip-filter；Mihomo 运行中将自动热重载或重启生效。
   dns_mode=fake-ip ["fake-ip", "redir-host", "off"]
   dns_preset=china ["china", "global"]
   dns_ipv6=off ["off", "on"]
 clash.mixin.status     查看 Mixin 覆盖配置
   查看持久化 Mixin 覆盖内容，自动脱敏控制器密钥与代理认证凭据。
 clash.mixin.reset      重置 Mixin 覆盖配置
-  停止 Mihomo 后清除全部 Mixin 持久化覆盖并重建运行配置，保留已保存的订阅与本地资源。
+  清除全部 Mixin 持久化覆盖并重建运行配置（保留订阅与本地资源）；Mihomo 运行中将自动重启生效。
 clash.socks.status     查看 SOCKS5 / 5h 状态
   只读查看独立 SOCKS5 / SOCKS5h 入站监听状态、绑定地址与端口、UDP 转发、出站路由模式、脱敏连接模板及私有凭据文件路径。
 clash.socks.configure  可视化配置 SOCKS5 / 5h 入站
-  可视化配置独立 SOCKS5 / SOCKS5h 入站监听器（端口、绑定地址、UDP、本机直连或规则分流及强制非回环鉴权）；Mihomo 运行中且启用控制器时支持零停机热重载生效。
+  可视化配置独立 SOCKS5 / SOCKS5h 入站监听器（端口、绑定地址、UDP、本机直连或规则分流及强制非回环鉴权）；Mihomo 运行中将自动热重载或重启生效。
   socks_enabled=on ["on", "off"]
   socks_port=10808 ["10808", "21080", "1080"]
   socks_listen=0.0.0.0 ["0.0.0.0", "::", "127.0.0.1"]
@@ -162,7 +162,7 @@ clash.socks.auth.set   从文件导入 SOCKS5 凭据
 clash.tun.status       查看 TUN 配置与归属
   只读查看 TUN 配置、链路及进程归属。
 clash.tun.configure    配置 TUN 模式
-  停止 Mihomo 后配置 TUN；启用要求原生 Linux、root、NET_ADMIN 和可用设备，拒绝 WSL/容器；启动时再次检查。
+  配置 TUN 参数并校验保存；启用要求原生 Linux、root、NET_ADMIN 和可用设备（拒绝 WSL/容器），Mihomo 运行中将自动重启生效。
   enabled=off ["on", "off"]
   tun_stack=mixed ["system", "gvisor", "mixed"]
   tun_device=cqs-tun []

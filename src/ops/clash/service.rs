@@ -191,7 +191,7 @@ fn active(ctx: &Context, scope: Scope) -> Result<bool> {
         "active" | "reloading" => Ok(true),
         "inactive" | "failed" => Ok(false),
         "activating" | "deactivating" | "maintenance" | "refreshing" => Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             format!("Mihomo systemd service is {value}; retry after it settles"),
         )),
         _ => Err(Error::new(
@@ -252,14 +252,14 @@ fn check_fragment(ctx: &Context, scope: Scope, existing: bool) -> Result<()> {
         .is_some_and(|value| !value.is_empty())
     {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "remove systemd drop-in overrides before managing this unit",
         ));
     }
     let fragment = properties.get("FragmentPath").copied().unwrap_or("");
     if !fragment.is_empty() && fragment != path_string(&scope.path(ctx))? {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             format!("{UNIT} is provided by another unit file: {fragment}"),
         ));
     }
@@ -386,7 +386,7 @@ pub fn status(ctx: &Context, scope: &str) -> Result<()> {
     };
     if !owned(ctx, &bytes)? {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "service unit is not owned by this CqShell instance",
         ));
     }
@@ -413,7 +413,7 @@ pub fn install(ctx: &Context, scope: &str) -> Result<()> {
     let _operation_lock = Lock::acquire(&ctx.paths.clash_lock)?;
     if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "stop Mihomo before installing or replacing its service",
         ));
     }
@@ -427,7 +427,7 @@ pub fn install(ctx: &Context, scope: &str) -> Result<()> {
         && owned(ctx, &bytes)?
     {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "remove the other service scope for this instance first",
         ));
     }
@@ -436,14 +436,14 @@ pub fn install(ctx: &Context, scope: &str) -> Result<()> {
         && !owned(ctx, bytes)?
     {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "refusing to overwrite an unowned service unit",
         ));
     }
     check_fragment(ctx, scope, false)?;
     if active(ctx, scope)? {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "stop the existing systemd unit before replacing it",
         ));
     }
@@ -488,7 +488,7 @@ pub fn remove(ctx: &Context, scope: &str) -> Result<()> {
     };
     if !owned(ctx, &bytes)? {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "refusing to remove an unowned service unit",
         ));
     }
@@ -545,7 +545,7 @@ fn managed_scope(ctx: &Context) -> Result<Option<Scope>> {
             && selected.replace(scope).is_some()
         {
             return Err(Error::new(
-                "error.busy",
+                "error.clash_state",
                 "both user and system services claim this instance",
             ));
         }
@@ -563,7 +563,7 @@ pub(super) fn start_managed(ctx: &Context) -> Result<bool> {
     check_fragment(ctx, scope, true)?;
     if !active(ctx, scope)? && matches!(state(ctx)?, State::Running(_) | State::Unknown) {
         return Err(Error::new(
-            "error.busy",
+            "error.clash_state",
             "a direct Mihomo process is running; stop it before starting the service",
         ));
     }
@@ -584,6 +584,23 @@ pub(super) fn stop_managed(ctx: &Context) -> Result<bool> {
     systemctl(ctx, scope, &["stop", UNIT])?;
     if active(ctx, scope)? || matches!(state(ctx)?, State::Running(_) | State::Unknown) {
         return Err(Error::new("error.verify", "managed Mihomo did not stop"));
+    }
+    Ok(true)
+}
+
+pub(super) fn restart_managed(ctx: &Context) -> Result<bool> {
+    let Some(scope) = managed_scope(ctx)? else {
+        return Ok(false);
+    };
+    preflight(ctx, scope)?;
+    let _lock = Lock::acquire(&storage::suffix(&ctx.paths.clash_lock, ".service"))?;
+    check_fragment(ctx, scope, true)?;
+    if !active(ctx, scope)? {
+        return Ok(false);
+    }
+    systemctl(ctx, scope, &["restart", UNIT])?;
+    if !active(ctx, scope)? || !matches!(state(ctx)?, State::Running(_)) {
+        return Err(Error::new("error.verify", "managed Mihomo did not restart"));
     }
     Ok(true)
 }

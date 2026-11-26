@@ -90,7 +90,7 @@ pub fn configure(
 ) -> Result<()> {
     let port = validate_mixed_port(mixed_port)?;
     validate_log_level(log_level)?;
-    edit_mixin(ctx, |map| {
+    let applied = edit_mixin_and_apply(ctx, MixinApplyMode::HotReloadOrRestart, |map| {
         map.insert(key("mixed-port"), Value::Number(port.into()));
         map.insert(key("allow-lan"), Value::Bool(allow_lan));
         map.insert(
@@ -121,7 +121,8 @@ pub fn configure(
     ctx.message(
         "notice.clash_settings",
         format!(
-            "mixed-port={port}; allow-lan={allow_lan}; ipv6={ipv6}; sniffer={sniffer}; log-level={log_level}; start Mihomo to apply"
+            "mixed-port={port}; allow-lan={allow_lan}; ipv6={ipv6}; sniffer={sniffer}; log-level={log_level}; {}",
+            applied.suffix()
         ),
     );
     Ok(())
@@ -260,7 +261,7 @@ pub fn dns_configure(ctx: &Context, mode: &str, preset: &str, ipv6: bool) -> Res
             "DNS preset must be china or global",
         ));
     }
-    edit_mixin(ctx, |map| {
+    let applied = edit_mixin_and_apply(ctx, MixinApplyMode::HotReloadOrRestart, |map| {
         if mode == "off" {
             let entry = map
                 .entry(key("dns"))
@@ -289,9 +290,12 @@ pub fn dns_configure(ctx: &Context, mode: &str, preset: &str, ipv6: bool) -> Res
         Ok(())
     })?;
     let detail = if mode == "off" {
-        "disabled in Mixin; start Mihomo to apply".into()
+        format!("disabled; {}", applied.suffix())
     } else {
-        format!("mode={mode}; preset={preset}; ipv6={ipv6}; start Mihomo to apply")
+        format!(
+            "mode={mode}; preset={preset}; ipv6={ipv6}; {}",
+            applied.suffix()
+        )
     };
     ctx.message("notice.clash_dns", detail);
     Ok(())
@@ -352,36 +356,17 @@ pub fn mixin_status(ctx: &Context) -> Result<()> {
 
 /// Remove all persistent Mixin overrides while preserving installed subscriptions and resources.
 pub fn mixin_reset(ctx: &Context) -> Result<()> {
-    ctx.check()?;
-    let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
-    recover_interrupted_files(ctx)?;
-    if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
-        return Err(Error::new(
-            "error.busy",
-            "stop Mihomo before resetting Mixin overrides",
-        ));
-    }
-    ensure_layout(ctx)?;
-    storage::check_path(&ctx.paths.clash_mixin, true)?;
-    let runtime = runtime_with_mixin(ctx, Value::Mapping(Mapping::new()))?;
-    let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
-    fs::write(candidate.path(), &runtime)?;
-    validate_config(ctx, candidate.path(), true)?;
-    validate_with_mihomo(ctx, candidate.path())?;
-    commit_files(
+    let applied = reset_mixin_and_apply(
         ctx,
-        &[
-            (ctx.paths.clash_mixin.clone(), None),
-            (socks::auth_path(ctx), None),
-            (
-                ctx.paths.clash_runtime.clone(),
-                Some(storage::Saved::new(&runtime, 0o600)),
-            ),
-        ],
+        MixinApplyMode::RestartIfRunning,
+        &[(socks::auth_path(ctx), None)],
     )?;
     ctx.message(
         "notice.clash_mixin",
-        "Mixin overrides cleared; subscriptions preserved",
+        format!(
+            "Mixin overrides cleared; subscriptions preserved ({})",
+            applied.suffix()
+        ),
     );
     Ok(())
 }

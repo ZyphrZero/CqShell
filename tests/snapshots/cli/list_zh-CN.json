@@ -613,7 +613,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后设置 IP 或 localhost 与端口；校验成功后事务保存 Mixin。",
+    "description": "设置控制器 IP 或 localhost 与端口；校验并事务保存 Mixin，Mihomo 运行中将自动重启生效，失败自动回滚。",
     "group": "clash",
     "id": "clash.controller.configure",
     "interactive": false,
@@ -722,7 +722,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后生成随机密钥并保存到私有 Mixin；不在日志显示内容。",
+    "description": "生成随机密钥并保存到私有 Mixin（不输出明文）；Mihomo 运行中将自动重启生效，失败自动回滚。",
     "group": "clash",
     "id": "clash.secret.generate",
     "interactive": false,
@@ -734,7 +734,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后读取私有文件中的密钥，避免将明文放入命令参数；Linux 文件须为 0600。",
+    "description": "读取私有文件中的密钥（Linux 须为 0600），避免明文进入命令参数；Mihomo 运行中将自动重启生效。",
     "group": "clash",
     "id": "clash.secret.set",
     "interactive": false,
@@ -753,7 +753,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后清除认证密钥；仅允许回环控制器地址。",
+    "description": "清除控制器认证密钥（仅允许回环地址）；Mihomo 运行中将自动重启生效。",
     "group": "clash",
     "id": "clash.secret.clear",
     "interactive": false,
@@ -777,7 +777,7 @@
   },
   {
     "available": true,
-    "description": "下载官方校验的 Web 面板（默认 Zashboard，另支持 MetaCubeXD、Yacd-Meta、Razord-Meta），校验 SHA-256 并安全解压，验证后更新 external-ui；请先停止 Mihomo。",
+    "description": "下载官方校验的 Web 面板（默认 Zashboard，另支持 MetaCubeXD、Yacd-Meta、Razord-Meta），校验 SHA-256 并安全解压；验证后更新 external-ui，Mihomo 运行中将自动重启生效。",
     "group": "clash",
     "id": "clash.panel.install",
     "interactive": false,
@@ -807,7 +807,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后清除 Mixin 中的 external-ui，并删除 CqShell 在 resources/ui 下管理的面板文件。",
+    "description": "清除 Mixin 中的 external-ui 并删除 CqShell 在 resources/ui 下管理的面板文件；Mihomo 运行中将自动重启生效。",
     "group": "clash",
     "id": "clash.panel.remove",
     "interactive": false,
@@ -854,7 +854,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后在 Mixin 中配置混合端口、局域网共享、IPv6、HTTP/TLS/QUIC 域名嗅探与日志级别，并校验生效。",
+    "description": "在 Mixin 中配置混合端口、局域网共享、IPv6、HTTP/TLS/QUIC 域名嗅探与日志级别；校验保存后，Mihomo 运行中将自动热重载或重启生效。",
     "group": "clash",
     "id": "clash.settings.configure",
     "interactive": false,
@@ -924,7 +924,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后配置 fake-ip / redir-host / 关闭，内置国内分流 DoH（阿里/腾讯 + Cloudflare/Google 回落）或海外 DoH 预设与常见 fake-ip-filter。",
+    "description": "配置 fake-ip / redir-host / 关闭，内置国内分流 DoH（阿里/腾讯 + Cloudflare/Google 回落）或海外 DoH 预设与常见 fake-ip-filter；Mihomo 运行中将自动热重载或重启生效。",
     "group": "clash",
     "id": "clash.dns.configure",
     "interactive": false,
@@ -977,7 +977,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后清除全部 Mixin 持久化覆盖并重建运行配置，保留已保存的订阅与本地资源。",
+    "description": "清除全部 Mixin 持久化覆盖并重建运行配置（保留订阅与本地资源）；Mihomo 运行中将自动重启生效。",
     "group": "clash",
     "id": "clash.mixin.reset",
     "interactive": false,
@@ -1001,7 +1001,7 @@
   },
   {
     "available": true,
-    "description": "可视化配置独立 SOCKS5 / SOCKS5h 入站监听器（端口、绑定地址、UDP、本机直连或规则分流及强制非回环鉴权）；Mihomo 运行中且启用控制器时支持零停机热重载生效。",
+    "description": "可视化配置独立 SOCKS5 / SOCKS5h 入站监听器（端口、绑定地址、UDP、本机直连或规则分流及强制非回环鉴权）；Mihomo 运行中将自动热重载或重启生效。",
     "group": "clash",
     "id": "clash.socks.configure",
     "interactive": false,
@@ -1122,7 +1122,7 @@
   },
   {
     "available": true,
-    "description": "停止 Mihomo 后配置 TUN；启用要求原生 Linux、root、NET_ADMIN 和可用设备，拒绝 WSL/容器；启动时再次检查。",
+    "description": "配置 TUN 参数并校验保存；启用要求原生 Linux、root、NET_ADMIN 和可用设备（拒绝 WSL/容器），Mihomo 运行中将自动重启生效。",
     "group": "clash",
     "id": "clash.tun.configure",
     "interactive": false,

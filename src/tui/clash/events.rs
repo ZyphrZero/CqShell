@@ -307,6 +307,13 @@ impl App {
             if key.code == KeyCode::Enter && idle {
                 return self.clash_trigger_unavailable_cta();
             }
+            if matches!(key.code, KeyCode::Char('c'))
+                && idle
+                && self.clash.snapshot.availability == ClashAvailability::ControllerUnconfigured
+                && self.clash.busy_hint.is_none()
+            {
+                return self.clash_trigger_action("clash.controller.configure");
+            }
             return Ok(Effect::None);
         }
 
@@ -461,7 +468,11 @@ impl App {
             ClashAvailability::NotInstalled => self.clash_trigger_action("clash.install"),
             ClashAvailability::Stopped => self.clash_trigger_action("clash.start"),
             ClashAvailability::ControllerUnconfigured => {
-                self.clash_trigger_action("clash.controller.configure")
+                if self.clash.busy_hint.is_some() {
+                    return Ok(Effect::None);
+                }
+                self.clash.busy_hint = Some("controller".into());
+                Ok(Effect::ClashCmd(ClashMonitorCmd::EnableLocalController))
             }
             _ => Ok(Effect::ClashRefresh),
         }
@@ -1567,9 +1578,15 @@ impl App {
 
         let idle = self.worker.is_none();
         match &geom.body {
-            ClashBodyGeom::Unavailable { cta, .. } => {
-                if idle && cta.is_some_and(|r| r.contains(pos)) {
+            ClashBodyGeom::Unavailable(unavail) => {
+                if idle && unavail.cta.is_some_and(|r| r.contains(pos)) {
                     return self.clash_trigger_unavailable_cta();
+                }
+                if idle
+                    && self.clash.busy_hint.is_none()
+                    && unavail.secondary_cta.is_some_and(|r| r.contains(pos))
+                {
+                    return self.clash_trigger_action("clash.controller.configure");
                 }
             }
             ClashBodyGeom::TrafficFullscreen(tf) => {

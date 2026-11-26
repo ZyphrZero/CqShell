@@ -1,7 +1,10 @@
 //! Explicit TUN configuration for the directly managed native Linux process.
 //! No implicit privilege escalation or host network changes are performed here.
 
-use super::{State, build_runtime_config, edit_mixin, state};
+use super::{
+    MixinApplied, MixinApplyMode, State, build_runtime_config, edit_mixin_and_apply, state,
+    unknown_process,
+};
 use crate::{
     error::{Error, Result},
     runtime::Context,
@@ -177,7 +180,7 @@ fn require_native_inner(ctx: &Context, device: &str, allow_owned_by: Option<u32>
                 };
                 if !owned {
                     return Err(Error::new(
-                        "error.busy",
+                        "error.clash_state",
                         format!("TUN device {device} already exists; choose an unused device name"),
                     ));
                 }
@@ -238,9 +241,14 @@ pub fn configure(
 ) -> Result<()> {
     validate_options(stack, device)?;
     if enabled {
-        require_native(ctx, device)?;
+        let running_pid = match state(ctx)? {
+            State::Running(pid) => Some(pid),
+            State::Unknown => return Err(unknown_process()),
+            State::Stopped | State::NotInstalled => None,
+        };
+        require_native_inner(ctx, device, running_pid)?;
     }
-    edit_mixin(ctx, |mixin| {
+    let applied = edit_mixin_and_apply(ctx, MixinApplyMode::RestartIfRunning, |mixin| {
         let tun = map_mut(mixin, "tun")?;
         tun.insert(key("enable"), Value::Bool(enabled));
         if enabled {
@@ -264,20 +272,35 @@ pub fn configure(
     ctx.message(
         "notice.clash_tun",
         if enabled {
-            "enabled in configuration; start Mihomo as root to activate"
+            match applied {
+                MixinApplied::SavedWhileStopped => {
+                    "enabled in configuration; start Mihomo as root to activate"
+                }
+                MixinApplied::HotReloaded => "enabled and hot-reloaded into running Mihomo",
+                MixinApplied::Restarted => "enabled and applied (Mihomo restarted)",
+            }
         } else {
-            "disabled in configuration"
+            match applied {
+                MixinApplied::SavedWhileStopped => "disabled in configuration",
+                MixinApplied::HotReloaded => "disabled and hot-reloaded into running Mihomo",
+                MixinApplied::Restarted => "disabled and applied (Mihomo restarted)",
+            }
         },
     );
     Ok(())
 }
 
 pub(super) fn set_enabled(ctx: &Context, enabled: bool) -> Result<()> {
-    edit_mixin(ctx, |mixin| {
+    let running_pid = match state(ctx)? {
+        State::Running(pid) => Some(pid),
+        State::Unknown => return Err(unknown_process()),
+        State::Stopped | State::NotInstalled => None,
+    };
+    let applied = edit_mixin_and_apply(ctx, MixinApplyMode::RestartIfRunning, |mixin| {
         if enabled {
             let runtime = super::runtime_with_mixin(ctx, Value::Mapping(mixin.clone()))?;
             let settings = settings(&serde_yaml::from_slice(&runtime)?)?;
-            require_native(ctx, &settings.device)?;
+            require_native_inner(ctx, &settings.device, running_pid)?;
             map_mut(mixin, "tun")?.insert(key("device"), key(&settings.device));
         }
         map_mut(mixin, "tun")?.insert(key("enable"), Value::Bool(enabled));
@@ -286,9 +309,19 @@ pub(super) fn set_enabled(ctx: &Context, enabled: bool) -> Result<()> {
     ctx.message(
         "notice.clash_tun",
         if enabled {
-            "enabled in configuration; start Mihomo as root to activate"
+            match applied {
+                MixinApplied::SavedWhileStopped => {
+                    "enabled in configuration; start Mihomo as root to activate"
+                }
+                MixinApplied::HotReloaded => "enabled and hot-reloaded into running Mihomo",
+                MixinApplied::Restarted => "enabled and applied (Mihomo restarted)",
+            }
         } else {
-            "disabled in configuration"
+            match applied {
+                MixinApplied::SavedWhileStopped => "disabled in configuration",
+                MixinApplied::HotReloaded => "disabled and hot-reloaded into running Mihomo",
+                MixinApplied::Restarted => "disabled and applied (Mihomo restarted)",
+            }
         },
     );
     Ok(())

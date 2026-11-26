@@ -614,99 +614,114 @@ fn upsert_mixin_listener(root: &mut Mapping, listener: Option<Value>) -> Result<
     Ok(())
 }
 
-/// Apply an update to `cqs-socks5` in Mixin + runtime + `socks5.auth`, hot-reloading when running.
+/// Apply an update to `cqs-socks5` in Mixin + runtime + `socks5.auth`, hot-reloading when running
+/// with a controller or automatically restarting Mihomo otherwise (with full rollback on failure).
 fn commit_socks_change(
     ctx: &Context,
     listener: Option<Value>,
     auth_card: Option<Vec<u8>>,
-) -> Result<bool> {
+) -> Result<MixinApplied> {
     ctx.check()?;
-    let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
-    recover_interrupted_files(ctx)?;
-    let current_state = state(ctx)?;
-    let reload_target = match current_state {
-        State::Unknown => return Err(unknown_process()),
-        State::Running(_) => Some(controller::settings(ctx).map_err(|_| {
-            Error::new(
-                "error.busy",
-                "Mihomo is running without external-controller; stop Mihomo before changing SOCKS5 settings",
-            )
-        })?),
-        State::Stopped | State::NotInstalled => None,
+    let cred_path = auth_path(ctx);
+    let (was_running, prev_ctrl, runtime, rollback) = {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        recover_interrupted_files(ctx)?;
+        let current_state = state(ctx)?;
+        let (was_running, prev_ctrl) = match current_state {
+            State::Unknown => return Err(unknown_process()),
+            State::Running(_) => (true, controller::effective_settings(ctx).ok().flatten()),
+            State::Stopped | State::NotInstalled => (false, None),
+        };
+
+        ensure_layout(ctx)?;
+        storage::check_path(&ctx.paths.clash_mixin, true)?;
+        storage::check_path(&ctx.paths.clash_runtime, true)?;
+        storage::check_path(&cred_path, true)?;
+
+        let prev_mixin = storage::Saved::capture(&ctx.paths.clash_mixin)?;
+        let prev_runtime = storage::Saved::capture(&ctx.paths.clash_runtime)?;
+        let prev_auth = storage::Saved::capture(&cred_path)?;
+
+        let mut mixin = read_mixin(ctx)?;
+        let root = mixin
+            .as_mapping_mut()
+            .ok_or_else(|| Error::new("error.data", "Mixin root must be a map"))?;
+        upsert_mixin_listener(root, listener)?;
+
+        let runtime = runtime_with_mixin(ctx, mixin.clone())?;
+        let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+        fs::write(candidate.path(), &runtime)?;
+        validate_config(ctx, candidate.path(), true)?;
+        if ctx.paths.clash_binary.is_file() {
+            require_binary(ctx)?;
+            let output = ctx.command(
+                &path_string(&ctx.paths.clash_binary)?,
+                &[
+                    "-d",
+                    &path_string(&ctx.paths.clash_resources)?,
+                    "-f",
+                    &path_string(candidate.path())?,
+                    "-t",
+                ],
+                false,
+            )?;
+            if !output.status.success() {
+                return Err(Error::new(
+                    "error.verify",
+                    "Mihomo rejected SOCKS5 settings; previous configuration retained",
+                ));
+            }
+        }
+
+        let mixin_bytes = serde_yaml::to_string(&mixin)?.into_bytes();
+        let updates = vec![
+            (
+                ctx.paths.clash_mixin.clone(),
+                Some(storage::Saved::new(&mixin_bytes, 0o600)),
+            ),
+            (
+                ctx.paths.clash_runtime.clone(),
+                Some(storage::Saved::new(&runtime, 0o600)),
+            ),
+            (
+                cred_path.clone(),
+                auth_card.map(|bytes| storage::Saved::new(&bytes, 0o600)),
+            ),
+        ];
+        commit_files(ctx, &updates)?;
+
+        let rollback = vec![
+            (ctx.paths.clash_mixin.clone(), prev_mixin),
+            (ctx.paths.clash_runtime.clone(), prev_runtime),
+            (cred_path, prev_auth),
+        ];
+        (was_running, prev_ctrl, runtime, rollback)
     };
 
-    ensure_layout(ctx)?;
-    let cred_path = auth_path(ctx);
-    storage::check_path(&ctx.paths.clash_mixin, true)?;
-    storage::check_path(&ctx.paths.clash_runtime, true)?;
-    storage::check_path(&cred_path, true)?;
-
-    let prev_mixin = storage::Saved::capture(&ctx.paths.clash_mixin)?;
-    let prev_runtime = storage::Saved::capture(&ctx.paths.clash_runtime)?;
-    let prev_auth = storage::Saved::capture(&cred_path)?;
-
-    let mut mixin = read_mixin(ctx)?;
-    let root = mixin
-        .as_mapping_mut()
-        .ok_or_else(|| Error::new("error.data", "Mixin root must be a map"))?;
-    upsert_mixin_listener(root, listener)?;
-
-    let runtime = runtime_with_mixin(ctx, mixin.clone())?;
-    let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
-    fs::write(candidate.path(), &runtime)?;
-    validate_config(ctx, candidate.path(), true)?;
-    if ctx.paths.clash_binary.is_file() {
-        require_binary(ctx)?;
-        let output = ctx.command(
-            &path_string(&ctx.paths.clash_binary)?,
-            &[
-                "-d",
-                &path_string(&ctx.paths.clash_resources)?,
-                "-f",
-                &path_string(candidate.path())?,
-                "-t",
-            ],
-            false,
-        )?;
-        if !output.status.success() {
-            return Err(Error::new(
-                "error.verify",
-                "Mihomo rejected SOCKS5 settings; previous configuration retained",
-            ));
-        }
+    if !was_running {
+        return Ok(MixinApplied::SavedWhileStopped);
     }
 
-    let mixin_bytes = serde_yaml::to_string(&mixin)?.into_bytes();
-    let updates = vec![
-        (
-            ctx.paths.clash_mixin.clone(),
-            Some(storage::Saved::new(&mixin_bytes, 0o600)),
-        ),
-        (
-            ctx.paths.clash_runtime.clone(),
-            Some(storage::Saved::new(&runtime, 0o600)),
-        ),
-        (
-            cred_path.clone(),
-            auth_card.map(|bytes| storage::Saved::new(&bytes, 0o600)),
-        ),
-    ];
-    commit_files(ctx, &updates)?;
-
-    if let Some(ctrl_settings) = reload_target {
-        if let Err(err) = controller::push_runtime(ctx, &ctrl_settings, &runtime) {
-            let rollback = vec![
-                (ctx.paths.clash_mixin.clone(), prev_mixin),
-                (ctx.paths.clash_runtime.clone(), prev_runtime),
-                (cred_path, prev_auth),
-            ];
-            let _ = commit_files(&ctx.recovery(), &rollback);
-            return Err(err);
-        }
-        Ok(true)
-    } else {
-        Ok(false)
+    if let Some(ctrl_settings) = prev_ctrl
+        && controller::push_runtime(ctx, &ctrl_settings, &runtime).is_ok()
+    {
+        return Ok(MixinApplied::HotReloaded);
     }
+
+    if let Err(err) = restart_running(ctx) {
+        let recovery = ctx.recovery();
+        if let Ok(_lock) = Lock::acquire(&recovery.paths.clash_lock) {
+            let _ = commit_files(&recovery, &rollback);
+        }
+        if !matches!(state(&recovery), Ok(State::Running(_))) {
+            let _ = start_silently(&recovery);
+        }
+        return Err(Error::new(
+            err.key,
+            format!("{}; previous configuration restored", err.detail),
+        ));
+    }
+    Ok(MixinApplied::Restarted)
 }
 
 /// Display the current dedicated SOCKS5 / SOCKS5h listener status without exposing passwords.
@@ -756,13 +771,13 @@ pub fn configure(
 ) -> Result<()> {
     validate_form(enabled, port_raw, listen_raw, outbound, auth_mode, user_raw)?;
     if !enabled {
-        let reloaded = commit_socks_change(ctx, None, None)?;
+        let applied = commit_socks_change(ctx, None, None)?;
         ctx.message(
             "notice.clash_socks",
-            if reloaded {
-                "disabled and hot-reloaded into running Mihomo"
-            } else {
-                "disabled in Mixin; start Mihomo to apply"
+            match applied {
+                MixinApplied::HotReloaded => "disabled and hot-reloaded into running Mihomo",
+                MixinApplied::Restarted => "disabled and applied (Mihomo restarted)",
+                MixinApplied::SavedWhileStopped => "disabled in Mixin; start Mihomo to apply",
             },
         );
         return Ok(());
@@ -816,13 +831,9 @@ pub fn configure(
         outbound,
         credentials.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
     );
-    let reloaded = commit_socks_change(ctx, Some(listener), auth_card)?;
+    let applied = commit_socks_change(ctx, Some(listener), auth_card)?;
 
-    let apply_note = if reloaded {
-        "saved and hot-reloaded into running Mihomo"
-    } else {
-        "saved; start Mihomo to apply"
-    };
+    let apply_note = applied.suffix();
     let cred_note = if credentials.is_some() {
         format!("; credentials written to {}", auth_path(ctx).display())
     } else {
@@ -862,17 +873,13 @@ pub fn auth_generate(ctx: &Context) -> Result<()> {
     let auth_card = render_auth_card(port, &listen, &ip, udp, &outbound, &username, &password)?;
     let listener =
         build_listener_value(port, &listen, udp, &outbound, Some((&username, &password)));
-    let reloaded = commit_socks_change(ctx, Some(listener), Some(auth_card))?;
+    let applied = commit_socks_change(ctx, Some(listener), Some(auth_card))?;
     ctx.message(
         "notice.clash_socks",
         format!(
             "rotated password for user '{username}' (saved to {}); {}",
             auth_path(ctx).display(),
-            if reloaded {
-                "hot-reloaded into running Mihomo"
-            } else {
-                "start Mihomo to apply"
-            }
+            applied.suffix()
         ),
     );
     Ok(())
@@ -943,17 +950,13 @@ pub fn auth_set(ctx: &Context, source: &str) -> Result<()> {
     let auth_card = render_auth_card(port, &listen, &ip, udp, &outbound, &username, &password)?;
     let listener =
         build_listener_value(port, &listen, udp, &outbound, Some((&username, &password)));
-    let reloaded = commit_socks_change(ctx, Some(listener), Some(auth_card))?;
+    let applied = commit_socks_change(ctx, Some(listener), Some(auth_card))?;
     ctx.message(
         "notice.clash_socks",
         format!(
             "updated credentials for user '{username}' (saved to {}); {}",
             auth_path(ctx).display(),
-            if reloaded {
-                "hot-reloaded into running Mihomo"
-            } else {
-                "start Mihomo to apply"
-            }
+            applied.suffix()
         ),
     );
     Ok(())
