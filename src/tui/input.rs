@@ -42,6 +42,12 @@ impl InputBuffer {
         self.text.clear();
         self.cursor = 0;
     }
+    pub fn home(&mut self) {
+        self.cursor = 0;
+    }
+    pub fn end(&mut self) {
+        self.cursor = self.text.len();
+    }
     pub fn replace(&mut self, text: String) {
         *self = Self::new(text);
     }

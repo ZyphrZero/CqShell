@@ -12,11 +12,19 @@ const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 const MAX_HEADERS: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(super) struct Settings {
+pub(crate) struct Settings {
     pub address: String,
     pub url: String,
+    pub bind_address: String,
+    pub bind_loopback: bool,
     socket: SocketAddr,
     secret: String,
+}
+
+impl Settings {
+    pub(crate) fn has_secret(&self) -> bool {
+        !self.secret.is_empty()
+    }
 }
 
 fn invalid(detail: &str) -> Error {
@@ -101,11 +109,15 @@ pub(super) fn from_config(value: &Value) -> Result<Option<Settings>> {
     if raw.is_empty() {
         return Ok(None);
     }
+    let listener = listener_address(raw)?;
+    let bind_loopback = listener.ip().is_loopback();
     let socket = socket_address(raw)?;
     let address = socket.to_string();
     Ok(Some(Settings {
         url: format!("http://{address}"),
         address,
+        bind_address: raw.to_owned(),
+        bind_loopback,
         socket,
         secret: secret.into(),
     }))
@@ -127,9 +139,12 @@ fn effective_config(ctx: &Context) -> Result<Value> {
     serde_yaml::from_slice(&bytes).map_err(|_| invalid("cannot parse controller configuration"))
 }
 
+pub(crate) fn effective_settings(ctx: &Context) -> Result<Option<Settings>> {
+    from_config(&effective_config(ctx)?)
+}
+
 pub(super) fn settings(ctx: &Context) -> Result<Settings> {
-    from_config(&effective_config(ctx)?)?
-        .ok_or_else(|| invalid("external-controller is not configured"))
+    effective_settings(ctx)?.ok_or_else(|| invalid("external-controller is not configured"))
 }
 
 pub(super) fn address(ctx: &Context) -> Result<Option<String>> {
@@ -863,14 +878,25 @@ pub fn delay(ctx: &Context, group: &str, test_url: &str, timeout_ms: &str) -> Re
         segment(group),
         segment(effective_url)
     );
-    let body = request_with_timeout(
+    let body = match request_with_timeout(
         ctx,
         &settings,
         "GET",
         &path,
         &[],
         Duration::from_millis(timeout + 5_000),
-    )?;
+    ) {
+        Ok(body) => body,
+        // Upstream Mihomo returns HTTP 504 (or 408/503) when every node in a group times out.
+        Err(err)
+            if err.detail.contains("HTTP 408")
+                || err.detail.contains("HTTP 503")
+                || err.detail.contains("HTTP 504") =>
+        {
+            b"{}".to_vec()
+        }
+        Err(err) => return Err(err),
+    };
     let delays: serde_json::Map<String, Json> =
         serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
     let mut reachable: Vec<(String, u64)> = Vec::new();
@@ -993,6 +1019,756 @@ pub fn connections(ctx: &Context, close_all: bool) -> Result<()> {
         request(ctx, &settings, "DELETE", "/connections", &[])?;
         ctx.message("notice.clash_connections", "all active connections closed");
     }
+    Ok(())
+}
+
+/// Structured live configuration read from `GET /configs`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ControllerConfigs {
+    pub mode: String,
+    pub mixed_port: Option<u16>,
+    pub http_port: Option<u16>,
+    pub socks_port: Option<u16>,
+    pub allow_lan: bool,
+    pub tun_enabled: bool,
+    pub tun_stack: String,
+}
+
+/// Raw snapshot returned by `GET /connections`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RawConnections {
+    pub upload_total: u64,
+    pub download_total: u64,
+    pub memory: Option<u64>,
+    pub connections: Vec<super::model::ConnectionItem>,
+}
+
+fn non_zero_port(value: Option<&Json>) -> Option<u16> {
+    value
+        .and_then(Json::as_u64)
+        .filter(|&p| (1..=65535).contains(&p))
+        .map(|p| p as u16)
+}
+
+pub(crate) fn fetch_version(ctx: &Context, settings: &Settings) -> Result<String> {
+    let body = request_with_timeout(
+        ctx,
+        settings,
+        "GET",
+        "/version",
+        &[],
+        Duration::from_secs(3),
+    )?;
+    let json: Json =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    Ok(json
+        .get("version")
+        .and_then(Json::as_str)
+        .unwrap_or("")
+        .to_owned())
+}
+
+pub(crate) fn fetch_configs(ctx: &Context, settings: &Settings) -> Result<ControllerConfigs> {
+    let body = request_with_timeout(
+        ctx,
+        settings,
+        "GET",
+        "/configs",
+        &[],
+        Duration::from_secs(3),
+    )?;
+    let json: Json =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let tun = json.get("tun");
+    Ok(ControllerConfigs {
+        mode: json
+            .get("mode")
+            .and_then(Json::as_str)
+            .unwrap_or("rule")
+            .to_ascii_lowercase(),
+        mixed_port: non_zero_port(json.get("mixed-port")),
+        http_port: non_zero_port(json.get("port")),
+        socks_port: non_zero_port(json.get("socks-port")),
+        allow_lan: json
+            .get("allow-lan")
+            .and_then(Json::as_bool)
+            .unwrap_or(false),
+        tun_enabled: tun
+            .and_then(|t| t.get("enable"))
+            .and_then(Json::as_bool)
+            .unwrap_or(false),
+        tun_stack: tun
+            .and_then(|t| t.get("stack"))
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned(),
+    })
+}
+
+fn latest_history_delay(entry: &Json) -> (Option<u64>, bool) {
+    let Some(history) = entry.get("history").and_then(Json::as_array) else {
+        return (None, false);
+    };
+    if history.is_empty() {
+        return (None, false);
+    }
+    let delay = history
+        .last()
+        .and_then(|sample| sample.get("delay"))
+        .and_then(Json::as_u64)
+        .filter(|&d| d > 0);
+    (delay, true)
+}
+
+fn resolve_exit_chain(entries: &serde_json::Map<String, Json>, start_group: &str) -> Vec<String> {
+    let mut chain = Vec::new();
+    let mut current = start_group;
+    for _ in 0..16 {
+        let Some(next) = entries
+            .get(current)
+            .and_then(|entry| entry.get("now"))
+            .and_then(Json::as_str)
+            .filter(|s| !s.is_empty())
+        else {
+            break;
+        };
+        if chain.iter().any(|seen: &String| seen == next) {
+            break;
+        }
+        chain.push(next.to_owned());
+        current = next;
+    }
+    chain
+}
+
+/// Fetch all Mihomo policy groups and their member nodes in `GLOBAL` configuration order.
+pub(crate) fn fetch_groups(
+    ctx: &Context,
+    settings: &Settings,
+) -> Result<Vec<super::model::ProxyGroupItem>> {
+    use super::model::{ProxyGroupItem, ProxyGroupKind, ProxyNodeItem};
+
+    let entries = proxy_map(ctx, settings)?;
+    let order = entries
+        .get("GLOBAL")
+        .and_then(|global| global.get("all"))
+        .and_then(Json::as_array)
+        .map(|all| all.iter().filter_map(Json::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    let mut groups = Vec::new();
+    for (name, entry) in &entries {
+        let Some(all) = entry.get("all").and_then(Json::as_array) else {
+            continue;
+        };
+        let kind_str = entry
+            .get("type")
+            .and_then(Json::as_str)
+            .unwrap_or("Selector");
+        let kind = ProxyGroupKind::parse(kind_str);
+        let now = entry
+            .get("now")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let fixed = entry
+            .get("fixed")
+            .and_then(Json::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        let hidden = entry.get("hidden").and_then(Json::as_bool).unwrap_or(false);
+        let resolved_chain = resolve_exit_chain(&entries, name);
+
+        let mut members = Vec::with_capacity(all.len());
+        for (idx, item) in all.iter().enumerate() {
+            let Some(member_name) = item.as_str() else {
+                continue;
+            };
+            let meta = entries.get(member_name);
+            let m_kind = meta
+                .and_then(|m| m.get("type"))
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let is_group = meta.is_some_and(|m| m.get("all").is_some_and(Json::is_array));
+            let m_now = meta
+                .and_then(|m| m.get("now"))
+                .and_then(Json::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            let udp = meta
+                .and_then(|m| m.get("udp"))
+                .and_then(Json::as_bool)
+                .unwrap_or(false);
+            let alive = meta
+                .and_then(|m| m.get("alive"))
+                .and_then(Json::as_bool)
+                .unwrap_or(true);
+            let (delay_ms, tested) = meta.map(latest_history_delay).unwrap_or((None, false));
+            members.push(ProxyNodeItem {
+                name: member_name.to_owned(),
+                kind: m_kind,
+                delay_ms,
+                tested,
+                is_group,
+                now: m_now,
+                udp,
+                alive,
+                original_index: idx,
+            });
+        }
+
+        groups.push(ProxyGroupItem {
+            name: name.clone(),
+            kind,
+            now,
+            resolved_chain,
+            fixed,
+            hidden,
+            members,
+        });
+    }
+
+    let rank = |name: &str| order.iter().position(|item| *item == name);
+    groups.sort_by(|a, b| match (a.name == "GLOBAL", b.name == "GLOBAL") {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ => match (rank(&a.name), rank(&b.name)) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.name.cmp(&b.name),
+        },
+    });
+    Ok(groups)
+}
+
+/// Switch node on a `Selector`, `URLTest`, or `Fallback` group (supports temporary pinning on
+/// automatic groups in modern Mihomo).
+pub(crate) fn select_proxy_live(ctx: &Context, group: &str, node: &str) -> Result<()> {
+    if group.is_empty() || node.is_empty() || group.len() > 4096 || node.len() > 4096 {
+        return Err(Error::new(
+            "error.input",
+            "group and node must be nonempty names of at most 4096 bytes",
+        ));
+    }
+    let settings = settings(ctx)?;
+    let entries = proxy_map(ctx, &settings)?;
+    let entry = entries
+        .get(group)
+        .ok_or_else(|| Error::new("error.input", "unknown controller group"))?;
+    let kind_str = entry.get("type").and_then(Json::as_str).unwrap_or("");
+    if !super::model::ProxyGroupKind::parse(kind_str).supports_select() {
+        return Err(Error::new(
+            "error.input",
+            "policy group does not support manual node selection",
+        ));
+    }
+    let nodes = entry
+        .get("all")
+        .and_then(Json::as_array)
+        .ok_or_else(|| invalid("controller group has no node list"))?;
+    if !nodes.iter().any(|value| value.as_str() == Some(node)) {
+        return Err(Error::new(
+            "error.input",
+            "node does not belong to the selected controller group",
+        ));
+    }
+    let body = serde_json::to_vec(&serde_json::json!({ "name": node }))?;
+    request(
+        ctx,
+        &settings,
+        "PUT",
+        &format!("/proxies/{}", segment(group)),
+        &body,
+    )?;
+    Ok(())
+}
+
+/// Clear temporary pinned node on a `URLTest` or `Fallback` group via `DELETE /proxies/{group}`.
+pub(crate) fn unfix_group_live(ctx: &Context, group: &str) -> Result<()> {
+    if group.is_empty() || group.len() > 4096 {
+        return Err(Error::new("error.input", "invalid policy group name"));
+    }
+    let settings = settings(ctx)?;
+    request(
+        ctx,
+        &settings,
+        "DELETE",
+        &format!("/proxies/{}", segment(group)),
+        &[],
+    )?;
+    Ok(())
+}
+
+/// Batch latency test for a policy group via `GET /group/{name}/delay`.
+pub(crate) fn delay_group_map(
+    ctx: &Context,
+    group: &str,
+    test_url: &str,
+    timeout_ms: u64,
+) -> Result<BTreeMap<String, Option<u64>>> {
+    let effective_url = if test_url.is_empty() {
+        DEFAULT_DELAY_URL
+    } else {
+        test_url
+    };
+    validate_test_url(effective_url)?;
+    let timeout = timeout_ms.clamp(MIN_DELAY_TIMEOUT_MS, MAX_DELAY_TIMEOUT_MS);
+    let settings = settings(ctx)?;
+    let path = format!(
+        "/group/{}/delay?url={}&timeout={timeout}",
+        segment(group),
+        segment(effective_url)
+    );
+    let body = match request_with_timeout(
+        ctx,
+        &settings,
+        "GET",
+        &path,
+        &[],
+        Duration::from_millis(timeout + 5_000),
+    ) {
+        Ok(body) => body,
+        // Upstream Mihomo returns HTTP 504 (or 408/503) when every node in a group times out.
+        Err(err)
+            if err.detail.contains("HTTP 408")
+                || err.detail.contains("HTTP 503")
+                || err.detail.contains("HTTP 504") =>
+        {
+            return Ok(BTreeMap::new());
+        }
+        Err(err) => return Err(err),
+    };
+    let delays: serde_json::Map<String, Json> =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let mut out = BTreeMap::new();
+    for (name, val) in delays {
+        out.insert(name, val.as_u64().filter(|&ms| ms > 0));
+    }
+    Ok(out)
+}
+
+/// Single-node latency test via `GET /proxies/{name}/delay`. HTTP 408/503/504 from Mihomo
+/// indicates node timeout and maps cleanly to `Ok(None)`.
+pub(crate) fn delay_node_ms(
+    ctx: &Context,
+    node: &str,
+    test_url: &str,
+    timeout_ms: u64,
+) -> Result<Option<u64>> {
+    let effective_url = if test_url.is_empty() {
+        DEFAULT_DELAY_URL
+    } else {
+        test_url
+    };
+    validate_test_url(effective_url)?;
+    let timeout = timeout_ms.clamp(MIN_DELAY_TIMEOUT_MS, MAX_DELAY_TIMEOUT_MS);
+    let settings = settings(ctx)?;
+    let path = format!(
+        "/proxies/{}/delay?url={}&timeout={timeout}",
+        segment(node),
+        segment(effective_url)
+    );
+    match request_with_timeout(
+        ctx,
+        &settings,
+        "GET",
+        &path,
+        &[],
+        Duration::from_millis(timeout + 3_000),
+    ) {
+        Ok(body) => {
+            let json: Json = serde_json::from_slice(&body)
+                .map_err(|_| invalid("controller returned invalid JSON"))?;
+            Ok(json
+                .get("delay")
+                .and_then(Json::as_u64)
+                .filter(|&ms| ms > 0))
+        }
+        Err(err)
+            if err.detail.contains("HTTP 408")
+                || err.detail.contains("HTTP 503")
+                || err.detail.contains("HTTP 504") =>
+        {
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Fetch active connections snapshot from `GET /connections`.
+pub(crate) fn fetch_connections_raw(ctx: &Context, settings: &Settings) -> Result<RawConnections> {
+    use super::model::ConnectionItem;
+
+    let body = request_with_timeout(
+        ctx,
+        settings,
+        "GET",
+        "/connections",
+        &[],
+        Duration::from_secs(3),
+    )?;
+    let json: Json =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let upload_total = json.get("uploadTotal").and_then(Json::as_u64).unwrap_or(0);
+    let download_total = json
+        .get("downloadTotal")
+        .and_then(Json::as_u64)
+        .unwrap_or(0);
+    let memory = json.get("memory").and_then(Json::as_u64);
+    let mut connections = Vec::new();
+    if let Some(items) = json.get("connections").and_then(Json::as_array) {
+        for item in items {
+            let id = item
+                .get("id")
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .to_owned();
+            if id.is_empty() {
+                continue;
+            }
+            let meta = item.get("metadata");
+            let network = meta
+                .and_then(|m| m.get("network"))
+                .and_then(Json::as_str)
+                .unwrap_or("tcp")
+                .to_ascii_uppercase();
+            let conn_type = meta
+                .and_then(|m| m.get("type"))
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let src_ip = meta
+                .and_then(|m| m.get("sourceIP"))
+                .and_then(Json::as_str)
+                .unwrap_or("");
+            let src_port = meta
+                .and_then(|m| m.get("sourcePort"))
+                .and_then(Json::as_str)
+                .unwrap_or("");
+            let source = if src_port.is_empty() {
+                src_ip.to_owned()
+            } else {
+                format!("{src_ip}:{src_port}")
+            };
+            let dst_ip = meta
+                .and_then(|m| m.get("destinationIP"))
+                .and_then(Json::as_str)
+                .unwrap_or("");
+            let dst_port = meta
+                .and_then(|m| m.get("destinationPort"))
+                .and_then(Json::as_str)
+                .unwrap_or("");
+            let destination = if dst_port.is_empty() {
+                dst_ip.to_owned()
+            } else {
+                format!("{dst_ip}:{dst_port}")
+            };
+            let raw_host = meta
+                .and_then(|m| m.get("host"))
+                .and_then(Json::as_str)
+                .unwrap_or("");
+            let host = if !raw_host.is_empty() && !dst_port.is_empty() {
+                format!("{raw_host}:{dst_port}")
+            } else if !raw_host.is_empty() {
+                raw_host.to_owned()
+            } else {
+                destination.clone()
+            };
+            let process = meta
+                .and_then(|m| m.get("process"))
+                .and_then(Json::as_str)
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    meta.and_then(|m| m.get("processPath"))
+                        .and_then(Json::as_str)
+                        .and_then(|p| p.rsplit(['/', '\\']).next())
+                })
+                .unwrap_or("")
+                .to_owned();
+            let rule = item
+                .get("rule")
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let rule_payload = item
+                .get("rulePayload")
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let chains: Vec<String> = item
+                .get("chains")
+                .and_then(Json::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .rev()
+                        .filter_map(Json::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let exit_node = chains.last().cloned().unwrap_or_else(|| "-".to_owned());
+            let upload = item.get("upload").and_then(Json::as_u64).unwrap_or(0);
+            let download = item.get("download").and_then(Json::as_u64).unwrap_or(0);
+            let start = item
+                .get("start")
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .to_owned();
+            connections.push(ConnectionItem {
+                id,
+                network,
+                conn_type,
+                source,
+                destination,
+                host,
+                process,
+                rule,
+                rule_payload,
+                chains,
+                exit_node,
+                upload,
+                download,
+                up_speed: 0,
+                down_speed: 0,
+                start,
+                closed: false,
+            });
+        }
+    }
+    Ok(RawConnections {
+        upload_total,
+        download_total,
+        memory,
+        connections,
+    })
+}
+
+pub(crate) fn close_connection(ctx: &Context, id: &str) -> Result<()> {
+    if id.is_empty() || id.len() > 256 {
+        return Err(Error::new("error.input", "invalid connection id"));
+    }
+    let settings = settings(ctx)?;
+    request(
+        ctx,
+        &settings,
+        "DELETE",
+        &format!("/connections/{}", segment(id)),
+        &[],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn close_all_connections(ctx: &Context) -> Result<()> {
+    let settings = settings(ctx)?;
+    request(ctx, &settings, "DELETE", "/connections", &[])?;
+    Ok(())
+}
+
+pub(crate) fn fetch_rules(
+    ctx: &Context,
+    settings: &Settings,
+) -> Result<Vec<super::model::RuleItem>> {
+    let body = request_with_timeout(ctx, settings, "GET", "/rules", &[], Duration::from_secs(5))?;
+    let json: Json =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let Some(list) = json.get("rules").and_then(Json::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut rules = Vec::with_capacity(list.len());
+    for (idx, item) in list.iter().enumerate() {
+        let kind = item
+            .get("type")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let payload = item
+            .get("payload")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let proxy = item
+            .get("proxy")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        rules.push(super::model::RuleItem {
+            index: idx + 1,
+            kind,
+            payload,
+            proxy,
+        });
+    }
+    Ok(rules)
+}
+
+fn parse_provider_userinfo(value: Option<&Json>) -> Option<super::model::SubscriptionUserinfo> {
+    let map = value?.as_object()?;
+    let upload = map
+        .get("Upload")
+        .or_else(|| map.get("upload"))
+        .and_then(Json::as_u64)
+        .unwrap_or(0);
+    let download = map
+        .get("Download")
+        .or_else(|| map.get("download"))
+        .and_then(Json::as_u64)
+        .unwrap_or(0);
+    let total = map
+        .get("Total")
+        .or_else(|| map.get("total"))
+        .and_then(Json::as_u64)
+        .unwrap_or(0);
+    let expire = map
+        .get("Expire")
+        .or_else(|| map.get("expire"))
+        .and_then(Json::as_u64)
+        .filter(|&e| e > 0);
+    if total > 0 || upload > 0 || download > 0 || expire.is_some() {
+        Some(super::model::SubscriptionUserinfo {
+            upload,
+            download,
+            total,
+            expire,
+        })
+    } else {
+        None
+    }
+}
+
+pub(crate) fn fetch_proxy_providers(
+    ctx: &Context,
+    settings: &Settings,
+) -> Result<Vec<super::model::ProxyProviderItem>> {
+    let body = request_with_timeout(
+        ctx,
+        settings,
+        "GET",
+        "/providers/proxies",
+        &[],
+        Duration::from_secs(4),
+    )?;
+    let json: Json =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let Some(map) = json.get("providers").and_then(Json::as_object) else {
+        return Ok(Vec::new());
+    };
+    let mut items = Vec::new();
+    for (name, val) in map {
+        let vehicle = val
+            .get("vehicleType")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        if vehicle.eq_ignore_ascii_case("Compatible") {
+            continue;
+        }
+        let node_count = val
+            .get("proxies")
+            .and_then(Json::as_array)
+            .map_or(0, Vec::len);
+        let updated_at = val
+            .get("updatedAt")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let userinfo = parse_provider_userinfo(val.get("subscriptionInfo"));
+        items.push(super::model::ProxyProviderItem {
+            name: name.clone(),
+            vehicle_type: vehicle,
+            node_count,
+            updated_at,
+            userinfo,
+        });
+    }
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(items)
+}
+
+pub(crate) fn update_proxy_provider(ctx: &Context, name: &str) -> Result<()> {
+    let settings = settings(ctx)?;
+    request_with_timeout(
+        ctx,
+        &settings,
+        "PUT",
+        &format!("/providers/proxies/{}", segment(name)),
+        &[],
+        Duration::from_secs(20),
+    )?;
+    Ok(())
+}
+
+pub(crate) fn healthcheck_proxy_provider(ctx: &Context, name: &str) -> Result<()> {
+    let settings = settings(ctx)?;
+    request_with_timeout(
+        ctx,
+        &settings,
+        "GET",
+        &format!("/providers/proxies/{}/healthcheck", segment(name)),
+        &[],
+        Duration::from_secs(20),
+    )?;
+    Ok(())
+}
+
+pub(crate) fn fetch_rule_providers(
+    ctx: &Context,
+    settings: &Settings,
+) -> Result<Vec<super::model::RuleProviderItem>> {
+    let body = request_with_timeout(
+        ctx,
+        settings,
+        "GET",
+        "/providers/rules",
+        &[],
+        Duration::from_secs(4),
+    )?;
+    let json: Json =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let Some(map) = json.get("providers").and_then(Json::as_object) else {
+        return Ok(Vec::new());
+    };
+    let mut items = Vec::new();
+    for (name, val) in map {
+        let behavior = val
+            .get("behavior")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let vehicle_type = val
+            .get("vehicleType")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let rule_count = val.get("ruleCount").and_then(Json::as_u64).unwrap_or(0) as usize;
+        let updated_at = val
+            .get("updatedAt")
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_owned();
+        items.push(super::model::RuleProviderItem {
+            name: name.clone(),
+            behavior,
+            vehicle_type,
+            rule_count,
+            updated_at,
+        });
+    }
+    items.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(items)
+}
+
+pub(crate) fn update_rule_provider(ctx: &Context, name: &str) -> Result<()> {
+    let settings = settings(ctx)?;
+    request_with_timeout(
+        ctx,
+        &settings,
+        "PUT",
+        &format!("/providers/rules/{}", segment(name)),
+        &[],
+        Duration::from_secs(20),
+    )?;
     Ok(())
 }
 
@@ -1610,5 +2386,182 @@ mod tests {
                 .unwrap()
                 .starts_with("DELETE /connections HTTP/1.1\r\n")
         );
+    }
+
+    #[test]
+    fn structured_controller_queries_resolve_chains_pin_unfix_and_handle_node_timeout() {
+        let proxies_body = serde_json::json!({
+            "proxies": {
+                "GLOBAL": { "type": "Selector", "all": ["Proxy", "Auto"], "now": "Proxy" },
+                "Proxy": { "type": "Selector", "all": ["Auto", "JP-01"], "now": "Auto" },
+                "Auto": { "type": "URLTest", "all": ["JP-01", "HK-01"], "now": "JP-01", "fixed": "JP-01" },
+                "JP-01": { "type": "Hysteria2", "udp": true, "alive": true, "history": [{"delay": 74}] },
+                "HK-01": { "type": "Vmess", "udp": true, "alive": true, "history": [{"delay": 0}] }
+            }
+        })
+        .to_string();
+        let rules_body = serde_json::json!({
+            "rules": [
+                { "type": "DomainSuffix", "payload": "openai.com", "proxy": "Proxy" },
+                { "type": "Match", "payload": "", "proxy": "DIRECT" }
+            ]
+        })
+        .to_string();
+        let pp_body = serde_json::json!({
+            "providers": {
+                "MainSub": {
+                    "vehicleType": "HTTP",
+                    "proxies": [{"name": "JP-01"}],
+                    "updatedAt": "2026-11-26T00:00:00Z",
+                    "subscriptionInfo": { "Upload": 100, "Download": 200, "Total": 1000, "Expire": 1795046400 }
+                },
+                "default": { "vehicleType": "Compatible", "proxies": [] }
+            }
+        })
+        .to_string();
+        let rp_body = serde_json::json!({
+            "providers": {
+                "RejectAds": { "behavior": "domain", "vehicleType": "HTTP", "ruleCount": 1200, "updatedAt": "2026-11-26T00:00:00Z" }
+            }
+        })
+        .to_string();
+
+        let (address, worker) = serve(vec![
+            response(&proxies_body),
+            response(&proxies_body),
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            response(r#"{"delay":88}"#),
+            b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n".to_vec(),
+            response(&rules_body),
+            response(&pp_body),
+            response(&rp_body),
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("external-controller: {address}\nsecret: ui-secret\n"),
+        )
+        .unwrap();
+
+        let s = settings(&ctx).unwrap();
+        let groups = fetch_groups(&ctx, &s).unwrap();
+        assert_eq!(groups[0].name, "Proxy");
+        assert_eq!(groups[0].resolved_chain, vec!["Auto", "JP-01"]);
+        assert_eq!(groups[1].name, "Auto");
+        assert_eq!(groups[1].fixed.as_deref(), Some("JP-01"));
+        assert_eq!(groups[1].members[0].delay_ms, Some(74));
+        assert!(groups[1].members[1].tested && groups[1].members[1].delay_ms.is_none());
+        assert_eq!(groups.last().unwrap().name, "GLOBAL");
+
+        // Pin node on URLTest group + unfix via DELETE
+        select_proxy_live(&ctx, "Auto", "HK-01").unwrap();
+        unfix_group_live(&ctx, "Auto").unwrap();
+
+        // Single-node ping success & 504 timeout -> Ok(None)
+        assert_eq!(
+            delay_node_ms(&ctx, "JP-01", DEFAULT_DELAY_URL, 3000).unwrap(),
+            Some(88)
+        );
+        assert_eq!(
+            delay_node_ms(&ctx, "HK-01", DEFAULT_DELAY_URL, 3000).unwrap(),
+            None
+        );
+
+        let rules = fetch_rules(&ctx, &s).unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].payload, "openai.com");
+
+        let pps = fetch_proxy_providers(&ctx, &s).unwrap();
+        assert_eq!(pps.len(), 1);
+        assert_eq!(pps[0].name, "MainSub");
+        assert_eq!(pps[0].userinfo.unwrap().used(), 300);
+
+        let rps = fetch_rule_providers(&ctx, &s).unwrap();
+        assert_eq!(rps.len(), 1);
+        assert_eq!(rps[0].rule_count, 1200);
+
+        let reqs = worker.join().unwrap();
+        let put_auto = String::from_utf8(reqs[2].clone()).unwrap();
+        let del_auto = String::from_utf8(reqs[3].clone()).unwrap();
+        assert!(put_auto.starts_with("PUT /proxies/Auto HTTP/1.1\r\n"));
+        assert!(put_auto.contains("Authorization: Bearer ui-secret\r\n"));
+        assert!(del_auto.starts_with("DELETE /proxies/Auto HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn controller_metadata_group_timeout_close_and_provider_mutations_work() {
+        let ver_body = serde_json::json!({ "version": "v1.19.33" }).to_string();
+        let cfg_body = serde_json::json!({
+            "mode": "Global",
+            "mixed-port": 7890,
+            "port": 7891,
+            "socks-port": 7892,
+            "allow-lan": true,
+            "tun": { "enable": true, "stack": "mixed" }
+        })
+        .to_string();
+        let delay_ok = serde_json::json!({ "HK-01": 65, "Dead": 0 }).to_string();
+        let no_content = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec();
+        let timeout_504 = b"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n".to_vec();
+
+        let (address, worker) = serve(vec![
+            response(&ver_body),
+            response(&cfg_body),
+            response(&delay_ok),
+            timeout_504,
+            no_content.clone(),
+            no_content.clone(),
+            no_content.clone(),
+            no_content,
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("external-controller: {address}\nsecret: meta-secret\n"),
+        )
+        .unwrap();
+
+        let s = effective_settings(&ctx).unwrap().unwrap();
+        assert!(s.has_secret());
+        assert_eq!(fetch_version(&ctx, &s).unwrap(), "v1.19.33");
+
+        let cfg = fetch_configs(&ctx, &s).unwrap();
+        assert_eq!(cfg.mode, "global");
+        assert_eq!(cfg.mixed_port, Some(7890));
+        assert!(cfg.allow_lan);
+        assert!(cfg.tun_enabled);
+        assert_eq!(cfg.tun_stack, "mixed");
+
+        let map = delay_group_map(&ctx, "Proxy", DEFAULT_DELAY_URL, 3000).unwrap();
+        assert_eq!(map.get("HK-01"), Some(&Some(65)));
+        assert_eq!(map.get("Dead"), Some(&None));
+
+        // Whole-group HTTP 504 timeout maps cleanly to empty map rather than failing
+        let all_timed_out = delay_group_map(&ctx, "Proxy", DEFAULT_DELAY_URL, 3000).unwrap();
+        assert!(all_timed_out.is_empty());
+
+        close_connection(&ctx, "conn/id?1").unwrap();
+        update_proxy_provider(&ctx, "Main/Sub").unwrap();
+        healthcheck_proxy_provider(&ctx, "Main/Sub").unwrap();
+        update_rule_provider(&ctx, "Ads Rule").unwrap();
+
+        let reqs = worker.join().unwrap();
+        let req_str = |idx: usize| String::from_utf8(reqs[idx].clone()).unwrap();
+        assert!(req_str(0).starts_with("GET /version HTTP/1.1\r\n"));
+        assert!(req_str(1).starts_with("GET /configs HTTP/1.1\r\n"));
+        assert!(req_str(4).starts_with("DELETE /connections/conn%2Fid%3F1 HTTP/1.1\r\n"));
+        assert!(req_str(5).starts_with("PUT /providers/proxies/Main%2FSub HTTP/1.1\r\n"));
+        assert!(
+            req_str(6).starts_with("GET /providers/proxies/Main%2FSub/healthcheck HTTP/1.1\r\n")
+        );
+        assert!(req_str(7).starts_with("PUT /providers/rules/Ads%20Rule HTTP/1.1\r\n"));
+        for idx in 0..reqs.len() {
+            assert!(req_str(idx).contains("Authorization: Bearer meta-secret\r\n"));
+        }
     }
 }

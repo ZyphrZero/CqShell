@@ -184,6 +184,8 @@ pub(super) fn draw(app: &App, frame: &mut Frame) {
         overview::draw(app, frame, ov);
     } else if let Some(dk) = &regions.docker {
         super::docker::render::draw(app, frame, dk);
+    } else if let Some(cl) = &regions.clash {
+        super::clash::render::draw(app, frame, cl);
     } else if let Some(wb) = &regions.workbench {
         workbench::draw(app, frame, wb);
     }
@@ -289,6 +291,8 @@ pub(super) fn draw(app: &App, frame: &mut Frame) {
         terminal_preview::draw_studio_modal(app, frame, area, preview, modal_alpha);
     } else if app.docker_has_modal() {
         super::docker::render::modals::draw(app, frame, area, modal_alpha);
+    } else if app.clash_has_modal() {
+        super::clash::render::modals::draw(app, frame, area, modal_alpha);
     } else if app.notice.is_some() {
         modals::draw_notice(app, frame, area, modal_alpha);
     } else if app.help {
@@ -387,6 +391,8 @@ fn draw_footer(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
         }
     } else if app.is_docker_view() {
         super::docker::render::footer_pairs(app)
+    } else if app.is_clash_view() {
+        super::clash::render::footer_pairs(app)
     } else if app.optimization() {
         if mobile {
             vec![

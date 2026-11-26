@@ -560,9 +560,8 @@ impl Monitor {
         let local_state = state.clone();
         let local_gen = generation.clone();
         let local_stop = stop.clone();
-        let mut local_probe = ctx.clone();
+        let mut local_probe = ctx.silent();
         local_probe.cancel = stop.clone();
-        local_probe.events = None;
         let local = thread::spawn(move || {
             let mut sampler = Sampler::new();
             // Owned by the only loop that takes local samples: each sample is pushed once, right
@@ -596,9 +595,8 @@ impl Monitor {
         let public_gen = generation.clone();
         let public_stop = stop.clone();
         let pending = querying.clone();
-        let mut probe = ctx.clone();
+        let mut probe = ctx.silent();
         probe.cancel = stop.clone();
-        probe.events = None;
         let network = thread::spawn(move || {
             while !public_stop.load(Ordering::SeqCst) {
                 match public_receive.recv_timeout(Duration::from_millis(100)) {
@@ -697,9 +695,7 @@ impl Drop for Monitor {
         let _ = self.refresh.send(());
         let _ = self.public.try_send(());
         for thread in self.threads.drain(..) {
-            if thread.join().is_err() {
-                eprintln!("dashboard worker panicked");
-            }
+            let _ = thread.join();
         }
     }
 }

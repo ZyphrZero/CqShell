@@ -655,6 +655,45 @@ fn docker_subcommand_help_is_bilingual_and_requires_tty_without_side_effects() {
 }
 
 #[test]
+fn mihomo_subcommand_help_is_bilingual_and_requires_tty_without_side_effects() {
+    let temp = tempfile::tempdir().unwrap();
+    for (locale, expected) in [("zh-CN", "Mihomo"), ("en-US", "Mihomo")] {
+        let out = cli(temp.path())
+            .args(["--lang", locale, "mihomo", "--help"])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert!(stdout.contains(expected), "{stdout}");
+        assert!(stdout.contains("--tab"), "{stdout}");
+        assert!(stdout.contains("--embedded"), "{stdout}");
+    }
+    let bad_tab = cli(temp.path())
+        .args(["--lang", "en-US", "mihomo", "--tab", "invalid-tab"])
+        .output()
+        .unwrap();
+    assert_eq!(bad_tab.status.code(), Some(2));
+
+    let no_tty = cli(temp.path())
+        .args([
+            "--lang",
+            "en-US",
+            "mihomo",
+            "--tab",
+            "proxies",
+            "--embedded",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(no_tty.status.code(), Some(1));
+    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn update_subcommand_help_aliases_and_argument_validation_have_no_side_effects() {
     let temp = tempfile::tempdir().unwrap();
     for (locale, expected) in [

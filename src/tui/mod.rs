@@ -9,6 +9,7 @@
 //! - `theme_drawer`: Live theme & appearance drawer (transparent bg + reduced motion toggles)
 //! - `render`: Layered-surface views (`topbar`, `sidebar`, `overview`, `workbench`, `logs`, `modals`)
 
+mod clash;
 mod clipboard;
 mod detect;
 mod docker;
@@ -41,6 +42,10 @@ pub enum LaunchTarget {
         tab: crate::ops::docker::model::DockerTab,
         fullscreen: bool,
     },
+    Clash {
+        tab: crate::ops::clash::model::ClashTab,
+        fullscreen: bool,
+    },
 }
 
 use crate::{
@@ -48,10 +53,16 @@ use crate::{
     config::Preferences,
     dashboard::Monitor,
     error::{Error, Result},
-    ops::docker::{
-        actions as docker_actions,
-        model::DockerTab,
-        monitor::{DockerMonitor, LogStreamer, MonitorCmd},
+    ops::{
+        clash::{
+            model::ClashTab,
+            monitor::{ClashMonitor, ClashMonitorCmd},
+        },
+        docker::{
+            actions as docker_actions,
+            model::DockerTab,
+            monitor::{DockerMonitor, LogStreamer, MonitorCmd},
+        },
     },
     runtime::{Context, Event},
 };
@@ -476,6 +487,7 @@ fn dispatch_input(app: &mut App, input: Input) -> Result<Effect> {
             if !layout::Breakpoint::of(cols).uses_overlay_sidebar()
                 && !app.sidebar_collapsed
                 && !(app.is_docker_view() && app.docker.fullscreen)
+                && !(app.is_clash_view() && app.clash.fullscreen)
             {
                 app.sidebar_overlay = false;
             }
@@ -747,12 +759,16 @@ pub fn run_with_target(
         ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
 
-    let monitor = Monitor::start(&ctx);
-    let docker_monitor = DockerMonitor::start(&ctx);
+    let bg_ctx = ctx.silent();
+    let monitor = Monitor::start(&bg_ctx);
+    let docker_monitor = DockerMonitor::start(&bg_ctx);
+    let clash_monitor = ClashMonitor::start(&bg_ctx);
     let mut log_streamer: Option<LogStreamer> = None;
     let mut was_in_docker = false;
     let mut last_docker_tab = DockerTab::Containers;
     let mut last_stats_on = false;
+    let mut was_in_clash = false;
+    let mut last_clash_tab = ClashTab::Overview;
 
     let mut app = App::new(ctx);
     app.configure_theme(
@@ -764,8 +780,14 @@ pub fn run_with_target(
         preferences,
     );
     app.set_category_order(category_order);
-    if let LaunchTarget::Docker { tab, fullscreen } = target {
-        app.open_docker(tab, fullscreen, true);
+    match target {
+        LaunchTarget::Overview => {}
+        LaunchTarget::Docker { tab, fullscreen } => {
+            app.open_docker(tab, fullscreen, true);
+        }
+        LaunchTarget::Clash { tab, fullscreen } => {
+            app.open_clash(tab, fullscreen, true);
+        }
     }
 
     let mut snapshot_gen = 0u64;
@@ -786,6 +808,14 @@ pub fn run_with_target(
                 app.docker.apply_event(evt);
                 dirty = true;
             }
+            // Drain Mihomo background monitor events
+            for evt in clash_monitor.drain() {
+                let toast = app.clash.apply_event(evt, &app.ctx.i18n);
+                if let Some((msg, tone)) = toast {
+                    app.toast(msg, tone);
+                }
+                dirty = true;
+            }
             if let Some(streamer) = &log_streamer {
                 for evt in streamer.drain() {
                     app.docker.apply_log_event(evt);
@@ -801,9 +831,29 @@ pub fn run_with_target(
                 } else if app.docker.active_ever {
                     docker_monitor.send(MonitorCmd::RefreshOnce);
                 }
+                if app.is_clash_view() {
+                    clash_monitor.send(ClashMonitorCmd::ForceRefresh);
+                } else if app.clash.active_ever {
+                    clash_monitor.send(ClashMonitorCmd::RefreshOnce);
+                }
                 app.completed_since_refresh = false;
                 dirty = true;
             }
+
+            // Sync lazy Mihomo monitor wake/sleep and tab switches
+            let in_clash = app.is_clash_view();
+            if in_clash {
+                if !was_in_clash {
+                    clash_monitor.send(ClashMonitorCmd::Wake(app.clash.tab));
+                    last_clash_tab = app.clash.tab;
+                } else if app.clash.tab != last_clash_tab {
+                    clash_monitor.send(ClashMonitorCmd::SetTab(app.clash.tab));
+                    last_clash_tab = app.clash.tab;
+                }
+            } else if was_in_clash {
+                clash_monitor.send(ClashMonitorCmd::LeaveClash);
+            }
+            was_in_clash = in_clash;
 
             // Sync lazy Docker monitor wake/sleep, tab switches, stats, debounced inspect, and log stream
             let in_docker = app.is_docker_view();
@@ -841,7 +891,7 @@ pub fn run_with_target(
                 }
                 app.docker.logs.reset_for(desired_logs.clone());
                 if let Some(target) = desired_logs {
-                    log_streamer = Some(LogStreamer::start(&app.ctx, target, 200));
+                    log_streamer = Some(LogStreamer::start(&bg_ctx, target, 200));
                 }
                 dirty = true;
             }
@@ -869,7 +919,9 @@ pub fn run_with_target(
             }
             // Skip redundant full-frame redraws when idle with no animations, spinners, or state
             // changes; refresh relative age readouts at most once per second.
-            let age_tick = (app.nav == state::NavTarget::Overview || app.is_docker_view())
+            let age_tick = (app.nav == state::NavTarget::Overview
+                || app.is_docker_view()
+                || app.is_clash_view())
                 && now.saturating_duration_since(last_draw) >= Duration::from_secs(1);
             if dirty || age_tick || app.needs_continuous_redraw() {
                 if let Err(err) = terminal.draw(|frame| app.draw(frame)) {
@@ -914,6 +966,9 @@ pub fn run_with_target(
                         app.docker.invalidate_inspects();
                         docker_monitor.send(MonitorCmd::ForceRefresh);
                     }
+                    if app.is_clash_view() {
+                        clash_monitor.send(ClashMonitorCmd::ForceRefresh);
+                    }
                     Ok(())
                 }
                 Ok(Effect::DockerRefresh) => {
@@ -921,6 +976,16 @@ pub fn run_with_target(
                     monitor.refresh();
                     app.docker.invalidate_inspects();
                     docker_monitor.send(MonitorCmd::ForceRefresh);
+                    Ok(())
+                }
+                Ok(Effect::ClashRefresh) => {
+                    app.refreshing = Some(Instant::now());
+                    monitor.refresh();
+                    clash_monitor.send(ClashMonitorCmd::ForceRefresh);
+                    Ok(())
+                }
+                Ok(Effect::ClashCmd(cmd)) => {
+                    clash_monitor.send(cmd);
                     Ok(())
                 }
                 Ok(Effect::DockerExec(spec)) => {
@@ -980,6 +1045,7 @@ pub fn run_with_target(
         worker_active.store(false, Ordering::SeqCst);
     }
     drop(app);
+    drop(clash_monitor);
     drop(docker_monitor);
     drop(monitor);
     drop(terminal);

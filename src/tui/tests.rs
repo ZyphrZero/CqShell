@@ -753,65 +753,68 @@ fn grouped_workbench_section_pills_hierarchy_and_shortcuts_work() {
     let (_temp, mut app) = test_app("zh-CN");
     let area = Rect::new(0, 0, 120, 36);
     app.viewport = area;
-    let clash = GROUPS.iter().position(|g| *g == "clash").unwrap();
+    let network = GROUPS.iter().position(|g| *g == "network").unwrap();
 
-    // Mihomo opens directly on its first section tab (`core`, 6 items) instead of a 37-item wall.
-    app.goto_nav(NavTarget::Group(clash));
-    assert_eq!(app.section_tab(clash), Some(0));
-    assert_eq!(app.selectable_count(clash), 6);
+    // Network has 3 sections (`bbr`: 3, `tcp`: 2, `github`: 1; total 6) and opens in All view.
+    app.goto_nav(NavTarget::Group(network));
+    assert_eq!(app.section_tab(network), None);
+    assert_eq!(app.selectable_count(network), 6);
 
-    // Right switches to `subscriptions` (6 items); Left twice reaches `All` (37 items + headers + spacers).
+    // Right switches to `bbr` (3 items), then `tcp` (2 items); Left twice returns to `All`.
     app.handle_key(key(KeyCode::Right)).unwrap();
-    assert_eq!(app.section_tab(clash), Some(1));
-    assert_eq!(app.selectable_count(clash), 6);
+    assert_eq!(app.section_tab(network), Some(0));
+    assert_eq!(app.selectable_count(network), 3);
+    app.handle_key(key(KeyCode::Right)).unwrap();
+    assert_eq!(app.section_tab(network), Some(1));
+    assert_eq!(app.selectable_count(network), 2);
     app.handle_key(key(KeyCode::Left)).unwrap();
-    assert_eq!(app.section_tab(clash), Some(0));
+    assert_eq!(app.section_tab(network), Some(0));
     app.handle_key(key(KeyCode::Left)).unwrap();
-    assert_eq!(app.section_tab(clash), None);
-    assert_eq!(app.selectable_count(clash), 41);
+    assert_eq!(app.section_tab(network), None);
+    assert_eq!(app.selectable_count(network), 6);
 
-    // In All view, PageDown jumps straight to the first action of the next section (`subscriptions`).
-    assert_eq!(app.selected_in(clash), 0);
+    // In All view, PageDown jumps straight to the first action of the next section (`tcp`).
+    assert_eq!(app.selected_in(network), 0);
     app.handle_key(key(KeyCode::PageDown)).unwrap();
-    assert_eq!(app.selected_in(clash), 6);
+    assert_eq!(app.selected_in(network), 3);
     app.handle_key(key(KeyCode::PageUp)).unwrap();
-    assert_eq!(app.selected_in(clash), 0);
+    assert_eq!(app.selected_in(network), 0);
 
-    // Clicking a section pill switches straight to that section.
+    // Clicking a section pill switches straight to that section (`github`, 1 item).
     let regions = LayoutRegions::compute(area, &app);
     let wb = regions.workbench.as_ref().unwrap();
     assert!(!wb.section_pills.is_empty());
-    let panel_pill = wb
+    let gh_pill = wb
         .section_pills
         .iter()
-        .find(|p| p.tab == Some(3))
-        .expect("panel section pill");
-    app.handle_mouse(click(panel_pill.rect.x + 1, panel_pill.rect.y), area)
+        .find(|p| p.tab == Some(2))
+        .expect("github section pill");
+    app.handle_mouse(click(gh_pill.rect.x + 1, gh_pill.rect.y), area)
         .unwrap();
-    assert_eq!(app.section_tab(clash), Some(3));
-    assert_eq!(app.selectable_count(clash), 3);
+    assert_eq!(app.section_tab(network), Some(2));
+    assert_eq!(app.selectable_count(network), 1);
 
-    // Clicking a section header row in All view drills straight into that section.
-    app.set_section_tab(clash, None);
+    // Clicking a section header row in All view drills straight into that section (`tcp`).
+    app.set_section_tab(network, None);
     let regions = LayoutRegions::compute(area, &app);
     let wb = regions.workbench.as_ref().unwrap();
-    let rows = app.rows(clash);
-    let sub_header_idx = rows
+    let rows = app.rows(network);
+    let tcp_header_idx = rows
         .iter()
-        .position(|r| matches!(r, super::state::Row::Section("subscriptions", _)))
+        .position(|r| matches!(r, super::state::Row::Section("tcp", _)))
         .unwrap();
-    let sub_y = wb.list_inner.y + (sub_header_idx - wb.list_scroll) as u16;
-    app.handle_mouse(click(wb.list_inner.x + 2, sub_y), area)
+    let tcp_y = wb.list_inner.y + (tcp_header_idx - wb.list_scroll) as u16;
+    app.handle_mouse(click(wb.list_inner.x + 2, tcp_y), area)
         .unwrap();
-    assert_eq!(app.section_tab(clash), Some(1));
+    assert_eq!(app.section_tab(network), Some(1));
 
     // Command Palette jump automatically activates the owning section tab.
-    let dns_spec = crate::actions::find("clash.dns.configure").unwrap();
-    app.jump_to_action(&dns_spec);
-    assert_eq!(app.section_tab(clash), Some(5));
+    let gh_spec = crate::actions::find("github.proxy").unwrap();
+    app.jump_to_action(&gh_spec);
+    assert_eq!(app.section_tab(network), Some(2));
     assert!(matches!(
         app.selected_row(),
-        Some(super::state::Row::Action(ref s)) if s.id == "clash.dns.configure"
+        Some(super::state::Row::Action(ref s)) if s.id == "github.proxy"
     ));
 
     // Plain ASCII mode renders both single-section and All views cleanly with zero Unicode chrome.
@@ -819,7 +822,7 @@ fn grouped_workbench_section_pills_hierarchy_and_shortcuts_work() {
     app.preview_theme("plain", Background::Unavailable("serial".into()))
         .unwrap();
     for tab in [Some(0), None] {
-        app.set_section_tab(clash, tab);
+        app.set_section_tab(network, tab);
         for (w, h) in [(80, 24), (120, 36)] {
             app.viewport = Rect::new(0, 0, w, h);
             let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -2205,4 +2208,1166 @@ fn socks5_transient_secret_modal_reveals_copies_masks_and_never_logs_secrets() {
         );
     }
     drop(temp);
+}
+
+fn render_clash_frame_text(app: &mut App, w: u16, h: u16) -> String {
+    use unicode_width::UnicodeWidthStr;
+    app.viewport = Rect::new(0, 0, w, h);
+    let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+    term.draw(|f| app.draw(f)).unwrap();
+    let buf = term.backend().buffer();
+    let mut out = String::new();
+    for y in 0..h {
+        let mut x = 0;
+        while x < w {
+            let sym = buf[(x, y)].symbol();
+            out.push_str(sym);
+            x += sym.width().max(1) as u16;
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[test]
+fn clash_workspace_renders_all_tabs_modals_states_and_pure_ascii_plain_mode() {
+    use super::clash::{
+        fixture::{sample_probe, sample_snapshot},
+        state::{ClashConfirmAction, ClashModal},
+    };
+    use crate::ops::clash::model::{ClashAvailability, ClashTab};
+
+    let sizes = [(120, 36), (80, 24), (59, 24), (40, 16)];
+    for locale in ["zh-CN", "en-US"] {
+        let (_temp, mut app) = test_app(locale);
+        app.clash.snapshot = sample_snapshot();
+        app.clash.exit_probe = Some(sample_probe());
+        app.clash.logs = vec![
+            "time=\"2026-11-26T16:00:00Z\" level=info msg=\"Start Mihomo\"".into(),
+            "time=\"2026-11-26T16:00:02Z\" level=warning msg=\"DNS fallback\"".into(),
+        ];
+        app.open_clash(ClashTab::Overview, false, false);
+
+        for (w, h) in sizes {
+            app.viewport = Rect::new(0, 0, w, h);
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            for fullscreen in [false, true] {
+                app.clash.fullscreen = fullscreen;
+                for tab in ClashTab::ALL {
+                    app.clash.set_tab(tab);
+                    term.draw(|f| app.draw(f)).unwrap();
+                }
+            }
+
+            // Embedded & fullscreen logs and fullscreen connection inspector
+            app.clash.set_tab(ClashTab::Tools);
+            app.clash.tools_log_mode = true;
+            term.draw(|f| app.draw(f)).unwrap();
+            app.clash.tools_log_fullscreen = true;
+            term.draw(|f| app.draw(f)).unwrap();
+            app.clash.tools_log_fullscreen = false;
+            app.clash.tools_log_mode = false;
+
+            app.clash.set_tab(ClashTab::Connections);
+            app.clash.conn_inspector_fullscreen = true;
+            term.draw(|f| app.draw(f)).unwrap();
+            app.clash.conn_inspector_fullscreen = false;
+
+            // Exercise all 5 local modals
+            app.clash.set_tab(ClashTab::Proxies);
+            for modal in [
+                ClashModal::DelaySettings {
+                    url: super::input::InputBuffer::new(
+                        "https://www.gstatic.com/generate_204".into(),
+                    ),
+                    timeout: super::input::InputBuffer::new("5000".into()),
+                    active_field: 0,
+                    error: None,
+                },
+                ClashModal::GroupPicker { cursor: 1 },
+                ClashModal::Providers {
+                    show_rules: false,
+                    cursor: 0,
+                },
+                ClashModal::Providers {
+                    show_rules: true,
+                    cursor: 0,
+                },
+                ClashModal::OutboundIp { scroll: 0 },
+                ClashModal::Confirm {
+                    title: "Confirm".into(),
+                    message: "Remove profile?".into(),
+                    danger: true,
+                    accept: true,
+                    action: ClashConfirmAction::CloseAllConnections,
+                },
+            ] {
+                app.clash.modal = Some(modal);
+                term.draw(|f| app.draw(f)).unwrap();
+            }
+            app.clash.modal = None;
+
+            // Exercise every offline / unavailable state
+            for avail in [
+                ClashAvailability::Loading,
+                ClashAvailability::NotInstalled,
+                ClashAvailability::Stopped,
+                ClashAvailability::ControllerUnconfigured,
+                ClashAvailability::ControllerUnreachable("connection refused".into()),
+                ClashAvailability::UnknownProcess,
+            ] {
+                app.clash.snapshot.availability = avail;
+                app.clash.set_tab(ClashTab::Overview);
+                term.draw(|f| app.draw(f)).unwrap();
+                // Profiles & Tools remain usable offline
+                app.clash.set_tab(ClashTab::Profiles);
+                term.draw(|f| app.draw(f)).unwrap();
+                app.clash.set_tab(ClashTab::Tools);
+                term.draw(|f| app.draw(f)).unwrap();
+            }
+            app.clash.snapshot.availability = ClashAvailability::Ready;
+        }
+    }
+
+    // Plain ASCII theme in en-US must be 100% pure 7-bit ASCII across every Mihomo tab, modal,
+    // log/inspector overlay, and offline state.
+    let (_temp, mut app) = test_app("en-US");
+    app.clash.snapshot = sample_snapshot();
+    app.clash.exit_probe = Some(sample_probe());
+    app.clash.logs = vec!["level=info msg=\"plain ascii check\"".into()];
+    app.preview_theme("plain", Background::Detected((0, 0, 0)))
+        .unwrap();
+    app.open_clash(ClashTab::Overview, false, false);
+    for (w, h) in [(120, 36), (80, 24), (40, 16)] {
+        for fullscreen in [false, true] {
+            app.clash.fullscreen = fullscreen;
+            for tab in ClashTab::ALL {
+                app.clash.set_tab(tab);
+                let rendered = render_clash_frame_text(&mut app, w, h);
+                assert!(
+                    rendered.is_ascii(),
+                    "non-ASCII character in Mihomo plain mode (fullscreen={fullscreen}) on {tab:?} at {w}x{h}:\n{rendered}"
+                );
+            }
+        }
+        app.clash.fullscreen = false;
+        // Embedded & fullscreen redacted logs + fullscreen connection inspector in plain mode
+        app.clash.set_tab(ClashTab::Tools);
+        app.clash.tools_log_mode = true;
+        let log_emb = render_clash_frame_text(&mut app, w, h);
+        assert!(
+            log_emb.is_ascii(),
+            "non-ASCII in plain embedded logs at {w}x{h}"
+        );
+        app.clash.tools_log_fullscreen = true;
+        app.clash.filtering = true;
+        app.clash.filter = super::input::InputBuffer::new("plain".into());
+        let log_full = render_clash_frame_text(&mut app, w, h);
+        assert!(
+            log_full.is_ascii(),
+            "non-ASCII in plain fullscreen logs at {w}x{h}"
+        );
+        app.clash.filtering = false;
+        app.clash.filter.clear();
+        app.clash.tools_log_fullscreen = false;
+        app.clash.tools_log_mode = false;
+
+        app.clash.set_tab(ClashTab::Connections);
+        app.clash.conn_inspector_fullscreen = true;
+        let conn_full = render_clash_frame_text(&mut app, w, h);
+        assert!(
+            conn_full.is_ascii(),
+            "non-ASCII in plain conn inspector at {w}x{h}"
+        );
+        app.clash.conn_inspector_fullscreen = false;
+
+        // Every local ClashModal in plain mode must be pure ASCII
+        app.clash.set_tab(ClashTab::Proxies);
+        for modal in [
+            ClashModal::DelaySettings {
+                url: super::input::InputBuffer::new("https://www.gstatic.com/generate_204".into()),
+                timeout: super::input::InputBuffer::new("5000".into()),
+                active_field: 0,
+                error: Some("invalid URL".into()),
+            },
+            ClashModal::GroupPicker { cursor: 0 },
+            ClashModal::Providers {
+                show_rules: false,
+                cursor: 0,
+            },
+            ClashModal::Providers {
+                show_rules: true,
+                cursor: 0,
+            },
+            ClashModal::OutboundIp { scroll: 0 },
+            ClashModal::Confirm {
+                title: "Confirm".into(),
+                message: "Close all active connections?".into(),
+                danger: true,
+                accept: true,
+                action: ClashConfirmAction::CloseAllConnections,
+            },
+        ] {
+            app.clash.modal = Some(modal);
+            let modal_text = render_clash_frame_text(&mut app, w, h);
+            assert!(
+                modal_text.is_ascii(),
+                "non-ASCII character in Mihomo modal plain mode at {w}x{h}:\n{modal_text}"
+            );
+        }
+        app.clash.modal = None;
+
+        // Offline guidance states in plain mode must also be pure ASCII
+        for avail in [
+            ClashAvailability::Loading,
+            ClashAvailability::NotInstalled,
+            ClashAvailability::Stopped,
+            ClashAvailability::ControllerUnconfigured,
+            ClashAvailability::ControllerUnreachable("connection refused".into()),
+            ClashAvailability::UnknownProcess,
+        ] {
+            app.clash.snapshot.availability = avail;
+            app.clash.set_tab(ClashTab::Overview);
+            let off_text = render_clash_frame_text(&mut app, w, h);
+            assert!(
+                off_text.is_ascii(),
+                "non-ASCII character in Mihomo offline plain mode at {w}x{h}:\n{off_text}"
+            );
+        }
+        app.clash.snapshot.availability = ClashAvailability::Ready;
+
+        // Help modal in plain mode must also be pure ASCII
+        app.help = true;
+        let help_text = render_clash_frame_text(&mut app, w, h);
+        app.help = false;
+        assert!(
+            help_text.is_ascii(),
+            "non-ASCII character in Mihomo help plain mode at {w}x{h}:\n{help_text}"
+        );
+    }
+}
+
+#[test]
+fn clash_workspace_keyboard_mouse_delay_sorting_and_modals_work_end_to_end() {
+    use super::clash::{
+        fixture::sample_snapshot,
+        state::{ClashModal, ConnectionScope, ProxySort},
+    };
+    use crate::ops::clash::{model::ClashTab, monitor::ClashMonitorCmd};
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.clash.snapshot = sample_snapshot();
+    app.open_clash(ClashTab::Overview, false, false);
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+
+    // 1. Overview: `m` cycles outbound mode -> emits SetMode("global")
+    let eff = app.handle_key(key(KeyCode::Char('m'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SetMode { ref mode }) if mode == "global"
+    ));
+
+    // 2. Overview: `N` triggers explicit manual exit IP probe; `w` copies WebUI URL
+    let eff = app.handle_key(key(KeyCode::Char('N'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::ProbeExit)
+    ));
+    assert!(app.clash.exit_probing);
+
+    // 2a. Overview `u` deduplicates in-flight profile updates and removes only the completed name
+    let u1 = app.handle_key(key(KeyCode::Char('u'))).unwrap();
+    assert!(matches!(
+        u1,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::UpdateProfile { ref name }) if name == "PrimarySub"
+    ));
+    let u2 = app.handle_key(key(KeyCode::Char('u'))).unwrap();
+    assert!(matches!(u2, super::state::Effect::None));
+    app.clash.busy_profiles.insert("other-profile".into());
+    app.clash.apply_event(
+        crate::ops::clash::monitor::ClashEvent::ActionDone {
+            tag: crate::ops::clash::monitor::ClashActionTag::UpdateProfile("PrimarySub".into()),
+            result: Ok("reloaded:PrimarySub".into()),
+        },
+        &app.ctx.i18n,
+    );
+    assert!(!app.clash.busy_profiles.contains("PrimarySub"));
+    assert!(app.clash.busy_profiles.contains("other-profile"));
+    app.clash.busy_profiles.clear();
+
+    let ui_eff = app.handle_key(key(KeyCode::Char('w'))).unwrap();
+    assert!(matches!(
+        ui_eff,
+        super::state::Effect::Copy(ref url) if url == "http://127.0.0.1:9090/ui/"
+    ));
+    let rendered_ov = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        rendered_ov.contains("Zashboard v3.30.0")
+            && rendered_ov.contains("http://127.0.0.1:9090/ui/"),
+        "Overview must display WebUI running summary:\n{rendered_ov}"
+    );
+    assert!(
+        rendered_ov.contains("[p] 切换") && !rendered_ov.contains("[3] 切换"),
+        "Overview profile card must advertise [p] instead of misleading [3]:\n{rendered_ov}"
+    );
+    // `p` on Overview switches directly to Profiles in both embedded and fullscreen modes
+    app.handle_key(key(KeyCode::Char('p'))).unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Profiles);
+    // `{` / `}` and `Alt+Left` / `Alt+Right` switch Mihomo tabs cleanly in embedded mode
+    app.handle_key(key(KeyCode::Char('{'))).unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Proxies);
+    app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT))
+        .unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Overview);
+    // Embedded `Tab` / `BackTab` cycle CqShell sidebar categories (never trapped inside Mihomo)
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    assert!(!app.is_clash_view());
+    app.handle_key(key(KeyCode::BackTab)).unwrap();
+    assert!(app.is_clash_view());
+    assert_eq!(app.clash.tab, ClashTab::Overview);
+    // When WebUI is not installed, `w` opens the panel install form directly
+    app.clash.snapshot.summary.panel_installed = false;
+    app.clash.snapshot.summary.panel_url = None;
+    app.handle_key(key(KeyCode::Char('w'))).unwrap();
+    assert!(app.form.is_some());
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.form.is_none());
+    app.clash.snapshot.summary.panel_installed = true;
+    app.clash.snapshot.summary.panel_url = Some("http://127.0.0.1:9090/ui/".into());
+
+    // 2b. Overview mouse click on connections_card jumps straight to Connections; back to Overview
+    let regions = LayoutRegions::compute(area, &app);
+    if let Some(super::clash::layout::ClashBodyGeom::Overview(ov)) =
+        regions.clash.as_ref().map(|g| &g.body)
+    {
+        app.handle_mouse(
+            click(ov.connections_card.x + 2, ov.connections_card.y + 1),
+            area,
+        )
+        .unwrap();
+        assert_eq!(app.clash.tab, ClashTab::Connections);
+    }
+    app.clash.set_tab(ClashTab::Overview);
+
+    // 3. Alt+2 jumps to Proxies tab; test sort cycle (`o`), hide timeouts (`h`), fastest pick (`f`)
+    app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT))
+        .unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Proxies);
+    assert_eq!(app.clash.proxy_sort, ProxySort::Default);
+
+    app.handle_key(key(KeyCode::Char('o'))).unwrap();
+    assert_eq!(app.clash.proxy_sort, ProxySort::Delay);
+    let sorted = app.clash.filtered_nodes();
+    assert_eq!(sorted[0].name, "HK-HY2-01"); // 68 ms fastest
+    assert_eq!(sorted[1].name, "JP-Opt-02"); // 112 ms
+    assert!(sorted.last().unwrap().delay_ms.is_none()); // untested/timeout at bottom
+
+    // Flip delay order (`O`): reachable reverses, unreachable still pinned at bottom
+    app.handle_key(key(KeyCode::Char('O'))).unwrap();
+    let flipped = app.clash.filtered_nodes();
+    assert_eq!(flipped[0].name, "SG-AnyTLS"); // 218 ms slowest reachable first
+    assert!(flipped.last().unwrap().delay_ms.is_none());
+
+    // Hide timeout (`h`) hides `US-LA-Dead` (tested && delay_ms=None)
+    let before_hide = app.clash.filtered_nodes().len();
+    app.handle_key(key(KeyCode::Char('h'))).unwrap();
+    assert!(app.clash.hide_timeout);
+    assert_eq!(app.clash.filtered_nodes().len(), before_hide - 1);
+    assert!(
+        !app.clash
+            .filtered_nodes()
+            .iter()
+            .any(|n| n.name == "US-LA-Dead")
+    );
+
+    // Locate active node (`c`) moves cursor to `JP-Opt-02`
+    app.handle_key(key(KeyCode::Char('c'))).unwrap();
+    assert_eq!(app.clash.selected_node().unwrap().name, "JP-Opt-02");
+
+    // Fastest node (`f`) picks `HK-HY2-01` (68 ms)
+    let eff = app.handle_key(key(KeyCode::Char('f'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SelectProxy { ref group, ref node })
+        if group == "Proxy" && node == "HK-HY2-01"
+    ));
+
+    // Batch group delay test (`t`) & single node ping (`p`)
+    let eff = app.handle_key(key(KeyCode::Char('t'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::TestGroupDelay { ref group, .. })
+        if group == "Proxy"
+    ));
+    let eff = app.handle_key(key(KeyCode::Char('p'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::TestNodeDelay { ref node, .. })
+        if node == "JP-Opt-02"
+    ));
+
+    // Switch policy group with `.` / `,` (keeps `Tab` free for sidebar in embedded mode)
+    app.handle_key(key(KeyCode::Char('.'))).unwrap();
+    assert_eq!(app.clash.current_group().unwrap().name, "Auto");
+    app.handle_key(key(KeyCode::Char(','))).unwrap();
+    assert_eq!(app.clash.current_group().unwrap().name, "Proxy");
+    app.handle_key(key(KeyCode::Char('.'))).unwrap();
+    assert_eq!(app.clash.current_group().unwrap().name, "Auto");
+    // Embedded `Tab` on Proxies still leaves to the next sidebar category
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    assert!(!app.is_clash_view());
+    app.handle_key(key(KeyCode::BackTab)).unwrap();
+    assert!(app.is_clash_view());
+    assert_eq!(app.clash.tab, ClashTab::Proxies);
+    let eff = app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SelectProxy { ref group, .. })
+        if group == "Auto"
+    ));
+    let eff = app.handle_key(key(KeyCode::Char('x'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::UnfixGroup { ref group })
+        if group == "Auto"
+    ));
+
+    // GroupPicker (`g`) + DelaySettings (`e`) modal validation & overlay priority alignment
+    app.handle_key(key(KeyCode::Char('g'))).unwrap();
+    assert!(matches!(
+        app.clash.modal,
+        Some(ClashModal::GroupPicker { .. })
+    ));
+    assert_eq!(app.overlay_kind(), 13);
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.clash.modal.is_none());
+
+    // DelaySettings (`d` alias + mouse field focus) & Providers modal mouse sub-tab switch
+    app.handle_key(key(KeyCode::Char('d'))).unwrap();
+    assert!(matches!(
+        app.clash.modal,
+        Some(ClashModal::DelaySettings {
+            active_field: 0,
+            ..
+        })
+    ));
+    let delay_geom = super::clash::layout::ClashModalGeometry::compute(
+        area,
+        app.clash.modal.as_ref().unwrap(),
+        &app.clash,
+        &app.ctx.i18n,
+    );
+    let field1 = delay_geom.field_rects[1];
+    app.handle_mouse(click(field1.x + 1, field1.y + 1), area)
+        .unwrap();
+    assert!(matches!(
+        app.clash.modal,
+        Some(ClashModal::DelaySettings {
+            active_field: 1,
+            ..
+        })
+    ));
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(app.clash.modal.is_none());
+
+    app.handle_key(key(KeyCode::Char('P'))).unwrap();
+    let prov_geom = super::clash::layout::ClashModalGeometry::compute(
+        area,
+        app.clash.modal.as_ref().unwrap(),
+        &app.clash,
+        &app.ctx.i18n,
+    );
+    let rules_sub = prov_geom.subtab_rules.unwrap();
+    app.handle_mouse(click(rules_sub.x + 1, rules_sub.y), area)
+        .unwrap();
+    assert!(matches!(
+        app.clash.modal,
+        Some(ClashModal::Providers {
+            show_rules: true,
+            ..
+        })
+    ));
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.clash.modal.is_none());
+
+    // 4. Profiles tab (Alt+3): switch+reload (`Enter`), update (`u`), update all (`U`), confirm delete (`d`)
+    app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT))
+        .unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Profiles);
+    let eff = app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SwitchProfile { ref name })
+        if name == "PrimarySub"
+    ));
+    let eff = app.handle_key(key(KeyCode::Char('u'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::UpdateProfile { ref name })
+        if name == "PrimarySub"
+    ));
+    // While a single profile update is in flight, `U` is suppressed to avoid clash_lock collisions.
+    assert!(matches!(
+        app.handle_key(key(KeyCode::Char('U'))).unwrap(),
+        super::state::Effect::None
+    ));
+    app.clash.apply_event(
+        crate::ops::clash::monitor::ClashEvent::ActionDone {
+            tag: crate::ops::clash::monitor::ClashActionTag::UpdateProfile("PrimarySub".into()),
+            result: Ok("updated:PrimarySub".into()),
+        },
+        &app.ctx.i18n,
+    );
+    let eff = app.handle_key(key(KeyCode::Char('U'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::UpdateAllProfiles)
+    ));
+    app.handle_key(key(KeyCode::Char('d'))).unwrap();
+    assert!(matches!(app.clash.modal, Some(ClashModal::Confirm { .. })));
+    let eff = app.handle_key(key(KeyCode::Char('y'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::RemoveProfile { ref name })
+        if name == "PrimarySub"
+    ));
+
+    // 5. Connections tab (Alt+4): scope cycle (`a`), facet cycle (`.` / `,` / `f`), close single (`x`), close all (`X`)
+    app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT))
+        .unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Connections);
+    assert_eq!(app.clash.conn_scope, ConnectionScope::Running);
+    app.handle_key(key(KeyCode::Char('a'))).unwrap();
+    assert_eq!(app.clash.conn_scope, ConnectionScope::Closed);
+    assert_eq!(app.clash.filtered_connections().len(), 1);
+    app.handle_key(key(KeyCode::Char('a'))).unwrap();
+    assert_eq!(app.clash.conn_scope, ConnectionScope::All);
+    assert_eq!(app.clash.filtered_connections().len(), 3);
+    app.handle_key(key(KeyCode::Char('a'))).unwrap();
+    assert_eq!(app.clash.conn_scope, ConnectionScope::Running);
+
+    app.handle_key(key(KeyCode::Char('f'))).unwrap();
+    let first_facet = app.clash.conn_facet.clone();
+    assert!(first_facet.is_some());
+    app.handle_key(key(KeyCode::Char(','))).unwrap();
+    assert!(app.clash.conn_facet.is_none());
+    app.handle_key(key(KeyCode::Char('.'))).unwrap();
+    assert_eq!(app.clash.conn_facet, first_facet);
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.clash.conn_facet.is_none());
+
+    let eff = app.handle_key(key(KeyCode::Char('x'))).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::CloseConnection { .. })
+    ));
+    // `X` opens close-all confirmation modal
+    app.handle_key(key(KeyCode::Char('X'))).unwrap();
+    assert!(matches!(app.clash.modal, Some(ClashModal::Confirm { .. })));
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.clash.modal.is_none());
+
+    // 6. Focus fullscreen toggle (`z`): numbered tab pills, uniform `Tab`/`BackTab` tab cycling,
+    // `[` keeps toggling sidebar even on Proxies, and clicking top tab pill via mouse works.
+    app.handle_key(key(KeyCode::Char('z'))).unwrap();
+    assert!(app.clash.fullscreen);
+    let rendered_fs = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        rendered_fs.contains("1 仪表盘")
+            && rendered_fs.contains("2 代理")
+            && rendered_fs.contains("3 配置"),
+        "Fullscreen tab bar must display 1-6 shortcuts:\n{rendered_fs}"
+    );
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Rules);
+    // Rules facet cycling uses `.` / `,` / `f`, never hijacking fullscreen `Tab`
+    app.handle_key(key(KeyCode::Char('f'))).unwrap();
+    assert!(app.clash.rule_facet.is_some());
+    app.handle_key(key(KeyCode::Char(','))).unwrap();
+    assert!(app.clash.rule_facet.is_none());
+    app.handle_key(key(KeyCode::BackTab)).unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Connections);
+    app.handle_key(key(KeyCode::Char('2'))).unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Proxies);
+    let group_before = app.clash.group_cursor;
+    app.handle_key(key(KeyCode::Char('['))).unwrap();
+    assert_eq!(app.clash.group_cursor, group_before);
+    app.sidebar_overlay = false;
+    app.sidebar_collapsed = false;
+    let regions = LayoutRegions::compute(area, &app);
+    let cl_geom = regions.clash.as_ref().unwrap();
+    let rules_pill = cl_geom
+        .tab_pills
+        .iter()
+        .find(|p| p.tab == ClashTab::Rules)
+        .unwrap();
+    app.handle_mouse(click(rules_pill.rect.x + 1, rules_pill.rect.y), area)
+        .unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Rules);
+
+    // 7. Tools tab (fullscreen `6`): toggle embedded redacted logs (`l`), copy (`y`),
+    // fullscreen (`f`) + inline search (`/`)
+    app.handle_key(key(KeyCode::Char('6'))).unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Tools);
+    app.clash.logs = vec![
+        "level=info msg=\"matched-line\"".into(),
+        "level=warning msg=\"other-line\"".into(),
+    ];
+    let eff = app.handle_key(key(KeyCode::Char('l'))).unwrap();
+    assert!(app.clash.tools_log_mode);
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::FetchLogs)
+    ));
+    let copy_eff = app.handle_key(key(KeyCode::Char('y'))).unwrap();
+    assert!(matches!(
+        copy_eff,
+        super::state::Effect::Copy(ref text) if text.contains("matched-line")
+    ));
+    app.handle_key(key(KeyCode::Char('f'))).unwrap();
+    assert!(app.clash.tools_log_fullscreen);
+    app.handle_key(key(KeyCode::Char('/'))).unwrap();
+    assert!(app.clash.filtering);
+    for ch in "matched".chars() {
+        app.handle_key(key(KeyCode::Char(ch))).unwrap();
+    }
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(!app.clash.filtering);
+    assert_eq!(app.clash.filtered_logs().len(), 1);
+    // First Esc clears filter while staying in fullscreen; second Esc exits fullscreen
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.clash.filter.text.is_empty());
+    assert!(app.clash.tools_log_fullscreen);
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(!app.clash.tools_log_fullscreen);
+
+    // 8. CLI parsing for `cqs mihomo`
+    let i18n = crate::i18n::I18n::load(Some("en-US"), None).unwrap();
+    let m = crate::cli::command(&i18n)
+        .try_get_matches_from(["cqs", "mihomo", "--tab", "proxies", "--embedded"])
+        .unwrap();
+    let (sub, sub_m) = m.subcommand().unwrap();
+    assert_eq!(sub, "mihomo");
+    assert_eq!(
+        sub_m.get_one::<String>("tab").map(String::as_str),
+        Some("proxies")
+    );
+    assert!(sub_m.get_flag("embedded"));
+}
+
+#[test]
+fn clash_help_modal_renders_without_clipping_and_scrolls_accurately() {
+    use super::clash::fixture::sample_snapshot;
+    use crate::ops::clash::model::ClashTab;
+    use unicode_width::UnicodeWidthStr;
+
+    fn modal_slice(app: &mut App, w: u16, h: u16, title_needle: &str) -> String {
+        app.viewport = Rect::new(0, 0, w, h);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+        let buf = term.backend().buffer();
+        for y in 0..h {
+            for x in 0..w {
+                if buf[(x, y)].symbol() == "╭"
+                    && let Some(rx) = ((x + 1)..w).find(|&c| buf[(c, y)].symbol() == "╮")
+                    && rx - x >= 24
+                    && let Some(by) = ((y + 1)..h)
+                        .find(|&r| buf[(x, r)].symbol() == "╰" && buf[(rx, r)].symbol() == "╯")
+                {
+                    let mut top = String::new();
+                    let mut cx = x;
+                    while cx <= rx {
+                        let s = buf[(cx, y)].symbol();
+                        top.push_str(s);
+                        cx += s.width().max(1) as u16;
+                    }
+                    if top.contains(title_needle) {
+                        let mut out = String::new();
+                        for ry in y..=by {
+                            let mut cx = x;
+                            while cx <= rx {
+                                let s = buf[(cx, ry)].symbol();
+                                out.push_str(s);
+                                cx += s.width().max(1) as u16;
+                            }
+                            out.push('\n');
+                        }
+                        return out;
+                    }
+                }
+            }
+        }
+        panic!("Mihomo help modal with title {title_needle:?} not found at {w}x{h}");
+    }
+
+    for (locale, title) in [
+        ("zh-CN", "Mihomo 可视化面板快捷键"),
+        ("en-US", "Mihomo Workspace Shortcuts"),
+    ] {
+        let (_temp, mut app) = test_app(locale);
+        app.clash.snapshot = sample_snapshot();
+        app.open_clash(ClashTab::Proxies, false, false);
+        app.help = true;
+
+        for (w, h) in [(120, 36), (80, 24), (59, 24), (40, 16)] {
+            let text = modal_slice(&mut app, w, h, title);
+            assert!(
+                !text.contains('…'),
+                "Mihomo help modal clipped with ellipsis at {w}x{h} ({locale}):\n{text}"
+            );
+            let max_s = super::render::help_max_scroll(&app, Rect::new(0, 0, w, h));
+            app.help_scroll = max_s;
+            let scrolled = modal_slice(&mut app, w, h, title);
+            assert!(
+                !scrolled.contains('…'),
+                "Mihomo scrolled help modal clipped at {w}x{h} ({locale}):\n{scrolled}"
+            );
+            app.help_scroll = 0;
+        }
+    }
+}
+
+#[test]
+fn clash_traffic_atlas_modes_fullscreen_pause_mouse_and_pure_ascii_work() {
+    use super::clash::{
+        fixture::sample_snapshot,
+        layout::ClashBodyGeom,
+        state::{TrafficBreakdownKind, TrafficGraphMode, TrafficScale, TrafficWindow},
+    };
+    use crate::ops::clash::model::ClashTab;
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.clash.snapshot = sample_snapshot();
+    app.open_clash(ClashTab::Overview, false, false);
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+
+    // 1. Hero traffic atlas renders across every responsive tier including compact 80x24 & 40x16.
+    for (w, h) in [(120, 36), (100, 30), (80, 24), (59, 24), (40, 16)] {
+        let frame = render_clash_frame_text(&mut app, w, h);
+        assert!(
+            frame.contains("实时流量图谱"),
+            "Overview traffic atlas must remain visible at {w}x{h}:\n{frame}"
+        );
+    }
+
+    // 2. Wide Overview shows live Exit Share mini-atlas alongside the Braille waveform.
+    let wide = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        wide.contains("出口节点分布"),
+        "Wide overview missing exit share:\n{wide}"
+    );
+    assert!(
+        wide.contains("JP-Opt-02"),
+        "Wide overview missing exit node:\n{wide}"
+    );
+    assert!(
+        wide.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)),
+        "Wide overview waveform should render Unicode Braille glyphs:\n{wide}"
+    );
+
+    // 3. Keyboard controls on Overview: g (mode), t (window), y (scale), Space (pause/resume), v (fullscreen)
+    assert_eq!(app.clash.traffic_mode, TrafficGraphMode::Mirror);
+    app.handle_key(key(KeyCode::Char('g'))).unwrap();
+    assert_eq!(app.clash.traffic_mode, TrafficGraphMode::Overlay);
+    app.handle_key(key(KeyCode::Char('g'))).unwrap();
+    assert_eq!(app.clash.traffic_mode, TrafficGraphMode::Stacked);
+    app.handle_key(key(KeyCode::Char('g'))).unwrap();
+    assert_eq!(app.clash.traffic_mode, TrafficGraphMode::Mirror);
+
+    assert_eq!(app.clash.traffic_window, TrafficWindow::Sec60);
+    app.handle_key(key(KeyCode::Char('t'))).unwrap();
+    assert_eq!(app.clash.traffic_window, TrafficWindow::Min3);
+    app.handle_key(key(KeyCode::Char('t'))).unwrap();
+    assert_eq!(app.clash.traffic_window, TrafficWindow::Min5);
+    app.handle_key(key(KeyCode::Char('t'))).unwrap();
+    assert_eq!(app.clash.traffic_window, TrafficWindow::Sec60);
+
+    assert_eq!(app.clash.traffic_scale, TrafficScale::Linear);
+    app.handle_key(key(KeyCode::Char('y'))).unwrap();
+    assert_eq!(app.clash.traffic_scale, TrafficScale::Log);
+    app.handle_key(key(KeyCode::Char('y'))).unwrap();
+    assert_eq!(app.clash.traffic_scale, TrafficScale::Linear);
+
+    // Pause freezes displayed snapshot even while live snapshot changes underneath.
+    app.handle_key(key(KeyCode::Char(' '))).unwrap();
+    assert!(app.clash.is_traffic_paused());
+    let frozen_down = app.clash.traffic_snapshot().down_speed;
+    app.clash.snapshot.down_speed = 99_999_999;
+    assert_eq!(app.clash.traffic_snapshot().down_speed, frozen_down);
+    app.handle_key(key(KeyCode::Char(' '))).unwrap();
+    assert!(!app.clash.is_traffic_paused());
+    assert_eq!(app.clash.traffic_snapshot().down_speed, 99_999_999);
+    app.clash.snapshot.down_speed = frozen_down;
+
+    // 4. Mouse click on Overview traffic chips & plot area
+    let regions = LayoutRegions::compute(area, &app);
+    let Some(ClashBodyGeom::Overview(ov)) = regions.clash.as_ref().map(|g| &g.body) else {
+        panic!("expected Overview geometry");
+    };
+    let mode_chip = ov.traffic_mode_chip.expect("expected traffic_mode_chip");
+    app.handle_mouse(click(mode_chip.x + 1, mode_chip.y), area)
+        .unwrap();
+    assert_eq!(app.clash.traffic_mode, TrafficGraphMode::Overlay);
+
+    let win_chip = ov
+        .traffic_window_chip
+        .expect("expected traffic_window_chip");
+    app.handle_mouse(click(win_chip.x + 1, win_chip.y), area)
+        .unwrap();
+    assert_eq!(app.clash.traffic_window, TrafficWindow::Min3);
+
+    // Click waveform plot expands to fullscreen Traffic Atlas
+    app.handle_mouse(click(ov.traffic_plot.x + 2, ov.traffic_plot.y + 1), area)
+        .unwrap();
+    assert!(app.clash.traffic_fullscreen);
+
+    // Fullscreen Traffic Atlas renders waveform + distribution panels cleanly across all sizes
+    for (w, h) in [(120, 36), (100, 30), (80, 24), (59, 24), (40, 16)] {
+        let fs_text = render_clash_frame_text(&mut app, w, h);
+        assert!(
+            fs_text.contains("实时流量图谱"),
+            "Fullscreen traffic atlas header missing at {w}x{h}:\n{fs_text}"
+        );
+    }
+    let fs_wide = render_clash_frame_text(&mut app, 120, 36);
+    assert!(fs_wide.contains("出口节点分布"));
+    assert!(fs_wide.contains("分流规则分布"));
+    assert!(fs_wide.contains("实时热门连接"));
+
+    // Keyboard & mouse controls inside Fullscreen Traffic Atlas
+    assert_eq!(app.clash.traffic_breakdown, TrafficBreakdownKind::Exit);
+    app.handle_key(key(KeyCode::Char('b'))).unwrap();
+    assert_eq!(app.clash.traffic_breakdown, TrafficBreakdownKind::Rule);
+    app.handle_key(key(KeyCode::Char('b'))).unwrap();
+    assert_eq!(app.clash.traffic_breakdown, TrafficBreakdownKind::Process);
+    let fs_proc = render_clash_frame_text(&mut app, 120, 36);
+    assert!(fs_proc.contains("进程流量分布"));
+
+    let fs_regions = LayoutRegions::compute(area, &app);
+    let Some(ClashBodyGeom::TrafficFullscreen(tf)) = fs_regions.clash.as_ref().map(|g| &g.body)
+    else {
+        panic!("expected TrafficFullscreen geometry");
+    };
+    let close_btn = tf.close_btn.expect("expected close_btn");
+    app.handle_mouse(click(close_btn.x + 1, close_btn.y), area)
+        .unwrap();
+    assert!(!app.clash.traffic_fullscreen);
+
+    // 5. Pure ASCII `plain` theme in `en-US` must be 100% pure 7-bit ASCII across every mode,
+    // scale, paused state, fullscreen Traffic Atlas, and viewport size.
+    let (_temp_en, mut app_en) = test_app("en-US");
+    app_en.clash.snapshot = sample_snapshot();
+    app_en
+        .preview_theme("plain", Background::Detected((0, 0, 0)))
+        .unwrap();
+    app_en.open_clash(ClashTab::Overview, false, false);
+
+    for (w, h) in [(120, 36), (80, 24), (59, 24), (40, 16)] {
+        for mode in [
+            TrafficGraphMode::Mirror,
+            TrafficGraphMode::Overlay,
+            TrafficGraphMode::Stacked,
+        ] {
+            app_en.clash.traffic_mode = mode;
+            for scale in [TrafficScale::Linear, TrafficScale::Log] {
+                app_en.clash.traffic_scale = scale;
+                for fs in [false, true] {
+                    app_en.clash.traffic_fullscreen = fs;
+                    let rendered = render_clash_frame_text(&mut app_en, w, h);
+                    assert!(
+                        rendered.is_ascii(),
+                        "non-ASCII character in plain traffic atlas (mode={mode:?}, scale={scale:?}, fs={fs}) at {w}x{h}:\n{rendered}"
+                    );
+                }
+            }
+        }
+    }
+    app_en.clash.toggle_traffic_pause();
+    app_en.clash.traffic_fullscreen = true;
+    let paused_ascii = render_clash_frame_text(&mut app_en, 120, 36);
+    assert!(paused_ascii.is_ascii());
+    assert!(paused_ascii.contains("PAUSED"));
+}
+
+#[test]
+fn clash_outbound_ip_detection_modal_hide_ip_copy_and_generation_guard_work() {
+    use super::clash::{
+        fixture::{sample_probe, sample_probe_quality_failed, sample_snapshot},
+        layout::{ClashBodyGeom, ClashModalGeometry},
+        state::ClashModal,
+    };
+    use crate::{
+        config::Preferences,
+        ops::clash::{
+            model::{
+                ClashTab, IpQuality, IpQualityOutcome, IpQualitySource, IpType, OutboundIpInfo,
+            },
+            monitor::{ClashEvent, ClashMonitorCmd},
+        },
+    };
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.clash.snapshot = sample_snapshot();
+    app.open_clash(ClashTab::Overview, false, false);
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+
+    // 1. Progressive event pipeline & stale generation protection
+    app.clash.apply_event(
+        ClashEvent::OutboundProbeStarted {
+            generation: 2,
+            manual: true,
+        },
+        &app.ctx.i18n,
+    );
+    assert!(app.clash.exit_probing);
+    assert!(app.clash.is_animating());
+
+    // Stale generation=1 event must be ignored
+    app.clash.apply_event(
+        ClashEvent::OutboundIpResolved {
+            generation: 1,
+            result: Ok(OutboundIpInfo {
+                ip: "198.51.100.1".into(),
+                country: "US".into(),
+                ip_source: "ip.sb".into(),
+                fallback_org: "Stale ISP".into(),
+            }),
+            manual: true,
+        },
+        &app.ctx.i18n,
+    );
+    assert!(app.clash.exit_probe.is_none());
+
+    // Generation=2 IP arrives -> immediately populates IP with quality=Loading
+    let toast = app.clash.apply_event(
+        ClashEvent::OutboundIpResolved {
+            generation: 2,
+            result: Ok(OutboundIpInfo {
+                ip: "203.0.113.106".into(),
+                country: "SG".into(),
+                ip_source: "cloudflare.com".into(),
+                fallback_org: String::new(),
+            }),
+            manual: true,
+        },
+        &app.ctx.i18n,
+    );
+    assert!(toast.is_some());
+    assert!(!app.clash.exit_probing);
+    assert!(app.clash.exit_probe.as_ref().unwrap().is_quality_loading());
+    assert!(app.clash.is_animating());
+
+    // Generation=2 quality & latency arrive
+    app.clash.apply_event(
+        ClashEvent::OutboundQualityResolved {
+            generation: 2,
+            ip: "203.0.113.106".into(),
+            outcome: IpQualityOutcome::Ready(IpQuality {
+                ip: "203.0.113.106".into(),
+                source: IpQualitySource::IpApiCom,
+                ip_type: IpType::Hosting,
+                organization: Some("Example Hosting".into()),
+                asn: Some(64502),
+                is_proxy: true,
+                is_vpn: false,
+                is_tor: false,
+                is_abuser: false,
+            }),
+        },
+        &app.ctx.i18n,
+    );
+    app.clash.apply_event(
+        ClashEvent::OutboundLatencyResolved {
+            generation: 2,
+            google_ms: Some(118),
+            github_ms: Some(205),
+        },
+        &app.ctx.i18n,
+    );
+    assert!(!app.clash.is_animating());
+
+    // 2. Overview status card renders country badge, IP, type/quality chips, org, and WebUI
+    let ov_text = render_clash_frame_text(&mut app, 120, 36);
+    for needle in [
+        "SG",
+        "203.0.113.106",
+        "机房",
+        "质量 普通",
+        "Example Hosting",
+        "AS64502",
+        "Zashboard v3.30.0",
+    ] {
+        assert!(
+            ov_text.contains(needle),
+            "Overview status card missing {needle:?}:\n{ov_text}"
+        );
+    }
+
+    // 3. Mouse click on country badge triggers fresh ProbeExit; clicking IP row opens detail modal
+    let regions = LayoutRegions::compute(area, &app);
+    let Some(ClashBodyGeom::Overview(ov)) = regions.clash.as_ref().map(|g| &g.body) else {
+        panic!("expected Overview geometry");
+    };
+    let badge = ov.outbound_badge_hit.expect("outbound_badge_hit");
+    let eff = app.handle_mouse(click(badge.x + 1, badge.y), area).unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::ProbeExit)
+    ));
+    app.clash.exit_probing = false;
+
+    let ip_hit = ov.outbound_ip_hit.expect("outbound_ip_hit");
+    app.handle_mouse(click(ip_hit.x + 1, ip_hit.y), area)
+        .unwrap();
+    assert!(matches!(
+        app.clash.modal,
+        Some(ClashModal::OutboundIp { .. })
+    ));
+
+    // 4. Detail modal renders FlClash-aligned sections, copy actions, and hide-IP persistence
+    let modal_text = render_clash_frame_text(&mut app, 120, 36);
+    for needle in [
+        "出站 IP",
+        "依赖第三方 API",
+        "基础信息",
+        "203.0.113.106",
+        "普通",
+        "机房",
+        "[代理]",
+        "网络",
+        "Example Hosting",
+        "AS64502",
+        "ip-api.com",
+        "隐藏 IP",
+    ] {
+        assert!(
+            modal_text.contains(needle),
+            "OutboundIp modal missing {needle:?}:\n{modal_text}"
+        );
+    }
+
+    // Copy IP (`1`), Org (`2`), ASN (`3`)
+    let copy_ip = app.handle_key(key(KeyCode::Char('1'))).unwrap();
+    assert!(matches!(copy_ip, super::state::Effect::Copy(ref v) if v == "203.0.113.106"));
+    let copy_org = app.handle_key(key(KeyCode::Char('2'))).unwrap();
+    assert!(matches!(copy_org, super::state::Effect::Copy(ref v) if v == "Example Hosting"));
+    let copy_asn = app.handle_key(key(KeyCode::Char('3'))).unwrap();
+    assert!(matches!(copy_asn, super::state::Effect::Copy(ref v) if v == "AS64502"));
+
+    // Toggle Hide IP (`h`) masks IP to `*****` in modal & overview and persists to Preferences
+    app.handle_key(key(KeyCode::Char('h'))).unwrap();
+    assert!(app.clash.hide_ip);
+    let saved = Preferences::read(&app.ctx.paths.preferences, true).unwrap();
+    assert_eq!(saved.clash_hide_ip, Some(true));
+    let hidden_modal = render_clash_frame_text(&mut app, 120, 36);
+    assert!(hidden_modal.contains("*****"));
+    assert!(!hidden_modal.contains("203.0.113.106"));
+    // Copying IP while hidden still copies the real IP without exposing it in toast
+    let copy_hidden = app.handle_key(key(KeyCode::Char('c'))).unwrap();
+    assert!(matches!(copy_hidden, super::state::Effect::Copy(ref v) if v == "203.0.113.106"));
+    assert!(
+        !app.toast
+            .as_ref()
+            .is_some_and(|t| t.text.contains("203.0.113.106"))
+    );
+
+    // Retry inside modal (`r`) emits ProbeExit
+    let retry_eff = app.handle_key(key(KeyCode::Char('r'))).unwrap();
+    assert!(matches!(
+        retry_eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::ProbeExit)
+    ));
+    app.clash.exit_probing = false;
+
+    // Close modal via Esc and verify Overview also masks IP
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.clash.modal.is_none());
+    let hidden_ov = render_clash_frame_text(&mut app, 120, 36);
+    assert!(hidden_ov.contains("*****"));
+    assert!(!hidden_ov.contains("203.0.113.106"));
+
+    // 5. Quality failure view renders per-source diagnostics and scrolls cleanly at 40x16
+    app.clash.hide_ip = false;
+    app.clash.exit_probe = Some(sample_probe_quality_failed());
+    app.handle_key(key(KeyCode::Char('i'))).unwrap();
+    let failed_text = render_clash_frame_text(&mut app, 120, 36);
+    for needle in [
+        "类型查询失败",
+        "各来源",
+        "ident.me",
+        "出站 IP 不一致",
+        "proxycheck.io",
+        "限流",
+    ] {
+        assert!(
+            failed_text.contains(needle),
+            "Failed quality modal missing {needle:?}:\n{failed_text}"
+        );
+    }
+    let _ = render_clash_frame_text(&mut app, 40, 16);
+    assert!(app.clash.max_outbound_modal_scroll.get() > 0);
+    app.handle_key(key(KeyCode::End)).unwrap();
+    let scrolled_40 = render_clash_frame_text(&mut app, 40, 16);
+    assert!(scrolled_40.contains("隐藏 IP"));
+
+    // Click close button via shared ClashModalGeometry
+    let mgeom = ClashModalGeometry::compute(
+        area,
+        app.clash.modal.as_ref().unwrap(),
+        &app.clash,
+        &app.ctx.i18n,
+    );
+    let close_btn = mgeom.outbound_close_btn.expect("outbound_close_btn");
+    app.handle_mouse(click(close_btn.x + 1, close_btn.y), area)
+        .unwrap();
+    assert!(app.clash.modal.is_none());
+
+    // 6. Plain ASCII theme in en-US must be 100% pure 7-bit ASCII across all OutboundIp states
+    let (_temp_en, mut app_en) = test_app("en-US");
+    app_en.clash.snapshot = sample_snapshot();
+    app_en
+        .preview_theme("plain", Background::Detected((0, 0, 0)))
+        .unwrap();
+    app_en.open_clash(ClashTab::Overview, false, false);
+    app_en.clash.modal = Some(ClashModal::OutboundIp { scroll: 0 });
+    for (w, h) in [(120, 36), (80, 24), (40, 16)] {
+        // Ready
+        app_en.clash.exit_probe = Some(sample_probe());
+        app_en.clash.exit_probing = false;
+        app_en.clash.exit_probe_error = None;
+        let t = render_clash_frame_text(&mut app_en, w, h);
+        assert!(
+            t.is_ascii(),
+            "non-ASCII in Ready OutboundIp modal at {w}x{h}:\n{t}"
+        );
+
+        // Quality failed
+        app_en.clash.exit_probe = Some(sample_probe_quality_failed());
+        let t = render_clash_frame_text(&mut app_en, w, h);
+        assert!(
+            t.is_ascii(),
+            "non-ASCII in Failed-quality OutboundIp modal at {w}x{h}:\n{t}"
+        );
+
+        // IP failed
+        app_en.clash.exit_probe = None;
+        app_en.clash.exit_probe_error = Some("all outbound IP sources failed".into());
+        let t = render_clash_frame_text(&mut app_en, w, h);
+        assert!(
+            t.is_ascii(),
+            "non-ASCII in IP-failed OutboundIp modal at {w}x{h}:\n{t}"
+        );
+
+        // Probing
+        app_en.clash.exit_probing = true;
+        app_en.clash.exit_probe_error = None;
+        let t = render_clash_frame_text(&mut app_en, w, h);
+        assert!(
+            t.is_ascii(),
+            "non-ASCII in Probing OutboundIp modal at {w}x{h}:\n{t}"
+        );
+    }
 }

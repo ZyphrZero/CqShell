@@ -160,6 +160,37 @@ pub(super) fn startup_tail(ctx: &Context) -> Result<String> {
     redact(ctx, &String::from_utf8_lossy(&bytes))
 }
 
+/// Read up to `max_lines` trailing lines from `clash_log`, strictly redacted through [`redact`].
+/// Returns an empty list if the log file does not exist yet.
+pub(crate) fn read_redacted_lines(ctx: &Context, max_lines: usize) -> Result<Vec<String>> {
+    let max_lines = max_lines.clamp(1, 2000);
+    ctx.check()?;
+    storage::check_path(&ctx.paths.clash_log, true)?;
+    let mut file = match fs::File::open(&ctx.paths.clash_log) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let length = file.metadata()?.len();
+    let start = length.saturating_sub(WINDOW);
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = Vec::new();
+    (&mut file).take(WINDOW).read_to_end(&mut bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let text = if start > 0 {
+        text.split_once('\n').map_or("", |(_, tail)| tail)
+    } else {
+        &text
+    };
+    let mut rows: Vec<&str> = text.lines().rev().take(max_lines).collect();
+    rows.reverse();
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let redacted = redact(ctx, &rows.join("\n"))?;
+    Ok(redacted.lines().map(str::to_owned).collect())
+}
+
 pub fn logs(ctx: &Context, lines: &str, follow: bool) -> Result<()> {
     let lines = lines
         .parse::<usize>()

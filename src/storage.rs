@@ -122,10 +122,9 @@ pub struct Lock {
 impl Drop for Lock {
     fn drop(&mut self) {
         // Closing alone can leave an inherited open-file description locked until a
-        // concurrently forked process execs. Release the owner's lock explicitly.
-        if let Err(error) = FileExt::unlock(&self._file) {
-            eprintln!("error.lock: {error}");
-        }
+        // concurrently forked process execs. Release the owner's lock explicitly without
+        // writing raw stderr (which would corrupt an active TUI alternate screen).
+        let _ = FileExt::unlock(&self._file);
     }
 }
 impl Lock {

@@ -33,6 +33,9 @@ pub mod compat;
 pub mod controller;
 pub mod geodata;
 mod logs;
+pub mod model;
+pub mod monitor;
+pub mod outbound_ip;
 pub mod panel;
 pub mod service;
 pub mod settings;
@@ -44,6 +47,7 @@ mod regression;
 
 pub use logs::logs;
 use logs::open_private_log;
+pub(crate) use logs::read_redacted_lines;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -81,6 +85,8 @@ struct Profile {
     path: String,
     #[serde(default)]
     updated: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    userinfo: Option<model::SubscriptionUserinfo>,
     #[serde(flatten)]
     extra: BTreeMap<String, Value>,
 }
@@ -688,7 +694,7 @@ pub fn subscription_add(ctx: &Context, name: &str, url: &str, use_after_add: boo
         validate_new_profile(&read_profiles(ctx)?, name, url)?;
     }
     let temporary = tempfile::NamedTempFile::new_in(&profiles_dir)?;
-    download_subscription(ctx, url, temporary.path())?;
+    let userinfo = download_subscription(ctx, url, temporary.path())?;
     validate_config(ctx, temporary.path(), false)?;
     validate_with_mihomo(ctx, temporary.path())?;
     let bytes = fs::read(temporary.path())?;
@@ -705,6 +711,7 @@ pub fn subscription_add(ctx: &Context, name: &str, url: &str, use_after_add: boo
         url: url.into(),
         path: file_name.clone(),
         updated: now_string(),
+        userinfo,
         extra: BTreeMap::new(),
     });
     if use_after_add {
@@ -791,6 +798,7 @@ pub fn subscription_import(
         url: url.into(),
         path: file_name.clone(),
         updated: now_string(),
+        userinfo: None,
         extra: BTreeMap::new(),
     });
     if use_after_add {
@@ -862,7 +870,7 @@ pub fn subscription_update(ctx: &Context, name: &str) -> Result<()> {
     }
     let profiles_dir = ctx.paths.clash_data.join("profiles");
     let temporary = tempfile::NamedTempFile::new_in(&profiles_dir)?;
-    download_subscription(ctx, &profile.url, temporary.path())?;
+    let userinfo = download_subscription(ctx, &profile.url, temporary.path())?;
     validate_config(ctx, temporary.path(), false)?;
     validate_with_mihomo(ctx, temporary.path())?;
     let bytes = fs::read(temporary.path())?;
@@ -881,6 +889,9 @@ pub fn subscription_update(ctx: &Context, name: &str) -> Result<()> {
         ));
     }
     profiles.profiles[index].updated = now_string();
+    if userinfo.is_some() {
+        profiles.profiles[index].userinfo = userinfo;
+    }
     let path = resolve_profile_path(ctx, &profile.path)?;
     let mut updates = vec![
         (path, Some(storage::Saved::new(&bytes, 0o600))),
@@ -1067,14 +1078,355 @@ fn render_runtime(base: Value, mixin: Value) -> Result<Vec<u8>> {
 const SUBSCRIPTION_AGENT: &str = "clash.meta";
 
 /// Download a subscription and reject non-Clash formats with an actionable message
-/// instead of a YAML type error. No format conversion is attempted.
-fn download_subscription(ctx: &Context, url: &str, target: &Path) -> Result<()> {
-    ctx.download_as(url, target, 30, Some(SUBSCRIPTION_AGENT))?;
+/// instead of a YAML type error. Captures safe numeric `subscription-userinfo` metadata
+/// from response headers without exposing URLs or sensitive headers.
+fn download_subscription(
+    ctx: &Context,
+    url: &str,
+    target: &Path,
+) -> Result<Option<model::SubscriptionUserinfo>> {
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let headers_file = tempfile::NamedTempFile::new_in(parent)?;
+    ctx.download_as_with_headers(
+        url,
+        target,
+        headers_file.path(),
+        30,
+        Some(SUBSCRIPTION_AGENT),
+    )?;
     // A share-link list is valid YAML but parses as a plain string, not a map.
     if serde_yaml::from_slice::<Value>(&fs::read(target)?).is_ok_and(|value| !value.is_mapping()) {
         return Err(Error::new("error.subscription_format", ""));
     }
+    let mut header_bytes = Vec::new();
+    if let Ok(file) = fs::File::open(headers_file.path()) {
+        let _ = file.take(64 * 1024).read_to_end(&mut header_bytes);
+    }
+    let raw_headers = String::from_utf8_lossy(&header_bytes);
+    Ok(model::SubscriptionUserinfo::extract_from_http_headers(
+        &raw_headers,
+    ))
+}
+
+/// Read local subscription metadata summaries for the Mihomo TUI (never exposes full URLs/tokens).
+pub(crate) fn profile_summaries(ctx: &Context) -> Vec<model::ProfileSummary> {
+    let Ok(file) = read_profiles(ctx) else {
+        return Vec::new();
+    };
+    file.profiles
+        .into_iter()
+        .map(|profile| {
+            let active = file.current.as_deref() == Some(profile.name.as_str());
+            let file_bytes = resolve_profile_path(ctx, &profile.path)
+                .ok()
+                .and_then(|p| fs::metadata(p).ok())
+                .map(|m| m.len());
+            let updated_epoch = profile.updated.trim().parse::<u64>().ok();
+            model::ProfileSummary {
+                name: profile.name,
+                host: url_host(&profile.url),
+                is_local: profile.url.is_empty(),
+                active,
+                updated: profile.updated,
+                updated_epoch,
+                userinfo: profile.userinfo,
+                file_bytes,
+            }
+        })
+        .collect()
+}
+
+fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn rollback_saved_files(ctx: &Context, snapshots: &[(PathBuf, Option<Vec<u8>>)]) {
+    let entries: Vec<(PathBuf, Option<storage::Saved>)> = snapshots
+        .iter()
+        .map(|(path, bytes)| {
+            (
+                path.clone(),
+                bytes.as_deref().map(|b| storage::Saved::new(b, 0o600)),
+            )
+        })
+        .collect();
+    let _ = commit_files(ctx, &entries);
+}
+
+fn push_runtime_or_rollback(
+    ctx: &Context,
+    settings: &controller::Settings,
+    runtime: &[u8],
+    rollback_snapshots: &[(PathBuf, Option<Vec<u8>>)],
+) -> Result<()> {
+    if let Err(err) = controller::push_runtime(ctx, settings, runtime) {
+        rollback_saved_files(ctx, rollback_snapshots);
+        return Err(err);
+    }
     Ok(())
+}
+
+/// Switch active subscription and, if Mihomo is running, validate and hot-reload via
+/// `PUT /configs?force=true` with full atomic rollback on failure.
+/// Returns `Ok(true)` if hot-reloaded live, `Ok(false)` if saved offline while stopped.
+pub(crate) fn subscription_use_and_reload(ctx: &Context, name: &str) -> Result<bool> {
+    validate_profile_name(name)?;
+    let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+    recover_interrupted_files(ctx)?;
+    let current_state = state(ctx)?;
+    if matches!(current_state, State::Unknown) {
+        return Err(unknown_process());
+    }
+    let prev_profiles = read_optional_file(&ctx.paths.clash_profiles)?;
+    let prev_config = read_optional_file(&ctx.paths.clash_config)?;
+    let prev_runtime = read_optional_file(&ctx.paths.clash_runtime)?;
+
+    let mut profiles = read_profiles(ctx)?;
+    let bytes = activate_profile(ctx, &mut profiles, name)?;
+    let next_profiles = profiles_bytes(&profiles)?;
+
+    let State::Running(pid) = current_state else {
+        commit_files(
+            ctx,
+            &[
+                (
+                    ctx.paths.clash_config.clone(),
+                    Some(storage::Saved::new(&bytes, 0o600)),
+                ),
+                (
+                    ctx.paths.clash_profiles.clone(),
+                    Some(storage::Saved::new(&next_profiles, 0o600)),
+                ),
+            ],
+        )?;
+        return Ok(false);
+    };
+
+    let settings = controller::settings(ctx)?;
+    let runtime = render_runtime(yaml(&bytes)?, read_mixin(ctx)?)?;
+    tun::validate_reload(ctx, &runtime, Some(pid))?;
+    let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+    fs::write(candidate.path(), &runtime)?;
+    validate_config(ctx, candidate.path(), true)?;
+    validate_with_mihomo(ctx, candidate.path())?;
+
+    commit_files(
+        ctx,
+        &[
+            (
+                ctx.paths.clash_config.clone(),
+                Some(storage::Saved::new(&bytes, 0o600)),
+            ),
+            (
+                ctx.paths.clash_profiles.clone(),
+                Some(storage::Saved::new(&next_profiles, 0o600)),
+            ),
+            (
+                ctx.paths.clash_runtime.clone(),
+                Some(storage::Saved::new(&runtime, 0o600)),
+            ),
+        ],
+    )?;
+
+    let rollback = vec![
+        (ctx.paths.clash_config.clone(), prev_config),
+        (ctx.paths.clash_profiles.clone(), prev_profiles),
+        (ctx.paths.clash_runtime.clone(), prev_runtime),
+    ];
+    push_runtime_or_rollback(ctx, &settings, &runtime, &rollback)?;
+    Ok(true)
+}
+
+/// Update one remote subscription and hot-reload automatically if it is active and Mihomo is
+/// running (rolling back config, profiles metadata, runtime, and profile file on reload failure).
+/// Returns `Ok(true)` if hot-reloaded.
+pub(crate) fn subscription_update_and_reload(ctx: &Context, name: &str) -> Result<bool> {
+    let (prev_profiles, prev_config, prev_runtime, prev_profile_file) = {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        recover_interrupted_files(ctx)?;
+        let prev_profiles = read_optional_file(&ctx.paths.clash_profiles)?;
+        let prev_config = read_optional_file(&ctx.paths.clash_config)?;
+        let prev_runtime = read_optional_file(&ctx.paths.clash_runtime)?;
+        let prev_file = read_profiles(ctx)
+            .ok()
+            .and_then(|f| f.profiles.into_iter().find(|p| p.name == name))
+            .and_then(|p| resolve_profile_path(ctx, &p.path).ok())
+            .and_then(|path| read_optional_file(&path).ok().map(|bytes| (path, bytes)));
+        (prev_profiles, prev_config, prev_runtime, prev_file)
+    };
+
+    subscription_update(ctx, name)?;
+
+    let is_active = read_profiles(ctx).ok().and_then(|f| f.current).as_deref() == Some(name);
+    if !is_active || !matches!(state(ctx)?, State::Running(_)) {
+        return Ok(false);
+    }
+    if let Err(err) = controller::reload(ctx) {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        let mut rollback = vec![
+            (ctx.paths.clash_config.clone(), prev_config),
+            (ctx.paths.clash_profiles.clone(), prev_profiles),
+            (ctx.paths.clash_runtime.clone(), prev_runtime),
+        ];
+        if let Some((path, bytes)) = prev_profile_file {
+            rollback.push((path, bytes));
+        }
+        rollback_saved_files(ctx, &rollback);
+        return Err(err);
+    }
+    Ok(true)
+}
+
+/// Summary returned by [`subscription_update_all`].
+pub(crate) struct UpdateAllSummary {
+    pub updated: usize,
+    pub failures: Vec<(String, String)>,
+    pub reloaded: bool,
+}
+
+/// Update all remote subscriptions, hot-reloading once at the end if the active subscription was
+/// updated and Mihomo is running (rolling back the active subscription files if reload fails).
+pub(crate) fn subscription_update_all(ctx: &Context) -> Result<UpdateAllSummary> {
+    let (profiles, prev_active_snapshot) = {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        recover_interrupted_files(ctx)?;
+        let profiles = read_profiles(ctx)?;
+        let active_snap = profiles.current.as_deref().and_then(|active_name| {
+            let prof = profiles
+                .profiles
+                .iter()
+                .find(|p| p.name == active_name && !p.url.is_empty())?
+                .clone();
+            let path = resolve_profile_path(ctx, &prof.path).ok()?;
+            let file_bytes = read_optional_file(&path).ok()?;
+            let cfg_bytes = read_optional_file(&ctx.paths.clash_config).ok()?;
+            let rt_bytes = read_optional_file(&ctx.paths.clash_runtime).ok()?;
+            Some((prof, path, file_bytes, cfg_bytes, rt_bytes))
+        });
+        (profiles, active_snap)
+    };
+
+    let active_name = profiles.current.clone();
+    let targets: Vec<String> = profiles
+        .profiles
+        .into_iter()
+        .filter(|p| !p.url.is_empty())
+        .map(|p| p.name)
+        .collect();
+    if targets.is_empty() {
+        return Ok(UpdateAllSummary {
+            updated: 0,
+            failures: Vec::new(),
+            reloaded: false,
+        });
+    }
+    let mut updated = 0usize;
+    let mut active_updated = false;
+    let mut failures = Vec::new();
+    for name in targets {
+        match subscription_update(ctx, &name) {
+            Ok(()) => {
+                updated += 1;
+                if active_name.as_deref() == Some(name.as_str()) {
+                    active_updated = true;
+                }
+            }
+            Err(err) => failures.push((name, err.detail)),
+        }
+    }
+    let mut reloaded = false;
+    if active_updated && matches!(state(ctx)?, State::Running(_)) {
+        match controller::reload(ctx) {
+            Ok(()) => reloaded = true,
+            Err(err) => {
+                if let Some((prev_prof, path, prev_file, prev_cfg, prev_rt)) = prev_active_snapshot
+                    && let Ok(_lock) = Lock::acquire(&ctx.paths.clash_lock)
+                {
+                    let mut rollback = vec![
+                        (ctx.paths.clash_config.clone(), prev_cfg),
+                        (ctx.paths.clash_runtime.clone(), prev_rt),
+                        (path, prev_file),
+                    ];
+                    if let Ok(mut current_profiles) = read_profiles(ctx)
+                        && let Some(slot) = current_profiles
+                            .profiles
+                            .iter_mut()
+                            .find(|p| p.name == prev_prof.name)
+                    {
+                        *slot = prev_prof;
+                        if let Ok(bytes) = profiles_bytes(&current_profiles) {
+                            rollback.push((ctx.paths.clash_profiles.clone(), Some(bytes)));
+                        }
+                    }
+                    rollback_saved_files(ctx, &rollback);
+                }
+                failures.push(("reload".into(), err.detail));
+            }
+        }
+    }
+    Ok(UpdateAllSummary {
+        updated,
+        failures,
+        reloaded,
+    })
+}
+
+/// Inspect local Mihomo binary/process/config state without making network calls.
+/// When `include_panel` is false (e.g. 1-second fast traffic ticks), skips `external-ui` disk
+/// inspection so the caller can carry forward previously probed WebUI metadata.
+pub(crate) fn read_local_runtime_summary(
+    ctx: &Context,
+    include_panel: bool,
+) -> (model::ClashAvailability, model::ClashRuntimeSummary) {
+    let mut summary = model::ClashRuntimeSummary::default();
+    if let Ok(profiles) = read_profiles(ctx) {
+        summary.active_profile = profiles.current;
+    }
+    if let Ok(socks_cfg) = socks::inspect(ctx)
+        && socks_cfg.enabled
+    {
+        summary.socks5_listen = Some(format!(
+            "{}:{}",
+            socks::format_host_bracketed(&socks_cfg.listen),
+            socks_cfg.port
+        ));
+        summary.socks5_auth = socks_cfg.has_auth;
+    }
+    if include_panel {
+        let ui = panel::inspect(ctx);
+        summary.panel_installed = ui.installed;
+        summary.panel_name = ui.name;
+        summary.panel_version = ui.version;
+        summary.panel_url = ui.url;
+        summary.panel_bind = ui.bind_address;
+        summary.panel_loopback = ui.loopback_only;
+    }
+    if let Ok(pc) = proxy_config(ctx) {
+        summary.http_port = pc.http_port;
+        summary.socks_port = pc.socks_port;
+    }
+    let proc_state = match state(ctx) {
+        Ok(s) => s,
+        Err(_) => State::Unknown,
+    };
+    let avail = match proc_state {
+        State::NotInstalled => model::ClashAvailability::NotInstalled,
+        State::Stopped => model::ClashAvailability::Stopped,
+        State::Unknown => model::ClashAvailability::UnknownProcess,
+        State::Running(pid) => {
+            summary.pid = Some(pid);
+            summary.uptime_secs = process_uptime(pid);
+            model::ClashAvailability::Ready
+        }
+    };
+    (avail, summary)
 }
 
 fn validate_subscription_runtime(ctx: &Context, bytes: &[u8]) -> Result<()> {
@@ -2078,6 +2430,7 @@ server.serve_forever()
                 url: "https://example.invalid/sub".into(),
                 path,
                 updated: String::new(),
+                userinfo: None,
                 extra: BTreeMap::new(),
             }],
             extra: BTreeMap::new(),
@@ -2228,5 +2581,185 @@ server.serve_forever()
         let appended = mihomo_safe_paths(&ctx).unwrap();
         let entries: Vec<PathBuf> = std::env::split_paths(&appended).collect();
         assert_eq!(entries, vec![extra, ctx.paths.clash_data]);
+    }
+
+    #[test]
+    fn offline_use_and_reload_and_push_failure_rollback_preserve_all_files() {
+        use std::{
+            io::{Read as _, Write as _},
+            net::TcpListener,
+            thread,
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        ensure_layout(&ctx).unwrap();
+
+        let sub_a = temp.path().join("a.yaml");
+        let sub_b = temp.path().join("b.yaml");
+        fs::write(
+            &sub_a,
+            "mode: rule\nproxies:\n  - name: nodeA\n    type: direct\n",
+        )
+        .unwrap();
+        fs::write(
+            &sub_b,
+            "mode: rule\nproxies:\n  - name: nodeB\n    type: direct\n",
+        )
+        .unwrap();
+        subscription_import(
+            &ctx,
+            "alpha",
+            &sub_a,
+            "https://sub.example.invalid/feed?token=secret-token-a",
+            true,
+        )
+        .unwrap();
+        subscription_import(&ctx, "beta", &sub_b, "", false).unwrap();
+
+        // Summaries expose only safe host metadata, never the query token.
+        let summaries = profile_summaries(&ctx);
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].name, "alpha");
+        assert_eq!(summaries[0].host, "sub.example.invalid");
+        assert!(summaries[0].active);
+        assert!(!summaries[0].is_local);
+        assert!(summaries[1].is_local);
+        assert!(!summaries[1].active);
+
+        // Stopped Mihomo -> offline switch returns Ok(false) and updates active profile on disk.
+        assert!(!subscription_use_and_reload(&ctx, "beta").unwrap());
+        assert_eq!(
+            read_profiles(&ctx).unwrap().current.as_deref(),
+            Some("beta")
+        );
+        assert!(
+            fs::read_to_string(&ctx.paths.clash_config)
+                .unwrap()
+                .contains("nodeB")
+        );
+
+        // Real local TCP server rejecting PUT /configs?force=true with HTTP 500 -> full rollback.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
+        });
+
+        let prev_cfg = b"mode: rule\n# original-config\n".to_vec();
+        let prev_rt = b"mode: rule\n# original-runtime\n".to_vec();
+        let prev_prof = fs::read(&ctx.paths.clash_profiles).unwrap();
+        let src_path = ctx.paths.clash_data.join("profiles").join("sentinel.yaml");
+        let prev_src = b"# original-source\n".to_vec();
+        fs::write(&ctx.paths.clash_config, &prev_cfg).unwrap();
+        fs::write(&ctx.paths.clash_runtime, &prev_rt).unwrap();
+        fs::write(&src_path, &prev_src).unwrap();
+
+        // Simulate committed new bytes followed by rejected live hot-reload.
+        fs::write(&ctx.paths.clash_config, b"mode: rule\n# mutated-config\n").unwrap();
+        fs::write(&ctx.paths.clash_runtime, b"mode: rule\n# mutated-runtime\n").unwrap();
+        fs::write(&ctx.paths.clash_profiles, b"current: broken\n").unwrap();
+        fs::write(&src_path, b"mode: rule\n# mutated-source\n").unwrap();
+
+        fs::write(
+            &ctx.paths.clash_mixin,
+            format!("external-controller: {addr}\nsecret: rb-secret\n"),
+        )
+        .unwrap();
+        let settings = controller::effective_settings(&ctx).unwrap().unwrap();
+        let rollback = vec![
+            (ctx.paths.clash_config.clone(), Some(prev_cfg.clone())),
+            (ctx.paths.clash_profiles.clone(), Some(prev_prof.clone())),
+            (ctx.paths.clash_runtime.clone(), Some(prev_rt.clone())),
+            (src_path.clone(), Some(prev_src.clone())),
+        ];
+        assert!(push_runtime_or_rollback(&ctx, &settings, b"mode: rule\n", &rollback).is_err());
+        server.join().unwrap();
+
+        assert_eq!(fs::read(&ctx.paths.clash_config).unwrap(), prev_cfg);
+        assert_eq!(fs::read(&ctx.paths.clash_profiles).unwrap(), prev_prof);
+        assert_eq!(fs::read(&ctx.paths.clash_runtime).unwrap(), prev_rt);
+        assert_eq!(fs::read(&src_path).unwrap(), prev_src);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subscription_add_and_update_all_capture_userinfo_headers_and_skip_local() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let curl = bin.join("curl");
+        fs::write(
+            &curl,
+            r#"#!/bin/sh
+out= hdr= url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) shift; out=$1 ;;
+    --dump-header) shift; hdr=$1 ;;
+    https://*) url=$1 ;;
+  esac
+  shift
+done
+case "$url" in
+  *fail.example*)
+    exit 22
+    ;;
+esac
+if [ -n "$hdr" ]; then
+  printf 'HTTP/1.1 302 Found\r\nLocation: https://cdn.example/sub\r\n\r\nHTTP/1.1 200 OK\r\nSubscription-Userinfo: upload=100; download=400; total=1000; expire=1795046400\r\n\r\n' > "$hdr"
+fi
+printf 'mode: rule\nproxies:\n  - name: hk-1\n    type: direct\n' > "$out"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        ctx.environment
+            .insert("PATH".into(), format!("{}:{path}", bin.display()));
+
+        subscription_add(
+            &ctx,
+            "remote-ok",
+            "https://ok.example/sub?token=secret-1",
+            true,
+        )
+        .unwrap();
+        let local_src = temp.path().join("local.yaml");
+        fs::write(
+            &local_src,
+            "mode: rule\nproxies:\n  - name: local-1\n    type: direct\n",
+        )
+        .unwrap();
+        subscription_import(&ctx, "local-only", &local_src, "", false).unwrap();
+        subscription_import(
+            &ctx,
+            "remote-fail",
+            &local_src,
+            "https://fail.example/sub?token=secret-2",
+            false,
+        )
+        .unwrap();
+
+        let summaries = profile_summaries(&ctx);
+        let ok_sub = summaries.iter().find(|p| p.name == "remote-ok").unwrap();
+        let info = ok_sub.userinfo.expect("userinfo persisted from header");
+        assert_eq!(info.upload, 100);
+        assert_eq!(info.download, 400);
+        assert_eq!(info.total, 1000);
+        assert_eq!(info.expire_date().as_deref(), Some("2026-11-19"));
+
+        let res = subscription_update_all(&ctx).unwrap();
+        assert_eq!(res.updated, 1);
+        assert_eq!(res.failures.len(), 1);
+        assert_eq!(res.failures[0].0, "remote-fail");
+        assert!(!res.reloaded);
     }
 }

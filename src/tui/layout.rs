@@ -203,6 +203,7 @@ pub(super) struct LayoutRegions {
     pub overview: Option<OverviewGeometry>,
     pub workbench: Option<WorkbenchGeometry>,
     pub docker: Option<super::docker::layout::DockerGeometry>,
+    pub clash: Option<super::clash::layout::ClashGeometry>,
     pub theme_drawer: Option<ThemeDrawerGeometry>,
     pub logs: Option<Rect>,
     pub log_body: Rect,
@@ -246,11 +247,12 @@ impl LayoutRegions {
             (mid, None, Rect::default())
         };
 
-        // Sidebar docking vs overlay (Docker Focus mode hides docked sidebar for full width)
-        let docker_focus = app.is_docker_view() && app.docker.fullscreen;
+        // Sidebar docking vs overlay (Docker / Mihomo Focus mode hides docked sidebar for full width)
+        let workspace_focus = (app.is_docker_view() && app.docker.fullscreen)
+            || (app.is_clash_view() && app.clash.fullscreen);
         let docked_sidebar = match breakpoint {
             Breakpoint::Compact | Breakpoint::Mobile => false,
-            Breakpoint::Medium | Breakpoint::Wide => !app.sidebar_collapsed && !docker_focus,
+            Breakpoint::Medium | Breakpoint::Wide => !app.sidebar_collapsed && !workspace_focus,
         };
         let sidebar_width = match breakpoint {
             Breakpoint::Wide => 22,
@@ -315,8 +317,8 @@ impl LayoutRegions {
             (workspace, None)
         };
 
-        let (overview, workbench, docker) = match app.nav {
-            NavTarget::Overview => (Some(build_overview(content_area, app)), None, None),
+        let (overview, workbench, docker, clash) = match app.nav {
+            NavTarget::Overview => (Some(build_overview(content_area, app)), None, None, None),
             NavTarget::Optimization | NavTarget::Group(_) if app.is_docker_view() => (
                 None,
                 None,
@@ -325,10 +327,22 @@ impl LayoutRegions {
                     app,
                     theme_drawer.is_some(),
                 )),
+                None,
+            ),
+            NavTarget::Optimization | NavTarget::Group(_) if app.is_clash_view() => (
+                None,
+                None,
+                None,
+                Some(super::clash::layout::ClashGeometry::compute(
+                    content_area,
+                    app,
+                    theme_drawer.is_some(),
+                )),
             ),
             NavTarget::Optimization | NavTarget::Group(_) => (
                 None,
                 Some(build_workbench(content_area, app, theme_drawer.is_some())),
+                None,
                 None,
             ),
         };
@@ -347,6 +361,7 @@ impl LayoutRegions {
             overview,
             workbench,
             docker,
+            clash,
             theme_drawer,
             logs,
             log_body,

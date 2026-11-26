@@ -155,6 +155,16 @@ impl Context {
         ctx.recovering = true;
         ctx
     }
+    /// Return a background-safe clone whose `log` / `message` calls discard into a closed event
+    /// channel instead of printing to `stdout`. Prevents TUI monitor threads from corrupting the
+    /// active alternate-screen terminal when reusing CLI operations.
+    pub fn silent(&self) -> Self {
+        let mut ctx = self.clone();
+        let (tx, _rx) = mpsc::channel();
+        ctx.events = Some(tx);
+        ctx.interactive = false;
+        ctx
+    }
     pub fn check(&self) -> Result<()> {
         if !self.recovering && self.cancel.load(Ordering::SeqCst) {
             Err(Error::new("error.cancelled", ""))
@@ -448,7 +458,7 @@ impl Context {
         self.check()
     }
     pub fn download(&self, url: &str, target: &Path, seconds: u32) -> Result<()> {
-        self.download_inner(url, target, seconds, None, true)
+        self.download_inner(url, target, None, seconds, None, true)
     }
     pub(crate) fn download_exact(
         &self,
@@ -475,7 +485,7 @@ impl Context {
             "=https",
             "--proto-redir",
             "=https",
-            "-fSL",
+            "-fsSL",
             "--connect-timeout",
             "15",
             "--max-time",
@@ -514,12 +524,25 @@ impl Context {
         seconds: u32,
         agent: Option<&str>,
     ) -> Result<()> {
-        self.download_inner(url, target, seconds, agent, false)
+        self.download_inner(url, target, None, seconds, agent, false)
+    }
+    /// Like [`Self::download_as`], additionally writing HTTP response headers to `headers_target`
+    /// so callers can inspect safe metadata such as `subscription-userinfo`.
+    pub(crate) fn download_as_with_headers(
+        &self,
+        url: &str,
+        target: &Path,
+        headers_target: &Path,
+        seconds: u32,
+        agent: Option<&str>,
+    ) -> Result<()> {
+        self.download_inner(url, target, Some(headers_target), seconds, agent, false)
     }
     fn download_inner(
         &self,
         url: &str,
         target: &Path,
+        headers_target: Option<&Path>,
         seconds: u32,
         agent: Option<&str>,
         accelerate_github: bool,
@@ -533,7 +556,7 @@ impl Context {
                 "=https",
                 "--proto-redir",
                 "=https",
-                "-fSL",
+                "-fsSL",
                 "--connect-timeout",
                 "15",
                 "--max-time",
@@ -541,6 +564,9 @@ impl Context {
             ];
             if let Some(agent) = agent {
                 args.extend(["--user-agent", agent]);
+            }
+            if let Some(headers) = headers_target {
+                args.extend(["--dump-header", path(headers)?]);
             }
             args.extend(["--output", path(target)?, effective]);
             self.run("curl", &args)?;
@@ -1029,5 +1055,21 @@ mod tests {
         let mut out = Vec::new();
         let mut input = std::io::Cursor::new(b"nope\n".as_slice());
         assert!(!read_confirm_reply(&mut input, &mut out, &i18n, || Ok(())).unwrap());
+    }
+
+    #[test]
+    fn silent_context_attaches_discard_channel_and_disables_interactive_prompts() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut base = crate::tests::context(temp.path());
+        base.interactive = true;
+        base.yes = false;
+        let bg = base.silent();
+        assert!(bg.events.is_some());
+        assert!(!bg.interactive);
+        // Logging and messaging discard cleanly instead of writing to stdout.
+        bg.log("background log line");
+        bg.message("notice.clash_subscription", "updated demo");
+        // Interactive confirmation fails fast instead of blocking on stdin.
+        assert!(bg.confirm("notice.clash_subscription", "demo").is_err());
     }
 }

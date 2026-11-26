@@ -23,6 +23,8 @@ pub(super) enum WorkbenchCommand {
     Optimization,
     Docker,
     DockerFocus,
+    Mihomo,
+    MihomoFocus,
     GithubProxy,
     SocksSecret,
     Theme,
@@ -40,11 +42,13 @@ pub(super) enum WorkbenchCommand {
 }
 
 impl WorkbenchCommand {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Overview,
         Self::Optimization,
         Self::Docker,
         Self::DockerFocus,
+        Self::Mihomo,
+        Self::MihomoFocus,
         Self::GithubProxy,
         Self::SocksSecret,
         Self::Theme,
@@ -67,6 +71,8 @@ impl WorkbenchCommand {
             Self::Optimization => "cmd.optimization",
             Self::Docker => "cmd.docker",
             Self::DockerFocus => "cmd.docker_focus",
+            Self::Mihomo => "cmd.mihomo",
+            Self::MihomoFocus => "cmd.mihomo_focus",
             Self::GithubProxy => "cmd.github_proxy",
             Self::SocksSecret => "cmd.socks_secret",
             Self::Theme => "cmd.theme",
@@ -90,6 +96,8 @@ impl WorkbenchCommand {
             Self::Optimization => "O",
             Self::Docker => "5",
             Self::DockerFocus => "z",
+            Self::Mihomo => "6",
+            Self::MihomoFocus => "z",
             Self::GithubProxy => "P",
             Self::SocksSecret => "Shift+S",
             Self::Theme => "T",
@@ -115,6 +123,10 @@ impl WorkbenchCommand {
                 "docker container compose image volume network daemon 容器 编排 镜像 卷 网络"
             }
             Self::DockerFocus => "docker focus fullscreen zoom 全屏 聚焦 容器",
+            Self::Mihomo => {
+                "mihomo clash proxy node profile subscription rule delay speed 代理 节点 策略组 订阅 测速 规则 连接"
+            }
+            Self::MihomoFocus => "mihomo clash focus fullscreen zoom 全屏 聚焦 代理 面板",
             Self::GithubProxy => "github gh proxy mirror china acceleration 代理 加速 镜像 国内",
             Self::SocksSecret => {
                 "socks socks5 socks5h secret password auth credential uri mihomo 密钥 密码 凭据 代理 连接串"

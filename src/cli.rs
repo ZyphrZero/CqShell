@@ -186,6 +186,35 @@ pub fn command(i: &I18n) -> Command {
                     .help(i.text("cli.docker_embedded").to_owned()),
             ),
     );
+    cmd = cmd.subcommand(
+        Command::new("mihomo")
+            .about(i.text("cli.mihomo").to_owned())
+            .help_template(format!(
+                "{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
+                i.text("cli.usage")
+            ))
+            .next_help_heading(i.text("cli.options").to_owned())
+            .arg(
+                Arg::new("tab")
+                    .long("tab")
+                    .default_value("overview")
+                    .value_parser([
+                        "overview",
+                        "proxies",
+                        "profiles",
+                        "connections",
+                        "rules",
+                        "tools",
+                    ])
+                    .help(i.text("cli.mihomo_tab").to_owned()),
+            )
+            .arg(
+                Arg::new("embedded")
+                    .long("embedded")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.mihomo_embedded").to_owned()),
+            ),
+    );
     for name in ["run", "batch"] {
         cmd = cmd.subcommand(
             Command::new(name)
@@ -492,6 +521,23 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                 args.get_one::<String>("style").map(String::as_str),
                 preferences,
                 crate::tui::LaunchTarget::Docker { tab, fullscreen },
+            )
+        }
+        Some(("mihomo", matches)) => {
+            if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                return Err(Error::new("error.tty", "cqs list / cqs run"));
+            }
+            let tab = matches
+                .get_one::<String>("tab")
+                .and_then(|s| crate::ops::clash::model::ClashTab::from_cli(s))
+                .unwrap_or(crate::ops::clash::model::ClashTab::Overview);
+            let fullscreen = !matches.get_flag("embedded");
+            crate::tui::run_with_target(
+                ctx.clone(),
+                args.get_one::<String>("theme").map(String::as_str),
+                args.get_one::<String>("style").map(String::as_str),
+                preferences,
+                crate::tui::LaunchTarget::Clash { tab, fullscreen },
             )
         }
         None => {

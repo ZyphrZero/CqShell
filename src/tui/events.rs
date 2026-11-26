@@ -62,6 +62,10 @@ impl App {
         if self.docker_has_modal() {
             return self.docker_key(key);
         }
+        // 3d. Mihomo-specific modals (DelaySettings / GroupPicker / Providers / Confirm)
+        if self.clash_has_modal() {
+            return self.clash_key(key);
+        }
         // 4. Notice dialog
         if let Some(notice) = self.notice.clone() {
             match key.code {
@@ -132,6 +136,9 @@ impl App {
         // 10. Main Workspace
         if self.is_docker_view() {
             return self.docker_key(key);
+        }
+        if self.is_clash_view() {
+            return self.clash_key(key);
         }
         self.main_key(key)
     }
@@ -1163,6 +1170,10 @@ impl App {
         if self.docker_has_modal() {
             return self.docker_modal_mouse(event, area);
         }
+        // 4d. Mihomo-specific modals
+        if self.clash_has_modal() {
+            return self.clash_modal_mouse(event, area);
+        }
 
         // 5. Notice & Help (dragging inside Notice selects text cleanly; clicking outside closes)
         if let Some(notice) = &self.notice {
@@ -1426,6 +1437,10 @@ impl App {
         // 13b. Dedicated Docker Workspace
         if regions.docker.is_some() {
             return self.docker_mouse(event, &regions);
+        }
+        // 13c. Dedicated Mihomo Workspace
+        if regions.clash.is_some() {
+            return self.clash_mouse(event, &regions);
         }
 
         // 14. Workbench Action List & Inspector

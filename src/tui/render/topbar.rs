@@ -75,6 +75,7 @@ pub(super) fn draw(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
         } else {
             bg
         };
+        let mut clash_chip_shown = false;
         if app.is_docker_view()
             && !app.docker.fullscreen
             && app.docker.snapshot.availability.is_ready()
@@ -96,6 +97,30 @@ pub(super) fn draw(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
                             Role::Text2
                         },
                     ))
+                    .bg(chip_bg)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            right.push(Span::styled(" ", Style::default().bg(bg)));
+        } else if app.is_clash_view()
+            && !app.clash.fullscreen
+            && app.clash.snapshot.availability.is_ready()
+            && bar.width >= 116
+        {
+            clash_chip_shown = true;
+            let mode = app.clash.snapshot.summary.mode.to_ascii_uppercase();
+            let conns = app.clash.snapshot.connections.len();
+            let label = if mode.is_empty() {
+                format!(" {} Mihomo ({conns}) ", tokens::glyph(theme, Glyph::DotOn))
+            } else {
+                format!(
+                    " {} Mihomo {mode} ({conns}) ",
+                    tokens::glyph(theme, Glyph::DotOn)
+                )
+            };
+            right.push(Span::styled(
+                label,
+                Style::default()
+                    .fg(tokens::color(theme, Role::Success))
                     .bg(chip_bg)
                     .add_modifier(Modifier::BOLD),
             ));
@@ -132,10 +157,12 @@ pub(super) fn draw(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
             ));
             right.push(Span::styled(" ", Style::default().bg(bg)));
         }
-        if matches!(
-            app.snapshot.local.mihomo_state,
-            Reading::Value(ClashState::Running(_))
-        ) {
+        if !clash_chip_shown
+            && matches!(
+                app.snapshot.local.mihomo_state,
+                Reading::Value(ClashState::Running(_))
+            )
+        {
             let dot_fg = fx::blend_ratatui(
                 tokens::color(theme, Role::Text3),
                 tokens::color(theme, Role::Success),
@@ -326,6 +353,11 @@ pub(super) fn draw(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
                 let tab = i.text(app.docker.tab.label_key());
                 format!("{grp}{chev}{tab}")
             }
+            NavTarget::Group(g) if app.is_clash_view() => {
+                let grp = i.text(&format!("group.{}", GROUPS[g]));
+                let tab = i.text(app.clash.tab.label_key());
+                format!("{grp}{chev}{tab}")
+            }
             NavTarget::Group(g) => i.text(&format!("group.{}", GROUPS[g])).to_owned(),
         };
         if avail >= sep.width() + 4 {
@@ -397,6 +429,28 @@ pub(super) fn draw(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
                         .add_modifier(Modifier::BOLD),
                 ));
                 if app.docker.fullscreen && bar.width >= 96 {
+                    left.push(Span::styled(
+                        format!(" [{}]", i.text("docker.badge.focus")),
+                        tokens::text(theme, Level::Tertiary).bg(bg),
+                    ));
+                }
+            }
+            NavTarget::Group(g) if app.is_clash_view() => {
+                left.push(Span::styled(
+                    i.text(&format!("group.{}", GROUPS[g])).to_owned(),
+                    tokens::text(theme, Level::Secondary).bg(bg),
+                ));
+                left.push(Span::styled(
+                    chev.clone(),
+                    tokens::text(theme, Level::Tertiary).bg(bg),
+                ));
+                left.push(Span::styled(
+                    i.text(app.clash.tab.label_key()).to_owned(),
+                    tokens::fg(theme, Role::Accent)
+                        .bg(bg)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                if app.clash.fullscreen && bar.width >= 96 {
                     left.push(Span::styled(
                         format!(" [{}]", i.text("docker.badge.focus")),
                         tokens::text(theme, Level::Tertiary).bg(bg),

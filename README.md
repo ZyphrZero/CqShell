@@ -94,6 +94,7 @@ curl -fsSL https://github.com/ZyphrZero/CqShell/releases/latest/download/install
 cqs --lang zh-CN          # 启动交互式 TUI（只读浏览 / 用户级操作）
 sudo cqs --lang zh-CN     # 以 root 权限管理整机系统操作
 cqs docker                # 直接进入全屏 Docker 管理工作台
+cqs mihomo                # 直接进入全屏 Mihomo 代理可视化工作台
 sudo cqs update           # 校验并原子自更新到最新稳定版
 sudo cqs --uninstall      # 卸载默认命令（保留配置与恢复基线）
 ```
@@ -161,7 +162,7 @@ cargo build --release --locked
 | **常用工具** | `curl`、`wget`、`nano`、`unzip`、`tar`、`tmux`、`iftop`、`btop`、`gdu`、`fzf`、`git`、`gh` 独立入口与一键全装 |
 | **Agent 工具** | **Pi（`pi.dev`）**、**Claude Code**、**Codex CLI** 官方独立二进制安装/更新与版本巡检（零 Node.js/npm） |
 | **终端美化** | Starship + Bash/Zsh 提示符配置，7 种样式 × 9 套配色，TUI/CLI 只读效果预览、TOML 查看与首次基线还原 |
-| **Mihomo 代理** | 37 项全栈动作：核心、在线/本地订阅、4 款 Web 面板、GeoData 规则库、热重载/模式/测速/连接管理、DNS/TUN/systemd 与 `clashctl` 兼容 |
+| **Mihomo 代理** | **专属 6 标签可视化工作台（`cqs mihomo`）** + 41 项全栈动作：核心、在线/本地订阅与配额热重载、策略组测速排序、实时连接与规则、4 款 Web 面板、SOCKS5 凭据卡、DNS/TUN/systemd 与 `clashctl` 兼容 |
 | **服务器测试** | Speedtest、**xykt/IPQuality**（默认隐私模式）、**ipforai.cc AI 服务检测**（默认关闭短链上传）、NextTrace、YABS、网络连通性与磁盘 I/O 测试 |
 | **CqShell** | 在线版本检查、校验式原子自更新、`cqs` 系统命令安装与卸载 |
 
@@ -182,7 +183,9 @@ cargo build --release --locked
 
 ### Mihomo 代理与 `clashctl` 兼容
 
-**Mihomo 代理**模块纯 Rust 实现 41 项操作，默认数据目录位于 `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`（支持 `CQS_CLASH_*` 环境变量覆盖）：
+在主界面选择侧边栏 **Mihomo 代理**，或直接运行 `cqs mihomo [--tab overview|proxies|profiles|connections|rules|tools] [--embedded]` 进入 6 标签可视化工作台（纯 Rust 实现，含 41 项 CLI/TUI 操作），默认数据目录位于 `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`（支持 `CQS_CLASH_*` 环境变量覆盖）：
+
+- **可视化 6 标签工作台**：支持侧栏嵌入与 `z`/`F` 全屏聚焦，涵盖**仪表盘**（速率/Sparkline 曲线、模式持久化切换、按需手动出口 IP 探测）、**代理**（可滚动策略组胶囊 + 多列节点卡片、整组/单节点测速、多维排序、隐超时、选最快、自动组固定/恢复）、**配置**（`subscription-userinfo` 流量进度与到期日、热重载与失败四文件原子回滚、批量更新与外部 Providers）、**请求**（运行中/200 条已关闭/全部与规则胶囊筛选）、**规则**与**工具**（运维表单聚合 + 内嵌脱敏日志搜索与复制）。
 
 - **核心与订阅事务**：官方二进制校验安装、HTTPS 在线订阅与本地 YAML 导入（`clash.sub.import`），提交前自动合并 Mixin 并执行 `mihomo -t` 校验，多文件事务保留 before-image 回滚。
 - **可视化 SOCKS5 / SOCKS5h 独立入站**：内置 `clash.socks.*` 专属分栏预览表单，一键配置独立 `cqs-socks5` 监听端口、绑定地址（`0.0.0.0` / `::` / `127.0.0.1` / 指定网卡 IP）、UDP 转发及出站模式（`DIRECT` 本机直连落地或跟随分流规则）；非回环监听强制强密码认证，自动生成 `0600` 私有连接凭据卡（`socks5.auth`，含 `socks5h://` 与 `socks5://` 连接串），Mihomo 运行中且配置控制器时支持零停机热重载。

@@ -51,6 +51,7 @@ pub(super) const GROUPS: &[&str] = &[
 
 pub(super) const OPTIMIZATION_GROUP: usize = GROUPS.len() - 1;
 pub(super) const DOCKER_GROUP: usize = 4;
+pub(super) const CLASH_GROUP: usize = 10;
 
 pub(super) const DEFAULT_CATEGORY_ORDER: &[&str] = &[
     "system", "kernel", "network", "ssh", "docker", "clash", "tools", "ai", "terminal", "tests",
@@ -224,6 +225,8 @@ pub(super) enum Effect {
     Refresh,
     DockerRefresh,
     DockerExec(crate::ops::docker::actions::ExecSpec),
+    ClashRefresh,
+    ClashCmd(crate::ops::clash::monitor::ClashMonitorCmd),
     PublicIp,
     Copy(String),
     PlainView { title: String, content: String },
@@ -626,6 +629,8 @@ pub struct App {
     pub(super) last_cmd_rect: Cell<Option<Rect>>,
     /// Dedicated Docker TUI management workspace state.
     pub(super) docker: super::docker::state::DockerState,
+    /// Dedicated Mihomo TUI management workspace state.
+    pub(super) clash: super::clash::state::ClashState,
     /// Optional title key when a `Task::DockerOp` is running.
     pub(super) docker_task_title: Option<&'static str>,
     /// Stat-fingerprinted cache of `cqs-socks5` config so rendering never re-parses `mixin.yaml`
@@ -737,6 +742,7 @@ impl App {
             selectable_panes: RefCell::new(Vec::new()),
             last_cmd_rect: Cell::new(None),
             docker: super::docker::state::DockerState::default(),
+            clash: super::clash::state::ClashState::default(),
             docker_task_title: None,
             socks_cache: RefCell::new(None),
         }
@@ -767,6 +773,7 @@ impl App {
         let transparent_bg = preferences.transparent_bg.unwrap_or(false);
         let reduced_motion = preferences.reduced_motion.unwrap_or(false);
         self.sidebar_collapsed = preferences.sidebar_collapsed.unwrap_or(false);
+        self.clash.hide_ip = preferences.clash_hide_ip.unwrap_or(false);
         let active = theme::resolve(&definition, style_selection, &background, transparent_bg);
         if let Some(detail) = &error {
             let message = self
@@ -853,9 +860,13 @@ impl App {
             self.max_inspector_scroll.set(0);
             self.docker.logs.searching = false;
             self.docker.filtering = false;
+            self.clash.filtering = false;
             self.view_changed = self.now;
             if target == NavTarget::Group(DOCKER_GROUP) {
                 self.docker.active_ever = true;
+            }
+            if target == NavTarget::Group(CLASH_GROUP) {
+                self.clash.active_ever = true;
             }
         }
         self.sidebar_overlay = false;
@@ -863,6 +874,23 @@ impl App {
 
     pub(super) fn is_docker_view(&self) -> bool {
         self.nav == NavTarget::Group(DOCKER_GROUP)
+    }
+
+    pub(super) fn is_clash_view(&self) -> bool {
+        self.nav == NavTarget::Group(CLASH_GROUP)
+    }
+
+    pub(super) fn open_clash(
+        &mut self,
+        tab: crate::ops::clash::model::ClashTab,
+        fullscreen: bool,
+        standalone: bool,
+    ) {
+        self.clash.active_ever = true;
+        self.clash.set_tab(tab);
+        self.clash.fullscreen = fullscreen;
+        self.clash.launched_standalone = standalone;
+        self.goto_nav(NavTarget::Group(CLASH_GROUP));
     }
 
     pub(super) fn open_docker(
@@ -1239,9 +1267,18 @@ impl App {
         line_count.saturating_sub(body_h).min(u16::MAX as usize) as u16
     }
 
+    pub(super) fn toggle_clash_hide_ip(&mut self) {
+        self.clash.hide_ip = !self.clash.hide_ip;
+        if let Ok(mut prefs) = Preferences::read(&self.ctx.paths.preferences, false) {
+            prefs.clash_hide_ip = Some(self.clash.hide_ip);
+            let _ = prefs.write(&self.ctx.paths.preferences);
+        }
+    }
+
     pub(super) fn toggle_sidebar(&mut self) {
         if super::layout::Breakpoint::of(self.viewport.width).uses_overlay_sidebar()
             || (self.is_docker_view() && self.docker.fullscreen)
+            || (self.is_clash_view() && self.clash.fullscreen)
         {
             self.sidebar_overlay = !self.sidebar_overlay;
         } else {
@@ -1563,6 +1600,8 @@ impl App {
             10
         } else if self.docker.modal.is_some() {
             11
+        } else if self.clash.modal.is_some() {
+            13
         } else if self.notice.is_some() {
             5
         } else if self.help {
@@ -1670,6 +1709,7 @@ impl App {
             || self.refreshing.is_some()
             || snapshot_pending(&self.snapshot)
             || (self.is_docker_view() && self.docker.desired_log_target().is_some())
+            || (self.is_clash_view() && self.clash.is_animating())
         {
             fx::SPINNER_FRAME
         } else if self.has_ambient_motion() {
@@ -1709,6 +1749,7 @@ impl App {
             || self.refreshing.is_some()
             || snapshot_pending(&self.snapshot)
             || (self.is_docker_view() && self.docker.desired_log_target().is_some())
+            || (self.is_clash_view() && self.clash.is_animating())
             || self.has_ambient_motion()
     }
 
@@ -2025,7 +2066,7 @@ impl App {
             return Ok(());
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        let mut ctx = self.ctx.clone();
+        let mut ctx = self.ctx.silent();
         ctx.cancel = cancel.clone();
         let (tx, receiver) = mpsc::channel();
         thread::spawn(move || {
@@ -2740,6 +2781,17 @@ impl App {
                     true
                 };
                 self.open_docker(self.docker.tab, next, false);
+            }
+            WorkbenchCommand::Mihomo => {
+                self.open_clash(self.clash.tab, self.clash.fullscreen, false);
+            }
+            WorkbenchCommand::MihomoFocus => {
+                let next = if self.is_clash_view() {
+                    !self.clash.fullscreen
+                } else {
+                    true
+                };
+                self.open_clash(self.clash.tab, next, false);
             }
             WorkbenchCommand::GithubProxy => return self.open_github_proxy_form(),
             WorkbenchCommand::SocksSecret => return self.open_socks_secret_modal(),

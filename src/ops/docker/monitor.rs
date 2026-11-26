@@ -79,7 +79,7 @@ impl DockerMonitor {
     pub fn start(ctx: &Context) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<MonitorCmd>();
         let (evt_tx, evt_rx) = mpsc::sync_channel::<DockerEvent>(MONITOR_EVENT_QUEUE_CAP);
-        let ctx = ctx.clone();
+        let ctx = ctx.silent();
 
         let handle = thread::spawn(move || {
             let mut active = false;
@@ -287,7 +287,7 @@ impl LogStreamer {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = stop.clone();
         let (tx, rx) = mpsc::sync_channel::<LogStreamEvent>(LOG_EVENT_QUEUE_CAP);
-        let ctx = ctx.clone();
+        let ctx = ctx.silent();
         let target_clone = target.clone();
 
         let handle = thread::spawn(move || {

@@ -1120,6 +1120,30 @@ fn help_rows(app: &App) -> Vec<HelpRow<'_>> {
             HelpRow::Item("Shift+G / F2", i.text("docker.help.shell_logs")),
             HelpRow::Item("Esc / q / Ctrl+C", i.text("docker.help.exit")),
         ]
+    } else if app.is_clash_view() {
+        vec![
+            HelpRow::Section(i.text("clash.help.sec_nav")),
+            HelpRow::Item("Alt+1-6 / { }", i.text("clash.help.tabs")),
+            HelpRow::Item("Tab / 1-9", i.text("clash.help.sidebar")),
+            HelpRow::Item("↑↓←→ / j k", i.text("clash.help.move")),
+            HelpRow::Item("/ / Esc", i.text("clash.help.filter")),
+            HelpRow::Section(i.text("clash.help.sec_proxies")),
+            HelpRow::Item(", . / g", i.text("clash.help.groups")),
+            HelpRow::Item("Enter / f / x", i.text("clash.help.select")),
+            HelpRow::Item("t / p / d", i.text("clash.help.delay")),
+            HelpRow::Item("o / O / h / c", i.text("clash.help.sort")),
+            HelpRow::Section(i.text("clash.help.sec_manage")),
+            HelpRow::Item("v / g t y / Space", i.text("clash.help.traffic")),
+            HelpRow::Item("m / p / s / R / i N", i.text("clash.help.overview")),
+            HelpRow::Item("u / U / a / i / d", i.text("clash.help.profiles")),
+            HelpRow::Item("a / , . f / x X", i.text("clash.help.conns")),
+            HelpRow::Item("P / l,y / Shift+S", i.text("clash.help.tools")),
+            HelpRow::Section(i.text("docker.help.sec_global")),
+            HelpRow::Item("z / [ / r", i.text("docker.help.focus")),
+            HelpRow::Item("Ctrl+K / Shift+T·L", i.text("docker.help.global")),
+            HelpRow::Item("Shift+G / F2", i.text("docker.help.shell_logs")),
+            HelpRow::Item("Esc / q / Ctrl+C", i.text("docker.help.exit")),
+        ]
     } else {
         vec![
             HelpRow::Item("↑↓ / j k", i.text("key.move")),
@@ -1297,6 +1321,8 @@ pub(super) fn draw_help(app: &App, frame: &mut Frame, area: Rect, alpha: f64) {
     let bg = tokens::color(theme, Role::Elevated);
     let title_key = if app.is_docker_view() {
         "docker.help.title"
+    } else if app.is_clash_view() {
+        "clash.help.title"
     } else {
         "help.title"
     };

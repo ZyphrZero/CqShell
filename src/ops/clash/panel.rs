@@ -967,6 +967,44 @@ fn installed_panel(ctx: &Context) -> Result<Option<Installed>> {
     Ok(None)
 }
 
+/// Structured read-only WebUI runtime overview (never exposes controller secrets).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct PanelOverview {
+    pub installed: bool,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub url: Option<String>,
+    pub bind_address: Option<String>,
+    pub loopback_only: bool,
+}
+
+pub(crate) fn inspect(ctx: &Context) -> PanelOverview {
+    let mut out = PanelOverview::default();
+    let Ok(Some(directory)) = configured_directory(ctx) else {
+        return out;
+    };
+    let index = directory.join("index.html");
+    if storage::check_path(&index, true).is_err() || !index.is_file() {
+        return out;
+    }
+    out.installed = true;
+    match installed_panel(ctx) {
+        Ok(Some(item)) => {
+            out.name = Some(item.panel.display_name().to_owned());
+            out.version = Some(item.version);
+        }
+        _ => {
+            out.name = Some("Custom".to_owned());
+        }
+    }
+    if let Ok(Some(ctrl)) = controller::effective_settings(ctx) {
+        out.url = Some(format!("http://{}/ui/", ctrl.bind_address));
+        out.bind_address = Some(ctrl.bind_address);
+        out.loopback_only = ctrl.bind_loopback;
+    }
+    out
+}
+
 pub fn url(ctx: &Context) -> Result<Option<String>> {
     let Some(directory) = configured_directory(ctx)? else {
         return Ok(None);
@@ -1806,6 +1844,55 @@ exit 97
                 || Ok(())
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn panel_inspect_reports_name_version_url_and_bind_scope_without_secret() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        ensure_layout(&ctx).unwrap();
+
+        // Not installed initially
+        let empty = inspect(&ctx);
+        assert!(!empty.installed);
+        assert!(empty.url.is_none());
+
+        // Installed Zashboard + loopback controller without secret
+        let ui_dir = ctx.paths.clash_resources.join("panels/zashboard-v3.30.0-1");
+        fs::create_dir_all(&ui_dir).unwrap();
+        fs::write(ui_dir.join("index.html"), b"<html></html>").unwrap();
+        fs::write(ui_dir.join(VERSION_MARKER), b"zashboard:v3.30.0\n").unwrap();
+        fs::write(
+            &ctx.paths.clash_mixin,
+            "external-ui: panels/zashboard-v3.30.0-1\nexternal-controller: 127.0.0.1:9090\n",
+        )
+        .unwrap();
+
+        let local = inspect(&ctx);
+        assert!(local.installed);
+        assert_eq!(local.name.as_deref(), Some("Zashboard"));
+        assert_eq!(local.version.as_deref(), Some("v3.30.0"));
+        assert_eq!(local.url.as_deref(), Some("http://127.0.0.1:9090/ui/"));
+        assert_eq!(local.bind_address.as_deref(), Some("127.0.0.1:9090"));
+        assert!(local.loopback_only);
+
+        // Non-loopback controller with secret -> loopback_only=false, URL never contains secret
+        fs::write(
+            &ctx.paths.clash_mixin,
+            "external-ui: panels/zashboard-v3.30.0-1\nexternal-controller: 0.0.0.0:9090\nsecret: super-secret-xyz\n",
+        )
+        .unwrap();
+        let lan = inspect(&ctx);
+        assert!(lan.installed);
+        assert!(!lan.loopback_only);
+        assert_eq!(lan.bind_address.as_deref(), Some("0.0.0.0:9090"));
+        assert_eq!(lan.url.as_deref(), Some("http://0.0.0.0:9090/ui/"));
+        assert!(
+            !lan.url
+                .as_deref()
+                .unwrap_or("")
+                .contains("super-secret-xyz")
         );
     }
 }

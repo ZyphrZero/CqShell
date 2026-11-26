@@ -36,6 +36,9 @@ pub struct Preferences {
     /// Saved HTTPS prefix for GitHub acceleration proxy (defaults to `https://gh-proxy.com/`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github_proxy: Option<String>,
+    /// Mask the Mihomo outbound IP address in the Mihomo TUI workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash_hide_ip: Option<bool>,
 }
 
 impl Preferences {
@@ -200,6 +203,7 @@ mod tests {
             ]
             .prop_map(String::from),
         );
+        let clash_hide_ip = prop::option::of(any::<bool>());
         (
             language,
             locale_dir,
@@ -212,6 +216,7 @@ mod tests {
             sidebar_collapsed,
             github_proxy_enabled,
             github_proxy,
+            clash_hide_ip,
         )
             .prop_map(
                 |(
@@ -226,6 +231,7 @@ mod tests {
                     sidebar_collapsed,
                     github_proxy_enabled,
                     github_proxy,
+                    clash_hide_ip,
                 )| Preferences {
                     language,
                     locale_dir,
@@ -238,6 +244,7 @@ mod tests {
                     sidebar_collapsed,
                     github_proxy_enabled,
                     github_proxy,
+                    clash_hide_ip,
                 },
             )
     }
@@ -294,6 +301,7 @@ mod tests {
                 sidebar_collapsed: None,
                 github_proxy_enabled: None,
                 github_proxy: None,
+                clash_hide_ip: None,
             }
         );
     }
