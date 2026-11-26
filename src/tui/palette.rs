@@ -24,6 +24,7 @@ pub(super) enum WorkbenchCommand {
     Docker,
     DockerFocus,
     GithubProxy,
+    SocksSecret,
     Theme,
     TransparentBg,
     ReducedMotion,
@@ -39,12 +40,13 @@ pub(super) enum WorkbenchCommand {
 }
 
 impl WorkbenchCommand {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Overview,
         Self::Optimization,
         Self::Docker,
         Self::DockerFocus,
         Self::GithubProxy,
+        Self::SocksSecret,
         Self::Theme,
         Self::TransparentBg,
         Self::ReducedMotion,
@@ -66,6 +68,7 @@ impl WorkbenchCommand {
             Self::Docker => "cmd.docker",
             Self::DockerFocus => "cmd.docker_focus",
             Self::GithubProxy => "cmd.github_proxy",
+            Self::SocksSecret => "cmd.socks_secret",
             Self::Theme => "cmd.theme",
             Self::TransparentBg => "cmd.transparent",
             Self::ReducedMotion => "cmd.motion",
@@ -88,6 +91,7 @@ impl WorkbenchCommand {
             Self::Docker => "5",
             Self::DockerFocus => "z",
             Self::GithubProxy => "P",
+            Self::SocksSecret => "Shift+S",
             Self::Theme => "T",
             Self::TransparentBg => "T·B",
             Self::ReducedMotion => "T·M",
@@ -112,6 +116,9 @@ impl WorkbenchCommand {
             }
             Self::DockerFocus => "docker focus fullscreen zoom 全屏 聚焦 容器",
             Self::GithubProxy => "github gh proxy mirror china acceleration 代理 加速 镜像 国内",
+            Self::SocksSecret => {
+                "socks socks5 socks5h secret password auth credential uri mihomo 密钥 密码 凭据 代理 连接串"
+            }
             Self::Theme => "theme style appearance color 主题 风格 外观 配色",
             Self::TransparentBg => "transparent background glass 透明 背景",
             Self::ReducedMotion => "motion animation static ssh 动效 动画 静态",

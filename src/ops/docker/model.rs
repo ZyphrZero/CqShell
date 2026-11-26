@@ -448,9 +448,35 @@ pub struct DockerSnapshot {
     pub mem_history: BTreeMap<String, Vec<f32>>,
     pub updated: Option<Instant>,
     pub last_error: Option<String>,
+    /// Bitmask of tabs already queried at least once (avoids re-polling genuinely empty lists).
+    pub fetched_tabs: u8,
+    /// Last time `docker info` was queried.
+    pub engine_checked: Option<Instant>,
+    /// Last time `docker system df` was queried.
+    pub df_updated: Option<Instant>,
+    /// Last time `docker system df -v` (volume sizes) was queried.
+    pub vol_df_updated: Option<Instant>,
 }
 
 impl DockerSnapshot {
+    pub fn tab_bit(tab: DockerTab) -> u8 {
+        match tab {
+            DockerTab::Containers => 1 << 0,
+            DockerTab::Compose => 1 << 1,
+            DockerTab::Images => 1 << 2,
+            DockerTab::Volumes => 1 << 3,
+            DockerTab::Networks => 1 << 4,
+            DockerTab::Daemon => 1 << 5,
+        }
+    }
+
+    pub fn has_fetched(&self, tab: DockerTab) -> bool {
+        self.fetched_tabs & Self::tab_bit(tab) != 0
+    }
+
+    pub fn mark_fetched(&mut self, tab: DockerTab) {
+        self.fetched_tabs |= Self::tab_bit(tab);
+    }
     pub fn running_containers(&self) -> usize {
         self.containers
             .iter()

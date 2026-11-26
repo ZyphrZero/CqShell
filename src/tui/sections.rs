@@ -86,6 +86,15 @@ const SECTIONS: &[(&str, &[Section])] = &[
                     "clash.mixin.reset",
                 ],
             ),
+            (
+                "socks",
+                &[
+                    "clash.socks.status",
+                    "clash.socks.configure",
+                    "clash.socks.auth.generate",
+                    "clash.socks.auth.set",
+                ],
+            ),
             ("tun", &["clash.tun.status", "clash.tun.configure"]),
             (
                 "service",

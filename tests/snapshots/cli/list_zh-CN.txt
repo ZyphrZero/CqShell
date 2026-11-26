@@ -143,6 +143,22 @@ clash.mixin.status     查看 Mixin 覆盖配置
   查看持久化 Mixin 覆盖内容，自动脱敏控制器密钥与代理认证凭据。
 clash.mixin.reset      重置 Mixin 覆盖配置
   停止 Mihomo 后清除全部 Mixin 持久化覆盖并重建运行配置，保留已保存的订阅与本地资源。
+clash.socks.status     查看 SOCKS5 / 5h 状态
+  只读查看独立 SOCKS5 / SOCKS5h 入站监听状态、绑定地址与端口、UDP 转发、出站路由模式、脱敏连接模板及私有凭据文件路径。
+clash.socks.configure  可视化配置 SOCKS5 / 5h 入站
+  可视化配置独立 SOCKS5 / SOCKS5h 入站监听器（端口、绑定地址、UDP、本机直连或规则分流及强制非回环鉴权）；Mihomo 运行中且启用控制器时支持零停机热重载生效。
+  socks_enabled=on ["on", "off"]
+  socks_port=10808 ["10808", "21080", "1080"]
+  socks_listen=0.0.0.0 ["0.0.0.0", "::", "127.0.0.1"]
+  socks_udp=on ["on", "off"]
+  socks_out=direct ["direct", "rule"]
+  socks_auth=auto ["auto", "keep", "off"]
+  socks_user=cqs []
+clash.socks.auth.generate 生成 / 轮换 SOCKS5 随机密码
+  使用系统加密随机源生成 24 位高强度 SOCKS5 密码，原子写入 Mixin 与 0600 私有凭据文件（socks5.auth），绝不在日志中回显明文。
+clash.socks.auth.set   从文件导入 SOCKS5 凭据
+  从权限 0600 的私有文件导入 username:password（或仅密码），更新独立 SOCKS5 / SOCKS5h 入站凭据与连接卡。
+  secret_file= []
 clash.tun.status       查看 TUN 配置与归属
   只读查看 TUN 配置、链路及进程归属。
 clash.tun.configure    配置 TUN 模式

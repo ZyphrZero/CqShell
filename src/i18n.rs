@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
     path::Path,
+    sync::{Arc, OnceLock},
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -17,7 +18,28 @@ pub struct Catalog {
 #[derive(Debug, Clone)]
 pub struct I18n {
     selected: String,
-    catalogs: BTreeMap<String, Catalog>,
+    catalogs: Arc<BTreeMap<String, Catalog>>,
+}
+
+static BUILTIN_CATALOGS: OnceLock<Arc<BTreeMap<String, Catalog>>> = OnceLock::new();
+
+fn builtin_catalogs() -> Result<Arc<BTreeMap<String, Catalog>>> {
+    if let Some(cached) = BUILTIN_CATALOGS.get() {
+        return Ok(Arc::clone(cached));
+    }
+    let english: Catalog = toml::from_str(include_str!("../locales/en-US.toml"))?;
+    let chinese: Catalog = toml::from_str(include_str!("../locales/zh-CN.toml"))?;
+    #[cfg(test)]
+    {
+        validate(&english, &english)?;
+        validate(&english, &chinese)?;
+    }
+    let built = Arc::new(BTreeMap::from([
+        (english.locale.clone(), english),
+        (chinese.locale.clone(), chinese),
+    ]));
+    let _ = BUILTIN_CATALOGS.set(Arc::clone(&built));
+    Ok(built)
 }
 
 pub fn placeholders(value: &str) -> Result<BTreeSet<String>> {
@@ -92,15 +114,10 @@ pub fn normalize(locale: &str) -> String {
 
 impl I18n {
     pub fn load(explicit: Option<&str>, directory: Option<&Path>) -> Result<Self> {
-        let english: Catalog = toml::from_str(include_str!("../locales/en-US.toml"))?;
-        let chinese: Catalog = toml::from_str(include_str!("../locales/zh-CN.toml"))?;
-        validate(&english, &english)?;
-        validate(&english, &chinese)?;
-        let mut catalogs = BTreeMap::from([
-            (english.locale.clone(), english.clone()),
-            (chinese.locale.clone(), chinese),
-        ]);
-        if let Some(directory) = directory {
+        let builtins = builtin_catalogs()?;
+        let catalogs = if let Some(directory) = directory {
+            let mut merged = (*builtins).clone();
+            let english = &builtins["en-US"];
             for entry in fs::read_dir(directory)? {
                 let path = entry?.path();
                 if path.extension().is_none_or(|e| e != "toml") {
@@ -112,10 +129,13 @@ impl I18n {
                 {
                     return Err(Error::new("error.locale", path.display()));
                 }
-                validate(&english, &catalog)?;
-                catalogs.insert(catalog.locale.clone(), catalog);
+                validate(english, &catalog)?;
+                merged.insert(catalog.locale.clone(), catalog);
             }
-        }
+            Arc::new(merged)
+        } else {
+            builtins
+        };
         let requested = explicit
             .map(str::to_owned)
             .or_else(|| env::var("CQS_LANG").ok());
@@ -191,5 +211,19 @@ impl I18n {
     }
     pub fn has(&self, key: &str) -> bool {
         self.catalogs[&self.selected].messages.contains_key(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builtin_catalogs_are_shared_via_arc_on_clone_and_reload() {
+        let a = I18n::load(Some("zh-CN"), None).unwrap();
+        let b = a.clone();
+        let c = I18n::load(Some("en-US"), None).unwrap();
+        assert!(Arc::ptr_eq(&a.catalogs, &b.catalogs));
+        assert!(Arc::ptr_eq(&a.catalogs, &c.catalogs));
     }
 }

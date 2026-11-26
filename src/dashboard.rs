@@ -11,14 +11,14 @@ use std::{
     collections::VecDeque,
     ffi::OsString,
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender, SyncSender},
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use sysinfo::{Disks, System};
 
@@ -170,10 +170,41 @@ fn push_cpu_sample(history: &mut VecDeque<f32>, usage: &Reading<f32>) {
     history.push_back(*usage);
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BinaryFingerprint {
+    path: PathBuf,
+    len: u64,
+    modified: Option<SystemTime>,
+    ino: u64,
+}
+
+fn binary_fingerprint(path: &Path) -> Option<BinaryFingerprint> {
+    let meta = fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    let ino = {
+        use std::os::unix::fs::MetadataExt;
+        meta.ino()
+    };
+    #[cfg(not(unix))]
+    let ino = 0u64;
+    Some(BinaryFingerprint {
+        path: path.to_path_buf(),
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        ino,
+    })
+}
+
 pub struct Sampler {
     system: System,
     disks: Disks,
     first_sample: Option<Instant>,
+    cached_os: Option<Reading<String>>,
+    cached_kernel: Option<Reading<String>>,
+    cached_mihomo_version: Option<(BinaryFingerprint, Reading<String>)>,
 }
 impl Default for Sampler {
     fn default() -> Self {
@@ -186,6 +217,9 @@ impl Sampler {
             system: System::new(),
             disks: Disks::new_with_refreshed_list(),
             first_sample: None,
+            cached_os: None,
+            cached_kernel: None,
+            cached_mihomo_version: None,
         }
     }
     pub fn sample(&mut self, ctx: &Context) -> LocalSnapshot {
@@ -243,10 +277,18 @@ impl Sampler {
             }
             _ => Reading::Unavailable("system filesystem statistics unavailable".into()),
         };
+        let os = self
+            .cached_os
+            .get_or_insert_with(|| optional(System::long_os_version().or_else(System::name), "OS"))
+            .clone();
+        let kernel = self
+            .cached_kernel
+            .get_or_insert_with(|| optional(System::kernel_version(), "kernel"))
+            .clone();
         let mut snapshot = LocalSnapshot {
             host: optional(System::host_name(), "hostname"),
-            os: optional(System::long_os_version().or_else(System::name), "OS"),
-            kernel: optional(System::kernel_version(), "kernel"),
+            os,
+            kernel,
             arch: std::env::consts::ARCH.into(),
             cpu,
             cpu_usage,
@@ -291,19 +333,46 @@ impl Sampler {
             // Re-read every sample: cgroup limits can change while the TUI runs.
             snapshot.effective_memory_kb =
                 Reading::from_result(memory::effective_kb(Path::new("/proc")));
-            fill_mihomo(&mut snapshot, ctx);
+            self.fill_mihomo_cached(&mut snapshot, ctx);
         }
         snapshot
     }
+
+    fn fill_mihomo_cached(&mut self, snapshot: &mut LocalSnapshot, ctx: &Context) {
+        snapshot.mihomo_state = Reading::from_result(clash::state(ctx));
+        if let Some(fp) = binary_fingerprint(&ctx.paths.clash_binary) {
+            if let Some((cached_fp, cached_ver)) = &self.cached_mihomo_version
+                && *cached_fp == fp
+            {
+                snapshot.mihomo_version = cached_ver.clone();
+                return;
+            }
+            let ver = match clash::installed_version(ctx) {
+                Ok(Some(version)) => Reading::Value(version),
+                Ok(None) => Reading::NotApplicable,
+                Err(error) => Reading::Unavailable(error.to_string()),
+            };
+            if matches!(ver, Reading::Value(_)) {
+                self.cached_mihomo_version = Some((fp, ver.clone()));
+            } else {
+                self.cached_mihomo_version = None;
+            }
+            snapshot.mihomo_version = ver;
+        } else {
+            self.cached_mihomo_version = None;
+            snapshot.mihomo_version = match clash::installed_version(ctx) {
+                Ok(Some(version)) => Reading::Value(version),
+                Ok(None) => Reading::NotApplicable,
+                Err(error) => Reading::Unavailable(error.to_string()),
+            };
+        }
+    }
 }
 
+#[cfg(test)]
 fn fill_mihomo(snapshot: &mut LocalSnapshot, ctx: &Context) {
-    snapshot.mihomo_state = Reading::from_result(clash::state(ctx));
-    snapshot.mihomo_version = match clash::installed_version(ctx) {
-        Ok(Some(version)) => Reading::Value(version),
-        Ok(None) => Reading::NotApplicable,
-        Err(error) => Reading::Unavailable(error.to_string()),
-    };
+    let mut sampler = Sampler::new();
+    sampler.fill_mihomo_cached(snapshot, ctx);
 }
 
 fn optional(value: Option<String>, name: &str) -> Reading<String> {
@@ -473,6 +542,7 @@ fn query_public(ctx: &Context) -> PublicSnapshot {
 /// Local sampling never waits for public IP requests. Public queries require an explicit UI action.
 pub struct Monitor {
     state: Arc<Mutex<Snapshot>>,
+    generation: Arc<AtomicU64>,
     refresh: Sender<()>,
     public: SyncSender<()>,
     stop: Arc<AtomicBool>,
@@ -482,11 +552,13 @@ pub struct Monitor {
 impl Monitor {
     pub fn start(ctx: &Context) -> Self {
         let state = Arc::new(Mutex::new(Snapshot::default()));
+        let generation = Arc::new(AtomicU64::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let querying = Arc::new(AtomicBool::new(false));
         let (refresh, receive) = mpsc::channel();
         let (public, public_receive) = mpsc::sync_channel(1);
         let local_state = state.clone();
+        let local_gen = generation.clone();
         let local_stop = stop.clone();
         let mut local_probe = ctx.clone();
         local_probe.cancel = stop.clone();
@@ -508,6 +580,7 @@ impl Monitor {
                 state.cpu_history.clear();
                 state.cpu_history.extend(&cpu_history);
                 drop(state);
+                local_gen.fetch_add(1, Ordering::Release);
                 let wait = if warmup {
                     sysinfo::MINIMUM_CPU_UPDATE_INTERVAL.max(Duration::from_millis(250))
                 } else {
@@ -520,6 +593,7 @@ impl Monitor {
             }
         });
         let public_state = state.clone();
+        let public_gen = generation.clone();
         let public_stop = stop.clone();
         let pending = querying.clone();
         let mut probe = ctx.clone();
@@ -538,6 +612,7 @@ impl Monitor {
                         } else {
                             return;
                         }
+                        public_gen.fetch_add(1, Ordering::Release);
                         pending.store(false, Ordering::SeqCst);
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => (),
@@ -547,6 +622,7 @@ impl Monitor {
         });
         Self {
             state,
+            generation,
             refresh,
             public,
             stop,
@@ -559,6 +635,16 @@ impl Monitor {
             .lock()
             .map(|s| s.clone())
             .map_err(|e| Error::new("error.io", e))
+    }
+    /// Clone the latest snapshot only when the background monitor has published a newer generation.
+    pub fn snapshot_if_changed(&self, seen: &mut u64) -> Result<Option<Snapshot>> {
+        let current = self.generation.load(Ordering::Acquire);
+        if current == *seen {
+            return Ok(None);
+        }
+        let snap = self.snapshot()?;
+        *seen = current;
+        Ok(Some(snap))
     }
     pub fn refresh(&self) {
         let _ = self.refresh.send(());
@@ -576,6 +662,7 @@ impl Monitor {
                 updated: None,
             };
         }
+        self.generation.fetch_add(1, Ordering::Release);
         self.public.try_send(()).map_err(|e| {
             self.querying.store(false, Ordering::SeqCst);
             Error::new("error.io", e)
@@ -1072,5 +1159,76 @@ mod tests {
         assert_eq!(snapshot.bbr_available, Reading::Value(false));
         assert_eq!(snapshot.tcp_configured, Reading::Value(false));
         assert!(matches!(snapshot.qdisc, Reading::Unavailable(_)));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sampler_caches_mihomo_version_until_binary_changes() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        fs::create_dir_all(ctx.paths.clash_binary.parent().unwrap()).unwrap();
+        let calls = temp.path().join("calls");
+        fs::write(
+            &ctx.paths.clash_binary,
+            format!(
+                "#!/bin/sh\nprintf x >> '{}'\nprintf 'Mihomo Meta v1.19.1 linux amd64\\n'\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&ctx.paths.clash_binary, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut sampler = Sampler::new();
+        let first = sampler.sample(&ctx);
+        let second = sampler.sample(&ctx);
+        assert_eq!(first.mihomo_version, Reading::Value("v1.19.1".into()));
+        assert_eq!(second.mihomo_version, Reading::Value("v1.19.1".into()));
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap().len(),
+            1,
+            "unchanged binary should not respawn mihomo -v on subsequent samples"
+        );
+
+        // Replacing the binary atomically invalidates the fingerprint cache.
+        let replacement = temp.path().join("mihomo.new");
+        fs::write(
+            &replacement,
+            format!(
+                "#!/bin/sh\nprintf x >> '{}'\nprintf 'Mihomo Meta v1.19.99 linux amd64\\n'\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::rename(&replacement, &ctx.paths.clash_binary).unwrap();
+
+        let third = sampler.sample(&ctx);
+        assert_eq!(third.mihomo_version, Reading::Value("v1.19.99".into()));
+        assert_eq!(fs::read_to_string(&calls).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn monitor_snapshot_if_changed_skips_redundant_clones() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        let monitor = Monitor::start(&ctx);
+        let mut seen = 0u64;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let first = loop {
+            if let Some(snap) = monitor.snapshot_if_changed(&mut seen).unwrap() {
+                break snap;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "monitor did not publish initial snapshot"
+            );
+            thread::sleep(Duration::from_millis(15));
+        };
+        assert!(first.local.updated.is_some());
+        assert!(seen >= 1);
+        // Immediate second check without new publication returns None (zero clone).
+        assert!(monitor.snapshot_if_changed(&mut seen).unwrap().is_none());
+        drop(monitor);
     }
 }

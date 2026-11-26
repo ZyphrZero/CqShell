@@ -16,7 +16,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver, Sender, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -25,6 +25,15 @@ use std::{
 const POLL_INTERVAL: Duration = Duration::from_millis(2500);
 const STATS_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_SLEEP_AFTER: Duration = Duration::from_secs(10);
+const MONITOR_EVENT_QUEUE_CAP: usize = 32;
+const LOG_EVENT_QUEUE_CAP: usize = 128;
+const LOG_LINE_QUEUE_CAP: usize = 512;
+
+/// Non-blocking bounded send: drops stale updates when the UI is paused (preventing unbounded
+/// memory growth) and reports `false` once the receiver has been dropped.
+fn push_bounded<T>(tx: &SyncSender<T>, item: T) -> bool {
+    !matches!(tx.try_send(item), Err(TrySendError::Disconnected(_)))
+}
 
 #[derive(Debug)]
 pub enum MonitorCmd {
@@ -69,7 +78,7 @@ pub struct DockerMonitor {
 impl DockerMonitor {
     pub fn start(ctx: &Context) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<MonitorCmd>();
-        let (evt_tx, evt_rx) = mpsc::channel::<DockerEvent>();
+        let (evt_tx, evt_rx) = mpsc::sync_channel::<DockerEvent>(MONITOR_EVENT_QUEUE_CAP);
         let ctx = ctx.clone();
 
         let handle = thread::spawn(move || {
@@ -82,6 +91,9 @@ impl DockerMonitor {
             let mut last_stats = Instant::now() - STATS_INTERVAL;
 
             loop {
+                if ctx.cancel.load(Ordering::SeqCst) {
+                    break;
+                }
                 let wait = if active {
                     Duration::from_millis(120)
                 } else {
@@ -92,6 +104,9 @@ impl DockerMonitor {
                 let mut shutdown = false;
 
                 let first = cmd_rx.recv_timeout(wait);
+                if matches!(first, Err(mpsc::RecvTimeoutError::Disconnected)) {
+                    break;
+                }
                 let mut batch = Vec::new();
                 if let Ok(c) = first {
                     batch.push(c);
@@ -123,10 +138,14 @@ impl DockerMonitor {
                             force = true;
                         }
                         MonitorCmd::RefreshOnce => {
-                            let next = client::fetch_snapshot(&ctx, tab, &last_snap);
+                            let next =
+                                client::fetch_snapshot_with_options(&ctx, tab, &last_snap, true);
                             last_snap = next.clone();
                             last_poll = Instant::now();
-                            let _ = evt_tx.send(DockerEvent::Snapshot(Box::new(next)));
+                            if !push_bounded(&evt_tx, DockerEvent::Snapshot(Box::new(next))) {
+                                shutdown = true;
+                                break;
+                            }
                         }
                         MonitorCmd::EnableStats(on) => {
                             if on && !stats_enabled {
@@ -137,15 +156,25 @@ impl DockerMonitor {
                         MonitorCmd::FetchContainerInspect { id, running } => {
                             let result =
                                 client::fetch_container_inspect(&ctx, &id, running).map(Box::new);
-                            let _ = evt_tx.send(DockerEvent::ContainerInspect { id, result });
+                            if !push_bounded(&evt_tx, DockerEvent::ContainerInspect { id, result })
+                            {
+                                shutdown = true;
+                                break;
+                            }
                         }
                         MonitorCmd::FetchImageInspect { id } => {
                             let result = client::fetch_image_inspect(&ctx, &id).map(Box::new);
-                            let _ = evt_tx.send(DockerEvent::ImageInspect { id, result });
+                            if !push_bounded(&evt_tx, DockerEvent::ImageInspect { id, result }) {
+                                shutdown = true;
+                                break;
+                            }
                         }
                         MonitorCmd::FetchComposeYaml { path } => {
                             let result = client::read_compose_file(&path);
-                            let _ = evt_tx.send(DockerEvent::ComposeYaml { path, result });
+                            if !push_bounded(&evt_tx, DockerEvent::ComposeYaml { path, result }) {
+                                shutdown = true;
+                                break;
+                            }
                         }
                         MonitorCmd::LeaveDocker => {
                             if left_at.is_none() {
@@ -157,7 +186,7 @@ impl DockerMonitor {
                         }
                     }
                 }
-                if shutdown {
+                if shutdown || ctx.cancel.load(Ordering::SeqCst) {
                     break;
                 }
 
@@ -174,20 +203,25 @@ impl DockerMonitor {
 
                 let now = Instant::now();
                 if force || now.duration_since(last_poll) >= POLL_INTERVAL {
-                    let next = client::fetch_snapshot(&ctx, tab, &last_snap);
+                    let next = client::fetch_snapshot_with_options(&ctx, tab, &last_snap, force);
                     last_snap = next.clone();
                     last_poll = Instant::now();
-                    let _ = evt_tx.send(DockerEvent::Snapshot(Box::new(next)));
+                    if !push_bounded(&evt_tx, DockerEvent::Snapshot(Box::new(next))) {
+                        break;
+                    }
                 }
 
                 if stats_enabled
+                    && !ctx.cancel.load(Ordering::SeqCst)
                     && last_snap.availability.is_ready()
                     && last_snap.running_containers() > 0
                     && Instant::now().duration_since(last_stats) >= STATS_INTERVAL
                 {
                     last_stats = Instant::now();
-                    if let Ok(stats) = client::fetch_stats(&ctx) {
-                        let _ = evt_tx.send(DockerEvent::Stats(stats));
+                    if let Ok(stats) = client::fetch_stats(&ctx)
+                        && !push_bounded(&evt_tx, DockerEvent::Stats(stats))
+                    {
+                        break;
                     }
                 }
             }
@@ -252,7 +286,7 @@ impl LogStreamer {
     pub fn start(ctx: &Context, target: LogTarget, tail: usize) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = stop.clone();
-        let (tx, rx) = mpsc::channel::<LogStreamEvent>();
+        let (tx, rx) = mpsc::sync_channel::<LogStreamEvent>(LOG_EVENT_QUEUE_CAP);
         let ctx = ctx.clone();
         let target_clone = target.clone();
 
@@ -262,7 +296,8 @@ impl LogStreamer {
             let args: Vec<String> = match &target_clone {
                 LogTarget::Container { id } => {
                     if !valid_token(id) {
-                        let _ = tx.send(LogStreamEvent::Ended(Some("invalid container id".into())));
+                        let _ =
+                            tx.try_send(LogStreamEvent::Ended(Some("invalid container id".into())));
                         return;
                     }
                     vec![
@@ -279,7 +314,7 @@ impl LogStreamer {
                     config_files,
                 } => {
                     if !valid_token(project) || config_files.iter().any(|f| !valid_token(f)) {
-                        let _ = tx.send(LogStreamEvent::Ended(Some(
+                        let _ = tx.try_send(LogStreamEvent::Ended(Some(
                             "invalid compose log target".into(),
                         )));
                         return;
@@ -324,24 +359,25 @@ impl LogStreamer {
             let mut child = match crate::runtime::retry_executable_busy(&ctx, || cmd.spawn()) {
                 Ok(c) => c,
                 Err(err) => {
-                    let _ = tx.send(LogStreamEvent::Ended(Some(err.to_string())));
+                    let _ = tx.try_send(LogStreamEvent::Ended(Some(err.to_string())));
                     return;
                 }
             };
 
             let stdout = child.stdout.take();
             let stderr = child.stderr.take();
-            let (line_tx, line_rx) = mpsc::channel::<DockerLogEntry>();
+            let (line_tx, line_rx) = mpsc::sync_channel::<DockerLogEntry>(LOG_LINE_QUEUE_CAP);
 
             let spawn_reader = |pipe: Option<Box<dyn std::io::Read + Send>>,
-                                ltx: Sender<DockerLogEntry>,
-                                flag: Arc<AtomicBool>| {
+                                ltx: SyncSender<DockerLogEntry>,
+                                flag: Arc<AtomicBool>,
+                                cancel: Arc<AtomicBool>| {
                 thread::spawn(move || {
                     let Some(pipe) = pipe else { return };
                     let mut reader = BufReader::new(pipe);
                     let mut line = String::new();
                     loop {
-                        if flag.load(Ordering::SeqCst) {
+                        if flag.load(Ordering::SeqCst) || cancel.load(Ordering::SeqCst) {
                             break;
                         }
                         line.clear();
@@ -349,7 +385,7 @@ impl LogStreamer {
                             Ok(0) => break,
                             Ok(_) => {
                                 let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
-                                if ltx.send(parse_log_line(trimmed)).is_err() {
+                                if !push_bounded(&ltx, parse_log_line(trimmed)) {
                                     break;
                                 }
                             }
@@ -363,16 +399,18 @@ impl LogStreamer {
                 stdout.map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
                 line_tx.clone(),
                 stop_flag.clone(),
+                ctx.cancel.clone(),
             );
             let r2 = spawn_reader(
                 stderr.map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
                 line_tx,
                 stop_flag.clone(),
+                ctx.cancel.clone(),
             );
 
             let mut exited = None;
             loop {
-                if stop_flag.load(Ordering::SeqCst) {
+                if stop_flag.load(Ordering::SeqCst) || ctx.cancel.load(Ordering::SeqCst) {
                     terminate_stream_child(&mut child);
                     let _ = child.wait();
                     break;
@@ -386,7 +424,7 @@ impl LogStreamer {
                             Err(_) => break,
                         }
                     }
-                    if tx.send(LogStreamEvent::Batch(batch)).is_err() {
+                    if !push_bounded(&tx, LogStreamEvent::Batch(batch)) {
                         terminate_stream_child(&mut child);
                         let _ = child.wait();
                         break;
@@ -405,10 +443,10 @@ impl LogStreamer {
                     tail_batch.push(entry);
                 }
                 if !tail_batch.is_empty() {
-                    let _ = tx.send(LogStreamEvent::Batch(tail_batch));
+                    let _ = tx.try_send(LogStreamEvent::Batch(tail_batch));
                 }
                 let diag = (!status.success()).then(|| format!("docker logs exited with {status}"));
-                let _ = tx.send(LogStreamEvent::Ended(diag));
+                let _ = tx.try_send(LogStreamEvent::Ended(diag));
             }
         });
 
@@ -462,4 +500,21 @@ fn terminate_stream_child(child: &mut Child) {
         }
     }
     let _ = child.kill();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_channel_drops_stale_events_instead_of_growing_or_blocking() {
+        let (tx, rx) = mpsc::sync_channel::<usize>(4);
+        for i in 0..100 {
+            assert!(push_bounded(&tx, i));
+        }
+        let drained: Vec<_> = rx.try_iter().collect();
+        assert_eq!(drained, vec![0, 1, 2, 3]);
+        drop(rx);
+        assert!(!push_bounded(&tx, 101));
+    }
 }

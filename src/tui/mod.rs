@@ -66,7 +66,11 @@ use ratatui::DefaultTerminal;
 use state::{Effect, Phase, Task, category_order_from_ids};
 use std::{
     io::{self, Write},
-    sync::{atomic::Ordering, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -96,6 +100,259 @@ fn perform(ctx: &Context, task: &Task) -> actions::BatchReport {
 const MAX_DRAIN_EVENTS: usize = 4096;
 const MAX_COALESCED_EVENTS: usize = 256;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollReady {
+    Ready,
+    Timeout,
+    Disconnected,
+}
+
+/// Detect whether the interactive terminal on stdin has been hung up or closed (e.g. SSH disconnect
+/// where `/dev/pts/N` becomes `(deleted)`). Must be checked before entering `crossterm::event::poll`
+/// or `event::read`, because `crossterm 0.29`'s `mio` source busy-spins forever on `read() == 0` /
+/// `EIO` from a hung-up PTY.
+#[cfg(unix)]
+fn tty_disconnected() -> bool {
+    let mut pfd = libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    loop {
+        let rc = unsafe { libc::poll(&mut pfd, 1, 0) };
+        if rc < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return true;
+        }
+        if rc == 0 {
+            return false;
+        }
+        if pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            return true;
+        }
+        if pfd.revents & libc::POLLIN != 0 {
+            let mut avail: libc::c_int = 0;
+            let ioctl_rc =
+                unsafe { libc::ioctl(libc::STDIN_FILENO, libc::FIONREAD as _, &mut avail) };
+            if ioctl_rc == 0 && avail == 0 {
+                return true;
+            }
+            if ioctl_rc < 0 {
+                let err = io::Error::last_os_error();
+                if matches!(
+                    err.raw_os_error(),
+                    Some(libc::EIO | libc::EBADF | libc::ENODEV | libc::ENXIO)
+                ) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+}
+
+#[cfg(not(unix))]
+fn tty_disconnected() -> bool {
+    false
+}
+
+/// Wait for a terminal input event without ever blocking inside `crossterm`'s `mio` poll loop on
+/// Unix, so a PTY hangup (`POLLHUP`) or `SIGHUP` (`cancel`) wakes immediately instead of spinning.
+fn poll_terminal_event(timeout: Duration, cancel: &AtomicBool) -> io::Result<PollReady> {
+    if cancel.load(Ordering::SeqCst) || tty_disconnected() {
+        return Ok(PollReady::Disconnected);
+    }
+    // Flush any already-parsed events buffered inside crossterm's internal queue.
+    if event::poll(Duration::ZERO)? {
+        return Ok(PollReady::Ready);
+    }
+    #[cfg(unix)]
+    {
+        if cancel.load(Ordering::SeqCst) || tty_disconnected() {
+            return Ok(PollReady::Disconnected);
+        }
+        let ms = timeout.as_millis().min(i32::MAX as u128) as libc::c_int;
+        let mut pfd = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut pfd, 1, ms) };
+        if rc < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                return Ok(if cancel.load(Ordering::SeqCst) || tty_disconnected() {
+                    PollReady::Disconnected
+                } else {
+                    PollReady::Timeout
+                });
+            }
+            return Err(err);
+        }
+        if rc == 0 {
+            return Ok(if cancel.load(Ordering::SeqCst) || tty_disconnected() {
+                PollReady::Disconnected
+            } else {
+                PollReady::Timeout
+            });
+        }
+        if pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 || tty_disconnected()
+        {
+            return Ok(PollReady::Disconnected);
+        }
+        if event::poll(Duration::ZERO)? {
+            Ok(PollReady::Ready)
+        } else {
+            Ok(PollReady::Timeout)
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        if event::poll(timeout)? {
+            Ok(PollReady::Ready)
+        } else {
+            Ok(PollReady::Timeout)
+        }
+    }
+}
+
+/// Zero-CPU kernel-driven PTY hangup guard (`poll(STDIN, events=0)`).
+///
+/// Even if the PTY closes in the narrow window while the main thread is inside a third-party
+/// terminal query (`terminal-colorsaurus`, `cursor::position`, or `crossterm::event::read`),
+/// this thread wakes immediately on `POLLHUP`, flips `cancel`, waits for clean shutdown (giving
+/// any active transactional worker time to roll back), and forces `_exit(129)` if the main thread
+/// remains wedged inside an upstream busy-spin.
+#[cfg(unix)]
+struct HangupWatchdog {
+    stop_write: libc::c_int,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+#[cfg(unix)]
+impl HangupWatchdog {
+    fn start(cancel: Arc<AtomicBool>, worker_active: Arc<AtomicBool>) -> Option<Self> {
+        let mut fds = [0 as libc::c_int; 2];
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        for fd in fds {
+            unsafe {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags >= 0 {
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+        }
+        let stop_read = fds[0];
+        let stop_write = fds[1];
+        let handle = thread::spawn(move || {
+            let mut poll_fds = [
+                libc::pollfd {
+                    fd: libc::STDIN_FILENO,
+                    events: 0, // Wakes ONLY on POLLHUP | POLLERR | POLLNVAL (zero idle wakeups).
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: stop_read,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let mut hung_up = false;
+            loop {
+                let rc = unsafe { libc::poll(poll_fds.as_mut_ptr(), 2, -1) };
+                if rc < 0 {
+                    if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    break;
+                }
+                if poll_fds[1].revents
+                    & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL)
+                    != 0
+                {
+                    break;
+                }
+                if poll_fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                    hung_up = true;
+                    break;
+                }
+            }
+            if hung_up {
+                cancel.store(true, Ordering::SeqCst);
+                let hangup_at = Instant::now();
+                let mut idle_since: Option<Instant> = None;
+                let mut stop_pfd = libc::pollfd {
+                    fd: stop_read,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                loop {
+                    let rc = unsafe { libc::poll(&mut stop_pfd, 1, 100) };
+                    if rc > 0
+                        && stop_pfd.revents
+                            & (libc::POLLIN | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL)
+                            != 0
+                    {
+                        break;
+                    }
+                    if worker_active.load(Ordering::SeqCst) {
+                        idle_since = None;
+                        if hangup_at.elapsed() >= Duration::from_secs(60) {
+                            unsafe { libc::_exit(129) };
+                        }
+                    } else {
+                        let started = *idle_since.get_or_insert_with(Instant::now);
+                        if started.elapsed() >= Duration::from_millis(1500) {
+                            unsafe { libc::_exit(129) };
+                        }
+                    }
+                }
+            }
+            unsafe {
+                libc::close(stop_read);
+            }
+        });
+        Some(Self {
+            stop_write,
+            handle: Some(handle),
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HangupWatchdog {
+    fn drop(&mut self) {
+        let byte = [1u8; 1];
+        unsafe {
+            let _ = libc::write(self.stop_write, byte.as_ptr().cast(), 1);
+            libc::close(self.stop_write);
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct HangupWatchdog;
+
+#[cfg(not(unix))]
+impl HangupWatchdog {
+    fn start(_cancel: Arc<AtomicBool>, _worker_active: Arc<AtomicBool>) -> Option<Self> {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+impl Drop for HangupWatchdog {
+    fn drop(&mut self) {}
+}
+
 fn flush_tty_input() {
     #[cfg(unix)]
     unsafe {
@@ -105,10 +362,13 @@ fn flush_tty_input() {
 
 fn drain_terminal_events() {
     for _ in 0..MAX_DRAIN_EVENTS {
+        if tty_disconnected() {
+            return;
+        }
         if !event::poll(Duration::ZERO).unwrap_or(false) {
             break;
         }
-        if event::read().is_err() {
+        if tty_disconnected() || event::read().is_err() {
             break;
         }
     }
@@ -147,6 +407,10 @@ fn enter() -> io::Result<()> {
 }
 
 fn leave() -> io::Result<()> {
+    if tty_disconnected() {
+        let _ = disable_raw_mode_retry();
+        return Ok(());
+    }
     // Disable mouse capture and leave the alternate screen while raw mode (ECHO off)
     // is still active so in-flight mouse packets are never echoed. DisableMouseCapture
     // is emitted both before and after LeaveAlternateScreen for terminals that track
@@ -180,9 +444,14 @@ struct ExternalSessionGuard<'a> {
 
 impl Drop for ExternalSessionGuard<'_> {
     fn drop(&mut self) {
+        if tty_disconnected() {
+            return;
+        }
         let _ = enter();
         drain_terminal_events();
-        let _ = self.terminal.clear();
+        if !tty_disconnected() {
+            let _ = self.terminal.clear();
+        }
     }
 }
 
@@ -248,10 +517,14 @@ fn run_plain_view(
     title: &str,
     content: &str,
     i18n: &crate::i18n::I18n,
+    cancel: &AtomicBool,
 ) -> io::Result<()> {
     struct MouseRestoreGuard;
     impl Drop for MouseRestoreGuard {
         fn drop(&mut self) {
+            if tty_disconnected() {
+                return;
+            }
             drain_terminal_events();
             let mut stdout = io::stdout();
             let _ = execute!(stdout, EnableMouseCapture, crossterm::cursor::Hide)
@@ -311,8 +584,10 @@ fn run_plain_view(
         }
         out.flush()?;
 
-        if !event::poll(Duration::from_millis(250))? {
-            continue;
+        match poll_terminal_event(Duration::from_millis(250), cancel)? {
+            PollReady::Timeout => continue,
+            PollReady::Disconnected => break,
+            PollReady::Ready => {}
         }
         if let Input::Key(key) = event::read()? {
             if key.kind != KeyEventKind::Press {
@@ -365,7 +640,9 @@ fn run_plain_view(
     }
 
     drop(_restore);
-    terminal.clear()?;
+    if !tty_disconnected() {
+        terminal.clear()?;
+    }
     Ok(())
 }
 
@@ -441,7 +718,15 @@ pub fn run_with_target(
     target: LaunchTarget,
 ) -> Result<()> {
     let category_order = category_order_from_ids(&preferences.category_order)?;
+    let worker_active = Arc::new(AtomicBool::new(false));
+    let _hangup_watchdog = HangupWatchdog::start(ctx.cancel.clone(), worker_active.clone());
+    if ctx.cancel.load(Ordering::SeqCst) || tty_disconnected() {
+        return Ok(());
+    }
     let background = detect::detect(preferences.detect_background.unwrap_or(true));
+    if ctx.cancel.load(Ordering::SeqCst) || tty_disconnected() {
+        return Ok(());
+    }
 
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -454,6 +739,9 @@ pub fn run_with_target(
 
     // Drain any residual terminal query replies before entering the interactive loop.
     drain_terminal_events();
+    if ctx.cancel.load(Ordering::SeqCst) || tty_disconnected() {
+        return Ok(());
+    }
 
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(io::stdout()))?;
@@ -480,18 +768,28 @@ pub fn run_with_target(
         app.open_docker(tab, fullscreen, true);
     }
 
+    let mut snapshot_gen = 0u64;
+    let mut dirty = true;
+    let mut last_draw = Instant::now();
     let result = (|| {
         loop {
-            app.receive();
-            app.snapshot = monitor.snapshot()?;
+            if app.receive() {
+                dirty = true;
+            }
+            if let Some(snap) = monitor.snapshot_if_changed(&mut snapshot_gen)? {
+                app.snapshot = snap;
+                dirty = true;
+            }
 
             // Drain Docker background monitor & log stream events
             for evt in docker_monitor.drain() {
                 app.docker.apply_event(evt);
+                dirty = true;
             }
             if let Some(streamer) = &log_streamer {
                 for evt in streamer.drain() {
                     app.docker.apply_log_event(evt);
+                    dirty = true;
                 }
             }
 
@@ -504,6 +802,7 @@ pub fn run_with_target(
                     docker_monitor.send(MonitorCmd::RefreshOnce);
                 }
                 app.completed_since_refresh = false;
+                dirty = true;
             }
 
             // Sync lazy Docker monitor wake/sleep, tab switches, stats, debounced inspect, and log stream
@@ -544,23 +843,57 @@ pub fn run_with_target(
                 if let Some(target) = desired_logs {
                     log_streamer = Some(LogStreamer::start(&app.ctx, target, 200));
                 }
+                dirty = true;
             }
 
+            worker_active.store(app.worker.is_some(), Ordering::SeqCst);
             if (app.exit_requested || app.ctx.cancel.load(Ordering::SeqCst)) && app.worker.is_none()
             {
                 break;
             }
+            if tty_disconnected() {
+                break;
+            }
             if let Ok(sz) = terminal.size() {
-                app.viewport = ratatui::layout::Rect::new(0, 0, sz.width, sz.height);
+                let next_vp = ratatui::layout::Rect::new(0, 0, sz.width, sz.height);
+                if next_vp != app.viewport {
+                    app.viewport = next_vp;
+                    dirty = true;
+                }
             }
-            app.tick(Instant::now());
-            terminal.draw(|frame| app.draw(frame))?;
+            let now = Instant::now();
+            let had_toast = app.toast.is_some();
+            app.tick(now);
+            if had_toast && app.toast.is_none() {
+                dirty = true;
+            }
+            // Skip redundant full-frame redraws when idle with no animations, spinners, or state
+            // changes; refresh relative age readouts at most once per second.
+            let age_tick = (app.nav == state::NavTarget::Overview || app.is_docker_view())
+                && now.saturating_duration_since(last_draw) >= Duration::from_secs(1);
+            if dirty || age_tick || app.needs_continuous_redraw() {
+                if let Err(err) = terminal.draw(|frame| app.draw(frame)) {
+                    if tty_disconnected() || app.ctx.cancel.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    return Err(err.into());
+                }
+                dirty = false;
+                last_draw = now;
+            }
 
-            if !event::poll(app.frame_interval())? {
-                continue;
+            match poll_terminal_event(app.frame_interval(), &app.ctx.cancel)? {
+                PollReady::Timeout => continue,
+                PollReady::Disconnected => break,
+                PollReady::Ready => {}
             }
+            dirty = true;
             let first = event::read()?;
+            let cancel_flag = app.ctx.cancel.clone();
             let effect = drain_input_batch(&mut app, first, || {
+                if tty_disconnected() || cancel_flag.load(Ordering::SeqCst) {
+                    return Ok(None);
+                }
                 if event::poll(Duration::ZERO)? {
                     event::read().map(Some)
                 } else {
@@ -569,7 +902,11 @@ pub fn run_with_target(
             })?;
             let outcome = match effect {
                 Ok(Effect::Quit) => break,
-                Ok(Effect::Run(task)) => app.start_task(&mut terminal, task),
+                Ok(Effect::Run(task)) => {
+                    let res = app.start_task(&mut terminal, task);
+                    worker_active.store(app.worker.is_some(), Ordering::SeqCst);
+                    res
+                }
                 Ok(Effect::Refresh) => {
                     app.refreshing = Some(Instant::now());
                     monitor.refresh();
@@ -603,10 +940,14 @@ pub fn run_with_target(
                 }
                 Ok(Effect::PublicIp) => monitor.query_public(),
                 Ok(Effect::Copy(text)) => clipboard::copy(&text).map(|_| ()).map_err(Error::from),
-                Ok(Effect::PlainView { title, content }) => {
-                    run_plain_view(&mut terminal, &title, &content, &app.ctx.i18n)
-                        .map_err(Error::from)
-                }
+                Ok(Effect::PlainView { title, content }) => run_plain_view(
+                    &mut terminal,
+                    &title,
+                    &content,
+                    &app.ctx.i18n,
+                    &app.ctx.cancel,
+                )
+                .map_err(Error::from),
                 Ok(Effect::None) => Ok(()),
                 Err(error) => Err(error),
             };
@@ -619,8 +960,10 @@ pub fn run_with_target(
 
     // Stop terminal mouse reporting immediately before joining background workers/monitors,
     // while keeping raw mode (ECHO off) active until TerminalGuard drops last.
-    let _ = disable_mouse_capture();
-    drain_terminal_events();
+    if !tty_disconnected() {
+        let _ = disable_mouse_capture();
+        drain_terminal_events();
+    }
 
     if let Some(streamer) = log_streamer.take() {
         streamer.stop();
@@ -628,15 +971,20 @@ pub fn run_with_target(
     if let Some(worker) = app.worker.take() {
         app.ctx.cancel.store(true, Ordering::SeqCst);
         drop(app.confirmation.take());
-        worker
+        let join_res = worker
             .join()
-            .map_err(|_| Error::new("error.io", "worker panicked"))?;
+            .map_err(|_| Error::new("error.io", "worker panicked"));
+        worker_active.store(false, Ordering::SeqCst);
+        join_res?;
+    } else {
+        worker_active.store(false, Ordering::SeqCst);
     }
     drop(app);
     drop(docker_monitor);
     drop(monitor);
     drop(terminal);
     drop(_guard);
+    drop(_hangup_watchdog);
     result
 }
 

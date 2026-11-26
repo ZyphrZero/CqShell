@@ -372,6 +372,7 @@ pub fn mixin_reset(ctx: &Context) -> Result<()> {
         ctx,
         &[
             (ctx.paths.clash_mixin.clone(), None),
+            (socks::auth_path(ctx), None),
             (
                 ctx.paths.clash_runtime.clone(),
                 Some(storage::Saved::new(&runtime, 0o600)),

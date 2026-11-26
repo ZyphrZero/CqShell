@@ -139,6 +139,69 @@ pub(super) fn github_proxy(proxy: Option<&str>, i18n: &I18n) -> Related {
     }
 }
 
+/// Live status summary for `clash.socks.*` actions in the Mihomo workbench using cached config.
+pub(super) fn clash_socks(
+    cfg: Option<&crate::ops::clash::socks::SocksConfig>,
+    snapshot: &Snapshot,
+    i18n: &I18n,
+) -> Related {
+    let public_ip = value(&snapshot.public.ipv4).map(String::as_str);
+    match cfg {
+        Some(cfg) if cfg.enabled => {
+            let endpoint = format!(
+                "{}:{}",
+                crate::ops::clash::socks::format_host_bracketed(&cfg.listen),
+                cfg.port
+            );
+            let mode_badge = if cfg.outbound == "direct" {
+                "DIRECT"
+            } else {
+                "RULE"
+            };
+            let udp_badge = if cfg.udp { "UDP" } else { "TCP" };
+            let auth_summary = if cfg.has_auth {
+                lit(&format!(
+                    "{} ({})",
+                    i18n.text("status.enabled"),
+                    cfg.username.as_deref().unwrap_or("cqs")
+                ))
+            } else {
+                unlit(i18n.text("ui.socks_preview_auth_loopback"))
+            };
+            let host = cfg.display_host(public_ip);
+            let uri = cfg.uri_template("socks5h", "<secret>", &host);
+            Related {
+                tag: vec![
+                    Segment::new(lit(&endpoint), Style::default()),
+                    Segment::new(mode_badge.to_owned(), Style::default()),
+                ],
+                state: vec![
+                    line(
+                        i18n,
+                        "dash.socks_listener",
+                        lit(&format!("{endpoint} · {udp_badge} · {mode_badge}")),
+                    ),
+                    line(i18n, "dash.socks_auth", auth_summary),
+                    line(i18n, "dash.socks_uri", uri),
+                ],
+                matches_current: never,
+            }
+        }
+        _ => Related {
+            tag: vec![Segment::new(
+                unlit(i18n.text("status.disabled")),
+                Style::default(),
+            )],
+            state: vec![line(
+                i18n,
+                "dash.socks_listener",
+                unlit(i18n.text("status.disabled")),
+            )],
+            matches_current: never,
+        },
+    }
+}
+
 /// The Related_Reading of `spec`, or `None` for an Action the table does not list. `now` is
 /// the frame clock, which dates the public lookup.
 pub(super) fn related(

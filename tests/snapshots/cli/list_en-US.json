@@ -989,6 +989,127 @@
   },
   {
     "available": true,
+    "description": "Inspect the dedicated SOCKS5 / SOCKS5h inbound listener state, bind address and port, UDP relay, outbound routing, redacted URI templates and private credential file path.",
+    "group": "clash",
+    "id": "clash.socks.status",
+    "interactive": false,
+    "label": "SOCKS5 / 5h inbound status",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Visually configure the dedicated SOCKS5 / SOCKS5h inbound listener (port, listen IP, UDP, direct or rule outbound, and enforced non-loopback authentication), with zero-downtime hot-reload when Mihomo is running with a controller.",
+    "group": "clash",
+    "id": "clash.socks.configure",
+    "interactive": false,
+    "label": "Configure SOCKS5 / 5h inbound",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "socks_enabled",
+        "required": true
+      },
+      {
+        "allow_custom": true,
+        "choices": [
+          "10808",
+          "21080",
+          "1080"
+        ],
+        "default": "10808",
+        "name": "socks_port",
+        "required": true
+      },
+      {
+        "allow_custom": true,
+        "choices": [
+          "0.0.0.0",
+          "::",
+          "127.0.0.1"
+        ],
+        "default": "0.0.0.0",
+        "name": "socks_listen",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "socks_udp",
+        "required": true
+      },
+      {
+        "choices": [
+          "direct",
+          "rule"
+        ],
+        "default": "direct",
+        "name": "socks_out",
+        "required": true
+      },
+      {
+        "choices": [
+          "auto",
+          "keep",
+          "off"
+        ],
+        "default": "auto",
+        "name": "socks_auth",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "cqs",
+        "name": "socks_user",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Generate a 24-character CSPRNG SOCKS5 password and atomically write it to Mixin and the 0600 private credential card (socks5.auth) without echoing secrets to logs.",
+    "group": "clash",
+    "id": "clash.socks.auth.generate",
+    "interactive": false,
+    "label": "Generate / rotate SOCKS5 password",
+    "mutates": true,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Load username:password (or password) from a chmod 0600 private file into the dedicated SOCKS5 / SOCKS5h listener and update socks5.auth.",
+    "group": "clash",
+    "id": "clash.socks.auth.set",
+    "interactive": false,
+    "label": "Set SOCKS5 credentials from file",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "secret_file",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "Read TUN settings, link state and process ownership.",
     "group": "clash",
     "id": "clash.tun.status",

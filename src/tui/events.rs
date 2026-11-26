@@ -1,11 +1,11 @@
 //! Keyboard and mouse event routing following the Overlay Priority Stack:
-//! Confirmation -> Loading -> Picker -> Form -> Notice -> Help -> Full Logs ->
-//! Command Palette -> Sidebar Overlay -> Theme Drawer -> Main Workspace.
+//! Confirmation -> Loading -> SocksSecret -> Picker -> Form -> PromptPreview -> DockerModal ->
+//! Notice -> Help -> Full Logs -> Command Palette -> Sidebar Overlay -> Theme Drawer -> Main Workspace.
 
 use super::{
     layout::{
         self, CommandPaletteGeometry, ConfirmationGeometry, FormGeometry, LayoutRegions,
-        PickerGeometry, PromptPreviewGeometry,
+        PickerGeometry, PromptPreviewGeometry, SocksSecretGeometry,
     },
     palette::{self, PaletteItem},
     selection::{self, DragSelection, TextPane},
@@ -43,6 +43,10 @@ impl App {
             }
             return Ok(Effect::None);
         }
+        // 2b. Transient SOCKS5 / 5h credential reveal modal (never written to task logs)
+        if self.socks_secret.is_some() {
+            return self.socks_secret_key(key);
+        }
         // 3. Form / Picker
         if self.form.as_ref().is_some_and(|form| form.picker.is_some()) {
             return self.picker_key(key);
@@ -77,24 +81,26 @@ impl App {
         }
         // 5. Help modal
         if self.help {
+            let max_s = super::render::help_max_scroll(self, self.viewport);
             match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'Q' | '?') | KeyCode::F(1) => {
                     self.help = false;
                     self.help_scroll = 0;
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    self.help_scroll = self.help_scroll.saturating_sub(1);
+                    self.help_scroll = self.help_scroll.min(max_s).saturating_sub(1);
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.help_scroll = self.help_scroll.saturating_add(1).min(16);
+                    self.help_scroll = self.help_scroll.saturating_add(1).min(max_s);
                 }
                 KeyCode::PageUp => {
-                    self.help_scroll = self.help_scroll.saturating_sub(6);
+                    self.help_scroll = self.help_scroll.min(max_s).saturating_sub(6);
                 }
                 KeyCode::PageDown => {
-                    self.help_scroll = self.help_scroll.saturating_add(6).min(16);
+                    self.help_scroll = self.help_scroll.saturating_add(6).min(max_s);
                 }
                 KeyCode::Home => self.help_scroll = 0,
+                KeyCode::End => self.help_scroll = max_s,
                 _ => {}
             }
             return Ok(Effect::None);
@@ -274,6 +280,7 @@ impl App {
             }
             KeyCode::Char('t' | 'T') => self.open_theme_drawer(),
             KeyCode::Char('p' | 'P') if idle => return self.open_github_proxy_form(),
+            KeyCode::Char('S') => return self.open_socks_secret_modal(),
             KeyCode::Char('r' | 'R') => return Ok(Effect::Refresh),
             KeyCode::Char('n' | 'N') => return Ok(Effect::PublicIp),
             KeyCode::Char('g' | 'G') => {
@@ -384,12 +391,12 @@ impl App {
     }
 
     fn palette_key(&mut self, key: KeyEvent) -> Result<Effect> {
-        let specs = crate::actions::specs();
+        let specs = crate::actions::specs_slice();
         let results = {
             let pal = self.command_palette.as_ref().expect("open palette");
             palette::search(
                 &pal.query.text,
-                &specs,
+                specs,
                 &self.ctx.i18n,
                 &self.category_order,
                 &self.records,
@@ -574,6 +581,75 @@ impl App {
         Ok(Effect::None)
     }
 
+    fn socks_secret_key(&mut self, key: KeyEvent) -> Result<Effect> {
+        let max_s = super::render::socks_secret_max_scroll(self, self.viewport);
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'Q' | 'S') => {
+                self.close_socks_secret();
+            }
+            KeyCode::Char('1' | 'c' | 'C') => {
+                if let Some(modal) = &self.socks_secret {
+                    let uri = modal.creds.socks5h_uri.clone();
+                    return Ok(self.copy_socks_secret_field(uri, "ui.socks_secret_field_socks5h"));
+                }
+            }
+            KeyCode::Char('2') => {
+                if let Some(modal) = &self.socks_secret {
+                    let uri = modal.creds.socks5_uri.clone();
+                    return Ok(self.copy_socks_secret_field(uri, "ui.socks_secret_field_socks5"));
+                }
+            }
+            KeyCode::Char('3' | 'p' | 'P') => {
+                return Ok(self.copy_socks_secret_password());
+            }
+            KeyCode::Char('4') => {
+                if let Some(modal) = &self.socks_secret {
+                    let cmd = modal.creds.curl_cmd.clone();
+                    return Ok(self.copy_socks_secret_field(cmd, "ui.socks_secret_field_curl"));
+                }
+            }
+            KeyCode::Char('m' | 'M' | ' ') => {
+                if let Some(modal) = self.socks_secret.as_mut()
+                    && modal.creds.has_auth
+                {
+                    modal.show_password = !modal.show_password;
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(modal) = self.socks_secret.as_mut() {
+                    modal.scroll = modal.scroll.min(max_s).saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(modal) = self.socks_secret.as_mut() {
+                    modal.scroll = modal.scroll.saturating_add(1).min(max_s);
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(modal) = self.socks_secret.as_mut() {
+                    modal.scroll = modal.scroll.min(max_s).saturating_sub(6);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(modal) = self.socks_secret.as_mut() {
+                    modal.scroll = modal.scroll.saturating_add(6).min(max_s);
+                }
+            }
+            KeyCode::Home => {
+                if let Some(modal) = self.socks_secret.as_mut() {
+                    modal.scroll = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(modal) = self.socks_secret.as_mut() {
+                    modal.scroll = max_s;
+                }
+            }
+            _ => {}
+        }
+        Ok(Effect::None)
+    }
+
     fn form_key(&mut self, key: KeyEvent) -> Result<Effect> {
         if key.code == KeyCode::Esc {
             self.form = None;
@@ -581,6 +657,15 @@ impl App {
         }
         if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::CONTROL) {
             return self.submit_form();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('s' | 'S'))
+            && self
+                .form
+                .as_ref()
+                .is_some_and(|f| f.spec.id == "clash.socks.configure")
+        {
+            return self.open_socks_secret_modal();
         }
         let form = self.form.as_mut().expect("active form");
         let n = form.values.len();
@@ -956,6 +1041,57 @@ impl App {
             return Ok(Effect::None);
         }
 
+        // 2b. Transient SOCKS5 / 5h credential reveal modal
+        if let Some(modal) = &self.socks_secret {
+            let geom = SocksSecretGeometry::compute(
+                area,
+                &modal.creds,
+                modal.show_password,
+                &self.ctx.i18n,
+                self.theme.active.flags.ascii,
+            );
+            let max_s = super::render::socks_secret_max_scroll(self, area);
+            match event.kind {
+                MouseEventKind::ScrollUp => {
+                    if let Some(m) = self.socks_secret.as_mut() {
+                        m.scroll = m.scroll.min(max_s).saturating_sub(2);
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(m) = self.socks_secret.as_mut() {
+                        m.scroll = m.scroll.saturating_add(2).min(max_s);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if !geom.modal.contains(point) || geom.btn_close.contains(point) {
+                        self.close_socks_secret();
+                    } else if geom.btn_socks5h.contains(point) {
+                        let uri = modal.creds.socks5h_uri.clone();
+                        return Ok(
+                            self.copy_socks_secret_field(uri, "ui.socks_secret_field_socks5h")
+                        );
+                    } else if geom.btn_socks5.contains(point) {
+                        let uri = modal.creds.socks5_uri.clone();
+                        return Ok(
+                            self.copy_socks_secret_field(uri, "ui.socks_secret_field_socks5")
+                        );
+                    } else if geom.btn_password.contains(point) {
+                        return Ok(self.copy_socks_secret_password());
+                    } else if geom.btn_curl.contains(point) {
+                        let cmd = modal.creds.curl_cmd.clone();
+                        return Ok(self.copy_socks_secret_field(cmd, "ui.socks_secret_field_curl"));
+                    } else if geom.btn_mask.contains(point)
+                        && let Some(m) = self.socks_secret.as_mut()
+                        && m.creds.has_auth
+                    {
+                        m.show_password = !m.show_password;
+                    }
+                }
+                _ => {}
+            }
+            return Ok(Effect::None);
+        }
+
         // 3. Picker
         if self.form.as_ref().is_some_and(|f| f.picker.is_some()) {
             let (geom, picked, count) = {
@@ -1104,12 +1240,13 @@ impl App {
             return Ok(Effect::None);
         }
         if self.help {
+            let max_s = super::render::help_max_scroll(self, area);
             match event.kind {
                 MouseEventKind::ScrollUp => {
-                    self.help_scroll = self.help_scroll.saturating_sub(2);
+                    self.help_scroll = self.help_scroll.min(max_s).saturating_sub(2);
                 }
                 MouseEventKind::ScrollDown => {
-                    self.help_scroll = self.help_scroll.saturating_add(2).min(16);
+                    self.help_scroll = self.help_scroll.saturating_add(2).min(max_s);
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.help = false;
@@ -1146,12 +1283,12 @@ impl App {
 
         // 7. Command Palette
         if self.command_palette.is_some() {
-            let specs = crate::actions::specs();
+            let specs = crate::actions::specs_slice();
             let results = {
                 let pal = self.command_palette.as_ref().unwrap();
                 palette::search(
                     &pal.query.text,
-                    &specs,
+                    specs,
                     &self.ctx.i18n,
                     &self.category_order,
                     &self.records,

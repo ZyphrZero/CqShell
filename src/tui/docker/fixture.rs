@@ -714,5 +714,6 @@ pub(in crate::tui) fn fixture_docker_snapshot(now: Instant) -> DockerSnapshot {
         mem_history: BTreeMap::new(),
         updated: Some(now - Duration::from_secs(1)),
         last_error: None,
+        ..DockerSnapshot::default()
     }
 }

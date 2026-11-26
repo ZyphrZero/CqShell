@@ -82,6 +82,10 @@ impl App {
                 KeyCode::Char('S') => self.docker.reveal_secrets = !self.docker.reveal_secrets,
                 KeyCode::Char('y') => return Ok(self.docker_copy_current()),
                 KeyCode::Char('V' | 'M') => return Ok(self.docker_plain_view()),
+                KeyCode::Char('?') | KeyCode::F(1) => {
+                    self.help = true;
+                    self.help_scroll = 0;
+                }
                 _ => {}
             }
             return Ok(Effect::None);
@@ -571,6 +575,10 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => {
                 self.docker.logs.scroll = 0;
                 self.docker.logs.follow = true;
+            }
+            KeyCode::Char('?') | KeyCode::F(1) => {
+                self.help = true;
+                self.help_scroll = 0;
             }
             _ => {}
         }

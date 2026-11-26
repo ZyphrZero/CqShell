@@ -4,8 +4,9 @@ use crate::{
     runtime::{Context, Outcome, Step, StepState},
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -63,6 +64,10 @@ pub enum Kind {
     ClashDnsConfigure,
     ClashMixinStatus,
     ClashMixinReset,
+    ClashSocksStatus,
+    ClashSocksConfigure,
+    ClashSocksAuthGenerate,
+    ClashSocksAuthSet,
     ClashTunStatus,
     ClashTunConfigure,
     ClashLogs,
@@ -230,19 +235,26 @@ impl Spec {
                 true
             }
             Kind::KernelInstall => {
+                static RE: OnceLock<regex::Regex> = OnceLock::new();
                 p["version"].is_empty()
-                    || regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-                        .unwrap()
+                    || RE
+                        .get_or_init(|| regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+$").unwrap())
                         .is_match(&p["version"])
             }
             Kind::KernelRemove => {
-                regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+-joeyblog-bbrv3(-max)?$")
-                    .unwrap()
-                    .is_match(&p["release"])
+                static RE: OnceLock<regex::Regex> = OnceLock::new();
+                RE.get_or_init(|| {
+                    regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+-joeyblog-bbrv3(-max)?$").unwrap()
+                })
+                .is_match(&p["release"])
             }
-            Kind::KernelBoot => regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9.+_~-]{0,127}$")
-                .unwrap()
-                .is_match(&p["release"]),
+            Kind::KernelBoot => {
+                static RE: OnceLock<regex::Regex> = OnceLock::new();
+                RE.get_or_init(|| {
+                    regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9.+_~-]{0,127}$").unwrap()
+                })
+                .is_match(&p["release"])
+            }
             Kind::Timezone => {
                 !p["timezone"].starts_with('/')
                     && !p["timezone"]
@@ -272,9 +284,20 @@ impl Spec {
                 }
                 path.is_absolute() && !crate::storage::has_relative_segment(path)
             }
-            Kind::ClashSecretSet => {
+            Kind::ClashSecretSet | Kind::ClashSocksAuthSet => {
                 let path = Path::new(&p["secret_file"]);
                 path.is_absolute() && !crate::storage::has_relative_segment(path)
+            }
+            Kind::ClashSocksConfigure => {
+                ops::clash::socks::validate_form(
+                    p["socks_enabled"] == "on",
+                    &p["socks_port"],
+                    &p["socks_listen"],
+                    &p["socks_out"],
+                    &p["socks_auth"],
+                    &p["socks_user"],
+                )?;
+                true
             }
             Kind::ClashProxyDelay => {
                 ops::clash::controller::validate_test_url(&p["delay_url"])?;
@@ -342,9 +365,22 @@ const REVERSIBLE: &[&str] = &[
     "clash.mode",
     "clash.settings.configure",
     "clash.dns.configure",
+    "clash.socks.configure",
 ];
 
+static SPECS_CACHE: OnceLock<Vec<Spec>> = OnceLock::new();
+static SPEC_INDEX: OnceLock<HashMap<&'static str, usize>> = OnceLock::new();
+
+/// Borrow the static action catalog without allocating.
+pub fn specs_slice() -> &'static [Spec] {
+    SPECS_CACHE.get_or_init(build_specs).as_slice()
+}
+
 pub fn specs() -> Vec<Spec> {
+    specs_slice().to_vec()
+}
+
+fn build_specs() -> Vec<Spec> {
     use Kind::*;
     let mut items = Vec::new();
     let mut add = |id, group, kind, root, changes, external, fields| {
@@ -893,6 +929,61 @@ pub fn specs() -> Vec<Spec> {
         vec![],
     );
     add(
+        "clash.socks.status",
+        "clash",
+        ClashSocksStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "clash.socks.configure",
+        "clash",
+        ClashSocksConfigure,
+        false,
+        true,
+        false,
+        vec![
+            field("socks_enabled", "on", &["on", "off"], true),
+            Field {
+                allow_custom: true,
+                ..field("socks_port", "10808", &["10808", "21080", "1080"], true)
+            },
+            Field {
+                allow_custom: true,
+                ..field(
+                    "socks_listen",
+                    "0.0.0.0",
+                    &["0.0.0.0", "::", "127.0.0.1"],
+                    true,
+                )
+            },
+            field("socks_udp", "on", &["on", "off"], true),
+            field("socks_out", "direct", &["direct", "rule"], true),
+            field("socks_auth", "auto", &["auto", "keep", "off"], true),
+            field("socks_user", "cqs", &[], false),
+        ],
+    );
+    add(
+        "clash.socks.auth.generate",
+        "clash",
+        ClashSocksAuthGenerate,
+        false,
+        true,
+        false,
+        vec![],
+    );
+    add(
+        "clash.socks.auth.set",
+        "clash",
+        ClashSocksAuthSet,
+        false,
+        true,
+        false,
+        vec![field("secret_file", "", &[], true)],
+    );
+    add(
         "clash.tun.status",
         "clash",
         ClashTunStatus,
@@ -1236,11 +1327,23 @@ pub fn specs() -> Vec<Spec> {
     add("app.uninstall", "app", Uninstall, true, true, false, vec![]);
     items
 }
-pub fn find(id: &str) -> Result<Spec> {
-    specs()
-        .into_iter()
-        .find(|s| s.id == id)
+
+pub fn find_ref(id: &str) -> Result<&'static Spec> {
+    let list = specs_slice();
+    let index = SPEC_INDEX.get_or_init(|| {
+        list.iter()
+            .enumerate()
+            .map(|(idx, spec)| (spec.id, idx))
+            .collect()
+    });
+    index
+        .get(id)
+        .map(|&idx| &list[idx])
         .ok_or_else(|| Error::new("error.action", id))
+}
+
+pub fn find(id: &str) -> Result<Spec> {
+    find_ref(id).cloned()
 }
 
 /// The existing items a listed parameter can name. Values that `Spec::parameters` would
@@ -1433,6 +1536,19 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
         ),
         ClashMixinStatus => ops::clash::settings::mixin_status(ctx),
         ClashMixinReset => ops::clash::settings::mixin_reset(ctx),
+        ClashSocksStatus => ops::clash::socks::status(ctx),
+        ClashSocksConfigure => ops::clash::socks::configure(
+            ctx,
+            p["socks_enabled"] == "on",
+            &p["socks_port"],
+            &p["socks_listen"],
+            p["socks_udp"] == "on",
+            &p["socks_out"],
+            &p["socks_auth"],
+            &p["socks_user"],
+        ),
+        ClashSocksAuthGenerate => ops::clash::socks::auth_generate(ctx),
+        ClashSocksAuthSet => ops::clash::socks::auth_set(ctx, &p["secret_file"]),
         ClashTunStatus => ops::clash::tun::status(ctx),
         ClashTunConfigure => ops::clash::tun::configure(
             ctx,
@@ -1664,6 +1780,7 @@ mod tests {
             "clash.mode",
             "clash.settings.configure",
             "clash.dns.configure",
+            "clash.socks.configure",
         ];
         // Component 8, "generic confirmation per entry point".
         let expected = |spec: &Spec, prompt: Prompt| {

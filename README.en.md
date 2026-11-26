@@ -182,9 +182,10 @@ Select **Docker** in the sidebar or launch directly with `cqs docker [--tab cont
 
 ### Mihomo Proxy & `clashctl` Compatibility
 
-The **Mihomo Proxy** module implements 37 pure-Rust actions using `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash` by default (overridable via `CQS_CLASH_*`):
+The **Mihomo Proxy** module implements 41 pure-Rust actions using `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash` by default (overridable via `CQS_CLASH_*`):
 
 - **Core & Transactional Subscriptions**: Verified official Mihomo binary installation, HTTPS subscriptions, and local YAML import (`clash.sub.import`), merging Mixin and validating with `mihomo -t` before atomic publication with before-image rollback.
+- **Visual SOCKS5 / SOCKS5h Inbound**: Dedicated `clash.socks.*` split-pane live preview form for standalone `cqs-socks5` listeners (port, `0.0.0.0` / `::` / `127.0.0.1` / interface IP, UDP relay, `DIRECT` server egress vs Mihomo routing rules), enforcing password authentication on non-loopback binds, writing a `0600` private credential card (`socks5.auth` with `socks5h://` and `socks5://` URIs), and hot-reloading live Mihomo instances with zero downtime.
 - **4 Verified Web Dashboards**: **Zashboard** (default), **MetaCubeXD**, **Yacd-Meta**, and **Razord-Meta**, bound to loopback by default for safe SSH port-forwarding access.
 - **Live Controller & GeoData**: Direct HTTP/1.1 controller integration for validated hot-reload (with rollback), instant `rule`/`global`/`direct` mode switching, concurrent proxy-group latency tests, active connection inspection/closing, and `MetaCubeX/meta-rules-dat` (`standard`/`lite`/`full`) GeoData updates.
 - **Core Settings, DNS, TUN & systemd**: Transactional management of `mixed-port`, `allow-lan`, IPv6, domain sniffing, `fake-ip`/`redir-host` DNS presets, masked Mixin inspection/reset, TUN settings, and user/system systemd units.

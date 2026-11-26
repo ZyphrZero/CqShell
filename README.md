@@ -182,9 +182,10 @@ cargo build --release --locked
 
 ### Mihomo 代理与 `clashctl` 兼容
 
-**Mihomo 代理**模块纯 Rust 实现 37 项操作，默认数据目录位于 `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`（支持 `CQS_CLASH_*` 环境变量覆盖）：
+**Mihomo 代理**模块纯 Rust 实现 41 项操作，默认数据目录位于 `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash`（支持 `CQS_CLASH_*` 环境变量覆盖）：
 
 - **核心与订阅事务**：官方二进制校验安装、HTTPS 在线订阅与本地 YAML 导入（`clash.sub.import`），提交前自动合并 Mixin 并执行 `mihomo -t` 校验，多文件事务保留 before-image 回滚。
+- **可视化 SOCKS5 / SOCKS5h 独立入站**：内置 `clash.socks.*` 专属分栏预览表单，一键配置独立 `cqs-socks5` 监听端口、绑定地址（`0.0.0.0` / `::` / `127.0.0.1` / 指定网卡 IP）、UDP 转发及出站模式（`DIRECT` 本机直连落地或跟随分流规则）；非回环监听强制强密码认证，自动生成 `0600` 私有连接凭据卡（`socks5.auth`，含 `socks5h://` 与 `socks5://` 连接串），Mihomo 运行中且配置控制器时支持零停机热重载。
 - **4 款 Web 控制台**：内置 **Zashboard**（默认）、**MetaCubeXD**、**Yacd-Meta** 与 **Razord-Meta** 的签名/摘要校验安装与切换卸载；默认绑定回环地址，推荐通过 SSH 端口转发访问。
 - **实时控制器与 GeoData**：零外部进程直连控制器，支持配置热重载（失败回滚）、`rule/global/direct` 模式切换、策略组并发测速排序、活跃连接巡检与断开，以及 `MetaCubeX/meta-rules-dat`（`standard`/`lite`/`full`）规则库校验更新。
 - **高级配置与托管**：事务化管理核心端口/嗅探/日志级别、DNS（`fake-ip`/`redir-host` 与国内外 DoH 预设）、Mixin 脱敏查看与重置、TUN 模式与 systemd 用户/系统服务托管。

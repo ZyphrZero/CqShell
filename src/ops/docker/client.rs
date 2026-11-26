@@ -91,17 +91,19 @@ fn run_readonly(
 
     let started = Instant::now();
     let mut timed_out = false;
+    let mut sleep_ms = 2u64;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break Some(status);
         }
-        if started.elapsed() >= timeout {
+        if ctx.cancel.load(std::sync::atomic::Ordering::SeqCst) || started.elapsed() >= timeout {
             timed_out = true;
             terminate_child(&mut child);
             let _ = child.wait();
             break None;
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(sleep_ms));
+        sleep_ms = (sleep_ms * 2).min(20);
     };
 
     let stdout = String::from_utf8_lossy(&out_handle.join().unwrap_or_default()).into_owned();
@@ -127,8 +129,19 @@ fn terminate_child(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
+const ENGINE_INFO_INTERVAL: Duration = Duration::from_secs(10);
+const DISK_USAGE_INTERVAL: Duration = Duration::from_secs(15);
+
 /// Detects whether Docker is available on this host and gathers basic engine info.
 pub fn probe_availability(ctx: &Context) -> (DockerAvailability, Option<EngineInfo>) {
+    probe_availability_cached(ctx, None, true)
+}
+
+fn probe_availability_cached(
+    ctx: &Context,
+    prev_engine: Option<&EngineInfo>,
+    refresh_static: bool,
+) -> (DockerAvailability, Option<EngineInfo>) {
     if let Err(err) = ctx.platform() {
         return (DockerAvailability::NotApplicable(err.detail), None);
     }
@@ -148,9 +161,9 @@ pub fn probe_availability(ctx: &Context) -> (DockerAvailability, Option<EngineIn
 
     let (daemon_mirrors, daemon_ipv6, daemon_ipv6_cidr, daemon_json_error) =
         read_daemon_json(&ctx.paths.docker);
-    let service_active = check_docker_service_active(ctx);
 
     if !info_res.success {
+        let service_active = check_docker_service_active(ctx);
         let diag = if info_res.timed_out {
             "docker info timed out".to_owned()
         } else {
@@ -184,42 +197,65 @@ pub fn probe_availability(ctx: &Context) -> (DockerAvailability, Option<EngineIn
     }
 
     let mut engine = parse_engine_info(&info_res.stdout);
-    engine.service_active = service_active.or(Some(true));
+    // `docker info` succeeded, so the daemon is already active; avoid an extra `systemctl` fork.
+    engine.service_active = Some(true);
     engine.daemon_mirrors = daemon_mirrors;
     engine.daemon_ipv6 = daemon_ipv6;
     engine.daemon_ipv6_cidr = daemon_ipv6_cidr;
     engine.daemon_json_error = daemon_json_error;
 
-    if let Ok(ver) = run_readonly(
-        ctx,
-        "docker",
-        &["version", "--format", "{{.Server.APIVersion}}"],
-        PROBE_TIMEOUT,
-    ) && ver.success
-    {
-        let api = ver.stdout.trim();
-        if !api.is_empty() && api != "<no value>" {
-            engine.api_version = api.to_owned();
+    let reuse_static = !refresh_static
+        && prev_engine.is_some_and(|e| !e.api_version.is_empty() && !e.context.is_empty());
+    if reuse_static && let Some(prev) = prev_engine {
+        engine.api_version = prev.api_version.clone();
+        engine.compose_version = prev.compose_version.clone();
+        engine.context = prev.context.clone();
+    } else {
+        // Query static daemon/CLI metadata in parallel instead of 3 sequential subprocesses.
+        let (api_ver, comp_ver, ctx_name) = thread::scope(|scope| {
+            let h_api = scope.spawn(|| {
+                run_readonly(
+                    ctx,
+                    "docker",
+                    &["version", "--format", "{{.Server.APIVersion}}"],
+                    PROBE_TIMEOUT,
+                )
+                .ok()
+                .filter(|r| r.success)
+                .map(|r| r.stdout.trim().to_owned())
+                .filter(|s| !s.is_empty() && s != "<no value>")
+            });
+            let h_comp = scope.spawn(|| {
+                run_readonly(
+                    ctx,
+                    "docker",
+                    &["compose", "version", "--short"],
+                    PROBE_TIMEOUT,
+                )
+                .ok()
+                .filter(|r| r.success)
+                .map(|r| r.stdout.trim().to_owned())
+                .filter(|s| !s.is_empty())
+            });
+            let h_ctx = scope.spawn(|| {
+                run_readonly(ctx, "docker", &["context", "show"], PROBE_TIMEOUT)
+                    .ok()
+                    .filter(|r| r.success)
+                    .map(|r| r.stdout.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+            });
+            (
+                h_api.join().ok().flatten(),
+                h_comp.join().ok().flatten(),
+                h_ctx.join().ok().flatten(),
+            )
+        });
+        if let Some(api) = api_ver {
+            engine.api_version = api;
         }
-    }
-    if let Ok(comp) = run_readonly(
-        ctx,
-        "docker",
-        &["compose", "version", "--short"],
-        PROBE_TIMEOUT,
-    ) && comp.success
-    {
-        let v = comp.stdout.trim();
-        if !v.is_empty() {
-            engine.compose_version = Some(v.to_owned());
-        }
-    }
-    if let Ok(c) = run_readonly(ctx, "docker", &["context", "show"], PROBE_TIMEOUT)
-        && c.success
-    {
-        let name = c.stdout.trim();
-        if !name.is_empty() {
-            engine.context = name.to_owned();
+        engine.compose_version = comp_ver;
+        if let Some(name) = ctx_name {
+            engine.context = name;
         }
     }
 
@@ -299,10 +335,31 @@ pub fn fetch_snapshot(
     active_tab: DockerTab,
     prev: &DockerSnapshot,
 ) -> DockerSnapshot {
+    fetch_snapshot_with_options(ctx, active_tab, prev, false)
+}
+
+pub fn fetch_snapshot_with_options(
+    ctx: &Context,
+    active_tab: DockerTab,
+    prev: &DockerSnapshot,
+    force: bool,
+) -> DockerSnapshot {
     let mut snap = prev.clone();
-    let (avail, engine) = probe_availability(ctx);
-    snap.availability = avail;
-    snap.engine = engine;
+    let now = Instant::now();
+    let need_engine_probe = force
+        || !prev.availability.is_ready()
+        || active_tab == DockerTab::Daemon
+        || prev
+            .engine_checked
+            .is_none_or(|t| now.saturating_duration_since(t) >= ENGINE_INFO_INTERVAL);
+    if need_engine_probe {
+        let refresh_static =
+            force || !prev.availability.is_ready() || active_tab == DockerTab::Daemon;
+        let (avail, engine) = probe_availability_cached(ctx, prev.engine.as_ref(), refresh_static);
+        snap.availability = avail;
+        snap.engine = engine;
+        snap.engine_checked = Some(Instant::now());
+    }
     snap.updated = Some(Instant::now());
     snap.last_error = None;
 
@@ -310,79 +367,169 @@ pub fn fetch_snapshot(
         return snap;
     }
 
-    // Always refresh containers on Containers, Compose, Images, Volumes, or initial load so
-    // cross-references (`used_by`, compose container counts, sidebar running count) stay exact.
-    if matches!(
-        active_tab,
-        DockerTab::Containers | DockerTab::Compose | DockerTab::Images | DockerTab::Volumes
-    ) || snap.containers.is_empty()
-    {
-        match run_readonly(
-            ctx,
-            "docker",
-            &["ps", "-a", "--no-trunc", "--format", "{{json .}}"],
-            LIST_TIMEOUT,
-        ) {
+    let need_containers = force
+        || matches!(
+            active_tab,
+            DockerTab::Containers | DockerTab::Compose | DockerTab::Images | DockerTab::Volumes
+        )
+        || !snap.has_fetched(DockerTab::Containers);
+    let compose_supported = snap
+        .engine
+        .as_ref()
+        .and_then(|e| e.compose_version.as_ref())
+        .is_some();
+    let need_compose = compose_supported
+        && (force || active_tab == DockerTab::Compose || !snap.has_fetched(DockerTab::Compose));
+    let need_images =
+        force || active_tab == DockerTab::Images || !snap.has_fetched(DockerTab::Images);
+    let need_volumes =
+        force || active_tab == DockerTab::Volumes || !snap.has_fetched(DockerTab::Volumes);
+    let need_vol_df = active_tab == DockerTab::Volumes
+        && (force
+            || snap
+                .vol_df_updated
+                .is_none_or(|t| now.saturating_duration_since(t) >= DISK_USAGE_INTERVAL));
+    let need_networks =
+        force || active_tab == DockerTab::Networks || !snap.has_fetched(DockerTab::Networks);
+    let need_df = (active_tab == DockerTab::Daemon || snap.df_updated.is_none())
+        && (force
+            || snap
+                .df_updated
+                .is_none_or(|t| now.saturating_duration_since(t) >= DISK_USAGE_INTERVAL));
+
+    // Run independent read-only Docker CLI queries concurrently on initial/multi-tab refreshes.
+    let (ps_out, comp_out, img_out, vol_out, net_out, df_out) = thread::scope(|scope| {
+        let h_ps = need_containers.then(|| {
+            scope.spawn(|| {
+                run_readonly(
+                    ctx,
+                    "docker",
+                    &["ps", "-a", "--no-trunc", "--format", "{{json .}}"],
+                    LIST_TIMEOUT,
+                )
+            })
+        });
+        let h_comp = need_compose.then(|| {
+            scope.spawn(|| {
+                run_readonly(
+                    ctx,
+                    "docker",
+                    &["compose", "ls", "-a", "--format", "json"],
+                    LIST_TIMEOUT,
+                )
+            })
+        });
+        let h_img = need_images.then(|| {
+            scope.spawn(|| {
+                run_readonly(
+                    ctx,
+                    "docker",
+                    &["image", "ls", "-a", "--no-trunc", "--format", "{{json .}}"],
+                    LIST_TIMEOUT,
+                )
+            })
+        });
+        let h_vol = need_volumes.then(|| {
+            scope.spawn(|| {
+                run_readonly(
+                    ctx,
+                    "docker",
+                    &["volume", "ls", "--format", "{{json .}}"],
+                    LIST_TIMEOUT,
+                )
+            })
+        });
+        let h_net = need_networks.then(|| {
+            scope.spawn(|| {
+                run_readonly(
+                    ctx,
+                    "docker",
+                    &["network", "ls", "--no-trunc", "--format", "{{json .}}"],
+                    LIST_TIMEOUT,
+                )
+            })
+        });
+        let h_df = need_df.then(|| {
+            scope.spawn(|| {
+                run_readonly(
+                    ctx,
+                    "docker",
+                    &["system", "df", "--format", "{{json .}}"],
+                    DF_TIMEOUT,
+                )
+            })
+        });
+        (
+            h_ps.and_then(|h| h.join().ok()),
+            h_comp.and_then(|h| h.join().ok()),
+            h_img.and_then(|h| h.join().ok()),
+            h_vol.and_then(|h| h.join().ok()),
+            h_net.and_then(|h| h.join().ok()),
+            h_df.and_then(|h| h.join().ok()),
+        )
+    });
+
+    let mut primary_failed = false;
+    if let Some(ps_res) = ps_out {
+        match ps_res {
             Ok(res) if res.success => {
                 snap.containers = parse_containers_ndjson(&res.stdout);
+                snap.mark_fetched(DockerTab::Containers);
             }
             Ok(res) => {
                 snap.last_error = first_meaningful_line(&res.stderr);
+                primary_failed = true;
             }
-            Err(err) => snap.last_error = Some(err.detail),
+            Err(err) => {
+                snap.last_error = Some(err.detail);
+                primary_failed = true;
+            }
         }
     }
 
-    // Compose projects (when on Compose tab or initial load)
-    if active_tab == DockerTab::Compose || snap.compose.is_empty() {
-        let compose_supported = snap
-            .engine
-            .as_ref()
-            .and_then(|e| e.compose_version.as_ref())
-            .is_some();
-        if compose_supported {
-            if let Ok(res) = run_readonly(
-                ctx,
-                "docker",
-                &["compose", "ls", "-a", "--format", "json"],
-                LIST_TIMEOUT,
-            ) && res.success
-            {
-                snap.compose = parse_compose_json(&res.stdout);
-            }
-        } else {
-            snap.compose.clear();
-        }
+    if !compose_supported {
+        snap.compose.clear();
+        snap.mark_fetched(DockerTab::Compose);
+    } else if let Some(Ok(res)) = comp_out
+        && res.success
+    {
+        snap.compose = parse_compose_json(&res.stdout);
+        snap.mark_fetched(DockerTab::Compose);
     }
 
-    if (active_tab == DockerTab::Images || snap.images.is_empty())
-        && let Ok(res) = run_readonly(
-            ctx,
-            "docker",
-            &["image", "ls", "-a", "--no-trunc", "--format", "{{json .}}"],
-            LIST_TIMEOUT,
-        )
+    if let Some(Ok(res)) = img_out
         && res.success
     {
         snap.images = parse_images_ndjson(&res.stdout);
+        snap.mark_fetched(DockerTab::Images);
     }
 
-    if active_tab == DockerTab::Volumes || snap.volumes.is_empty() {
-        if let Ok(res) = run_readonly(
-            ctx,
-            "docker",
-            &["volume", "ls", "--format", "{{json .}}"],
-            LIST_TIMEOUT,
-        ) && res.success
-        {
-            snap.volumes = parse_volumes_ndjson(&res.stdout);
+    if let Some(Ok(res)) = vol_out
+        && res.success
+    {
+        let prev_sizes: BTreeMap<String, (String, Option<u64>)> = snap
+            .volumes
+            .iter()
+            .filter(|v| v.size_bytes.is_some())
+            .map(|v| (v.name.clone(), (v.size_text.clone(), v.size_bytes)))
+            .collect();
+        snap.volumes = parse_volumes_ndjson(&res.stdout);
+        snap.mark_fetched(DockerTab::Volumes);
+        for vol in &mut snap.volumes {
+            if let Some((txt, bytes)) = prev_sizes.get(&vol.name) {
+                vol.size_text = txt.clone();
+                vol.size_bytes = *bytes;
+            }
         }
-        if let Ok(dfv) = run_readonly(
-            ctx,
-            "docker",
-            &["system", "df", "-v", "--format", "{{json .}}"],
-            DF_TIMEOUT,
-        ) && dfv.success
+        if need_vol_df
+            && !snap.volumes.is_empty()
+            && let Ok(dfv) = run_readonly(
+                ctx,
+                "docker",
+                &["system", "df", "-v", "--format", "{{json .}}"],
+                DF_TIMEOUT,
+            )
+            && dfv.success
         {
             let vol_sizes = parse_system_df_verbose_volumes(&dfv.stdout);
             for vol in &mut snap.volumes {
@@ -391,16 +538,11 @@ pub fn fetch_snapshot(
                     vol.size_bytes = Some(*size_bytes);
                 }
             }
+            snap.vol_df_updated = Some(Instant::now());
         }
     }
 
-    if (active_tab == DockerTab::Networks || snap.networks.is_empty())
-        && let Ok(res) = run_readonly(
-            ctx,
-            "docker",
-            &["network", "ls", "--no-trunc", "--format", "{{json .}}"],
-            LIST_TIMEOUT,
-        )
+    if let Some(Ok(res)) = net_out
         && res.success
     {
         let mut nets = parse_networks_ndjson(&res.stdout);
@@ -416,18 +558,24 @@ pub fn fetch_snapshot(
             }
         }
         snap.networks = nets;
+        snap.mark_fetched(DockerTab::Networks);
     }
 
-    if (active_tab == DockerTab::Daemon || snap.disk_usage.is_empty())
-        && let Ok(res) = run_readonly(
-            ctx,
-            "docker",
-            &["system", "df", "--format", "{{json .}}"],
-            DF_TIMEOUT,
-        )
+    if let Some(Ok(res)) = df_out
         && res.success
     {
         snap.disk_usage = parse_system_df_ndjson(&res.stdout);
+        snap.df_updated = Some(Instant::now());
+        snap.mark_fetched(DockerTab::Daemon);
+    }
+
+    // If `docker info` was skipped on a fast tick and `docker ps` failed, re-probe availability
+    // immediately so daemon stop/permission errors surface without waiting 10 seconds.
+    if primary_failed && !need_engine_probe {
+        let (avail, engine) = probe_availability_cached(ctx, prev.engine.as_ref(), true);
+        snap.availability = avail;
+        snap.engine = engine;
+        snap.engine_checked = Some(Instant::now());
     }
 
     cross_link_snapshot(&mut snap);

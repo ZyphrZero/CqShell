@@ -5,7 +5,7 @@
 use super::{
     clip_ascii_safe, highlight_spans,
     tokens::{self, Glyph},
-    wrap_words,
+    wrap_cells, wrap_words,
 };
 use crate::{
     actions,
@@ -36,14 +36,8 @@ pub(super) fn draw_palette(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
     };
     let theme = &app.theme.active;
     let i = &app.ctx.i18n;
-    let specs = actions::specs();
-    let results = palette::search(
-        &pal.query.text,
-        &specs,
-        i,
-        &app.category_order,
-        &app.records,
-    );
+    let specs = actions::specs_slice();
+    let results = palette::search(&pal.query.text, specs, i, &app.category_order, &app.records);
     let geom = CommandPaletteGeometry::compute(area, &results, pal.cursor);
 
     let elapsed = app.now.saturating_duration_since(app.started);
@@ -618,6 +612,21 @@ pub(super) fn draw_form(app: &App, frame: &mut Frame, area: Rect, form: &Form, a
         super::terminal_preview::draw_form_live_preview(app, buf, preview_rect, &live_opts, bg);
     }
 
+    // Embedded live SOCKS5 / SOCKS5h connection & security card for `clash.socks.configure`
+    if let Some(preview_rect) = geom.socks_preview {
+        let params = form.parameters();
+        if preview_rect.x > geom.modal.x + 4 {
+            let div_x = preview_rect.x.saturating_sub(2);
+            let div_sym = if theme.flags.ascii { "|" } else { "│" };
+            for y in preview_rect.top()..preview_rect.bottom() {
+                buf[(div_x, y)]
+                    .set_symbol(div_sym)
+                    .set_style(tokens::fg(theme, Role::Rule).bg(bg));
+            }
+        }
+        draw_socks_live_preview(app, buf, preview_rect, &params, bg);
+    }
+
     // Error line or live CLI preview right above buttons
     let preview_y = geom.buttons[0].y.saturating_sub(2);
     if let Some(err) = &form.error {
@@ -1074,95 +1083,274 @@ pub(super) fn draw_notice(app: &App, frame: &mut Frame, area: Rect, alpha: f64) 
     fx::apply_fade(frame.buffer_mut(), modal, theme.palette.canvas, alpha);
 }
 
+enum HelpRow<'a> {
+    Section(&'a str),
+    Item(&'a str, &'a str),
+}
+
+struct HelpLayout {
+    modal: Rect,
+    body: Rect,
+    rule_y: Option<u16>,
+    hint_y: u16,
+    lines: Vec<Line<'static>>,
+}
+
+fn sanitize_help_key(key: &str, ascii: bool) -> String {
+    if !ascii {
+        return key.to_owned();
+    }
+    key.replace("↑↓←→", "Arrows")
+        .replace("↑↓", "Up/Dn")
+        .replace("←→", "Lt/Rt")
+        .replace('↑', "Up")
+        .replace('↓', "Dn")
+        .replace('←', "Lt")
+        .replace('→', "Rt")
+        .replace('↵', "Enter")
+        .replace('·', "/")
+        .replace('–', "-")
+}
+
+fn sanitize_help_desc(desc: &str, ascii: bool) -> String {
+    if !ascii {
+        return desc.to_owned();
+    }
+    desc.replace('·', "/").replace('–', "-").replace('│', "|")
+}
+
+fn help_rows(app: &App) -> Vec<HelpRow<'_>> {
+    let i = &app.ctx.i18n;
+    if app.is_docker_view() {
+        vec![
+            HelpRow::Section(i.text("docker.help.sec_nav")),
+            HelpRow::Item("←→ / 1-6", i.text("docker.help.tabs")),
+            HelpRow::Item("↑↓ / j k / Tab", i.text("docker.help.list")),
+            HelpRow::Item("/ / Space / a / o", i.text("docker.help.filter_sort")),
+            HelpRow::Section(i.text("docker.help.sec_ops")),
+            HelpRow::Item("Enter / s / u / p", i.text("docker.help.ops")),
+            HelpRow::Item("e / Shift+E", i.text("docker.help.exec")),
+            HelpRow::Item("d / Shift+D", i.text("docker.help.remove")),
+            HelpRow::Item("Shift+P / c / g", i.text("docker.help.manage")),
+            HelpRow::Section(i.text("docker.help.sec_inspect")),
+            HelpRow::Item("i / l / m / v", i.text("docker.help.inspect")),
+            HelpRow::Item("PgUp / PgDn", i.text("docker.help.scroll")),
+            HelpRow::Item("Shift+J / Shift+S", i.text("docker.help.inspect_extra")),
+            HelpRow::Item("f / t / w / c", i.text("docker.help.logs")),
+            HelpRow::Item("y / Shift+V", i.text("docker.help.copy_plain")),
+            HelpRow::Section(i.text("docker.help.sec_global")),
+            HelpRow::Item("z / [ / r", i.text("docker.help.focus")),
+            HelpRow::Item("Ctrl+K / Shift+T·L", i.text("docker.help.global")),
+            HelpRow::Item("Shift+G / F2", i.text("docker.help.shell_logs")),
+            HelpRow::Item("Esc / q / Ctrl+C", i.text("docker.help.exit")),
+        ]
+    } else {
+        vec![
+            HelpRow::Item("↑↓ / j k", i.text("key.move")),
+            HelpRow::Item("←→ / PgUp·PgDn", i.text("key.section")),
+            HelpRow::Item("Tab / 1-9 / H / O", i.text("key.pan")),
+            HelpRow::Item("[", i.text("cmd.sidebar")),
+            HelpRow::Item("/ / Ctrl+K", i.text("help.palette")),
+            HelpRow::Item("Enter", i.text("key.open")),
+            HelpRow::Item("Space / X / A", i.text("group.optimization")),
+            HelpRow::Item("C / Y", i.text("help.copy")),
+            HelpRow::Item("V", i.text("help.plain_view")),
+            HelpRow::Item("Alt+↑ / Alt+↓", i.text("key.reorder")),
+            HelpRow::Item("T  (B / M)", i.text("help.style")),
+            HelpRow::Item("P", i.text("cmd.github_proxy")),
+            HelpRow::Item("Shift+S", i.text("cmd.socks_secret")),
+            HelpRow::Item("G / F2", i.text("key.full_log")),
+            HelpRow::Item("R / N", i.text("key.public")),
+            HelpRow::Item("L", i.text("key.language")),
+            HelpRow::Item("Esc / Q / Ctrl+C", i.text("key.quit")),
+        ]
+    }
+}
+
+fn build_help_lines(
+    app: &App,
+    rows: &[HelpRow<'_>],
+    inner_w: usize,
+    section_gaps: bool,
+) -> Vec<Line<'static>> {
+    let theme = &app.theme.active;
+    let ascii = theme.flags.ascii;
+    let prefix = if inner_w < 44 { "" } else { " " };
+    let gap = if inner_w < 58 { " " } else { "  " };
+    let natural_key_w = rows
+        .iter()
+        .filter_map(|row| match row {
+            HelpRow::Item(k, _) => Some(sanitize_help_key(k, ascii).width()),
+            HelpRow::Section(_) => None,
+        })
+        .max()
+        .unwrap_or(12);
+    let max_key_w = if inner_w < 44 {
+        14usize
+    } else {
+        (inner_w * 36 / 100).max(18)
+    };
+    let key_w = natural_key_w.min(max_key_w);
+    let key_style = tokens::fg(theme, Role::Accent).add_modifier(Modifier::BOLD);
+    let desc_style = tokens::text(theme, Level::Primary);
+    let sec_style = tokens::text(theme, Level::Tertiary).add_modifier(Modifier::BOLD);
+    let rule_style = tokens::fg(theme, Role::Rule);
+    let rule_sym = tokens::glyph(theme, Glyph::Rule);
+
+    let mut lines = Vec::new();
+    for row in rows {
+        match row {
+            HelpRow::Section(title) => {
+                if section_gaps && !lines.is_empty() {
+                    lines.push(Line::default());
+                }
+                let title_clean = sanitize_help_desc(title, ascii);
+                let title_clip =
+                    clip_ascii_safe(&title_clean, inner_w.saturating_sub(prefix.len()), ascii);
+                let used = prefix.len() + title_clip.width();
+                let tail_pad = usize::from(inner_w >= 44);
+                let rule_len = inner_w.saturating_sub(used + 1 + tail_pad);
+                let mut spans = vec![Span::styled(format!("{prefix}{title_clip}"), sec_style)];
+                if rule_len >= 2 {
+                    spans.push(Span::styled(
+                        format!(" {}", rule_sym.repeat(rule_len)),
+                        rule_style,
+                    ));
+                }
+                lines.push(Line::from(spans));
+            }
+            HelpRow::Item(k, desc) => {
+                let k_text = sanitize_help_key(k, ascii);
+                let d_text = sanitize_help_desc(desc, ascii);
+                let k_len = k_text.width();
+                // Stack long keys onto their own line on ultra-narrow viewports instead of clipping.
+                if k_len > key_w || inner_w < prefix.len() + key_w + gap.len() + 12 {
+                    lines.push(Line::from(Span::styled(
+                        format!("{prefix}{k_text}"),
+                        key_style,
+                    )));
+                    let indent = format!("{prefix}  ");
+                    let wrap_w = inner_w.saturating_sub(indent.len()).max(8);
+                    for part in wrap_words(&d_text, wrap_w) {
+                        lines.push(Line::from(vec![
+                            Span::raw(indent.clone()),
+                            Span::styled(part, desc_style),
+                        ]));
+                    }
+                } else {
+                    let pad = " ".repeat(key_w.saturating_sub(k_len));
+                    let desc_budget = inner_w
+                        .saturating_sub(prefix.len() + key_w + gap.len())
+                        .max(8);
+                    let wrapped = wrap_words(&d_text, desc_budget);
+                    let cont_indent = " ".repeat(prefix.len() + key_w + gap.len());
+                    for (idx, part) in wrapped.into_iter().enumerate() {
+                        if idx == 0 {
+                            lines.push(Line::from(vec![
+                                Span::styled(format!("{prefix}{k_text}{pad}{gap}"), key_style),
+                                Span::styled(part, desc_style),
+                            ]));
+                        } else {
+                            lines.push(Line::from(vec![
+                                Span::raw(cont_indent.clone()),
+                                Span::styled(part, desc_style),
+                            ]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    lines
+}
+
+fn help_layout(app: &App, area: Rect) -> HelpLayout {
+    let rows = help_rows(app);
+    let max_modal_h = area.height.saturating_sub(2);
+    let probe = layout::centered(area, 86, max_modal_h.max(9));
+    let inner_w = probe.width.saturating_sub(4).max(1) as usize;
+    let chrome = if max_modal_h >= 9 { 5u16 } else { 4u16 };
+    let max_body_h = max_modal_h.saturating_sub(chrome) as usize;
+
+    // Include relaxed blank lines between sections when everything still fits on screen.
+    let relaxed = build_help_lines(app, &rows, inner_w, true);
+    let lines = if relaxed.len() <= max_body_h {
+        relaxed
+    } else {
+        build_help_lines(app, &rows, inner_w, false)
+    };
+
+    let desired_h = (lines.len() as u16).saturating_add(chrome);
+    let modal_h = desired_h.clamp(9.min(max_modal_h), max_modal_h.max(1));
+    let modal = layout::centered(area, 86, modal_h);
+    let rule_y = (modal.height >= 9).then(|| modal.bottom().saturating_sub(3));
+    let body_h = modal
+        .height
+        .saturating_sub(if rule_y.is_some() { 5 } else { 4 });
+    let body = Rect::new(
+        modal.x + 2,
+        modal.y + 2,
+        modal.width.saturating_sub(4),
+        body_h,
+    );
+    let hint_y = modal.bottom().saturating_sub(2);
+
+    HelpLayout {
+        modal,
+        body,
+        rule_y,
+        hint_y,
+        lines,
+    }
+}
+
+pub(in crate::tui) fn help_max_scroll(app: &App, area: Rect) -> u16 {
+    let geom = help_layout(app, area);
+    geom.lines.len().saturating_sub(geom.body.height as usize) as u16
+}
+
 pub(super) fn draw_help(app: &App, frame: &mut Frame, area: Rect, alpha: f64) {
     let theme = &app.theme.active;
     let i = &app.ctx.i18n;
-    let modal = layout::centered(area, 72, 22);
+    let ascii = theme.flags.ascii;
+    let geom = help_layout(app, area);
+    let modal = geom.modal;
+
     fx::apply_shadow(frame.buffer_mut(), modal, area, theme);
     tokens::draw_surface_card(frame, modal, theme, Role::Elevated, Role::BorderFocus, true);
-    let bg = if theme.flags.paint_bg {
-        tokens::color(theme, Role::Elevated)
+    let bg = tokens::color(theme, Role::Elevated);
+    let title_key = if app.is_docker_view() {
+        "docker.help.title"
     } else {
-        Color::Reset
+        "help.title"
     };
+    let title = format!(" {} ", i.text(title_key));
     frame.buffer_mut().set_stringn(
         modal.x + 2,
         modal.y,
-        format!(" {} ", i.text("key.help")),
+        clip_ascii_safe(&title, modal.width.saturating_sub(4) as usize, ascii),
         modal.width.saturating_sub(4) as usize,
         tokens::fg(theme, Role::Accent)
             .bg(bg)
             .add_modifier(Modifier::BOLD),
     );
 
-    let pairs: Vec<(&str, &str)> = if app.is_docker_view() {
-        vec![
-            ("<- / -> | 1-6", i.text("docker.help.tabs")),
-            ("j k / Space / / / a / o", i.text("docker.help.list")),
-            ("Enter / s / u / p / e / d / P", i.text("docker.help.ops")),
-            ("i / l / m / v / J / Shift+S", i.text("docker.help.inspect")),
-            ("f / t / w / c / Shift+M / y", i.text("docker.help.logs")),
-            (
-                "z / [ / Ctrl+K / Shift+T / Shift+L",
-                i.text("docker.help.focus"),
-            ),
-            ("r / F2 / Shift+G", i.text("key.full_log")),
-            ("Esc / q / Ctrl+C", i.text("key.quit")),
-        ]
-    } else {
-        vec![
-            ("↑↓ / j k", i.text("key.move")),
-            ("←→ / PgUp·PgDn", i.text("key.section")),
-            ("Tab / 1-9 / H / O", i.text("key.pan")),
-            ("[", i.text("cmd.sidebar")),
-            ("/ / Ctrl+K", i.text("help.palette")),
-            ("Enter", i.text("key.open")),
-            ("Space / X / A", i.text("group.optimization")),
-            ("C / Y", i.text("help.copy")),
-            ("V", i.text("help.plain_view")),
-            ("Alt+↑ / Alt+↓", i.text("key.reorder")),
-            ("T  (B / M)", i.text("help.style")),
-            ("P", i.text("cmd.github_proxy")),
-            ("G / F2", i.text("key.full_log")),
-            ("R / N", i.text("key.public")),
-            ("L", i.text("key.language")),
-            ("Esc / Q / Ctrl+C", i.text("key.quit")),
-        ]
-    };
-
-    let body = Rect::new(
-        modal.x + 2,
-        modal.y + 2,
-        modal.width.saturating_sub(4),
-        modal.height.saturating_sub(4),
-    );
-    let inner_w = body.width as usize;
-    let key_w = if inner_w < 50 { 16usize } else { 22usize };
-    let lines: Vec<Line<'static>> = pairs
-        .iter()
-        .map(|(k, desc)| {
-            let k_clip = clip_ascii_safe(k, key_w, theme.flags.ascii);
-            let k_pad = key_w.saturating_sub(k_clip.width());
-            let prefix = if inner_w < 50 { " " } else { "  " };
-            let desc_budget = inner_w.saturating_sub(prefix.len() + key_w + 1);
-            Line::from(vec![
-                Span::styled(
-                    format!("{prefix}{k_clip}{} ", " ".repeat(k_pad)),
-                    tokens::fg(theme, Role::Accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    clip_ascii_safe(desc, desc_budget, theme.flags.ascii),
-                    tokens::text(theme, Level::Primary),
-                ),
-            ])
-        })
-        .collect();
-
-    let max_scroll = lines.len().saturating_sub(body.height as usize) as u16;
+    let total_lines = geom.lines.len();
+    let max_scroll = total_lines.saturating_sub(geom.body.height as usize) as u16;
     let scroll = app.help_scroll.min(max_scroll);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
+    frame.render_widget(Paragraph::new(geom.lines).scroll((scroll, 0)), geom.body);
 
-    let hint_y = modal.bottom().saturating_sub(2);
+    if let Some(rule_y) = geom.rule_y {
+        tokens::draw_rule(
+            frame.buffer_mut(),
+            modal.x + 2,
+            rule_y,
+            modal.width.saturating_sub(4),
+            theme,
+            bg,
+        );
+    }
+
     let hint_w = modal.width.saturating_sub(4);
     let hint_pairs: Vec<(&str, &str)> = if max_scroll > 0 {
         vec![
@@ -1172,11 +1360,31 @@ pub(super) fn draw_help(app: &App, frame: &mut Frame, area: Rect, alpha: f64) {
     } else {
         vec![("↵ / Esc / ?", i.text("key.close"))]
     };
-    let hints = tokens::fit_keycaps(theme, &hint_pairs, hint_w as usize);
-    frame.render_widget(
-        Paragraph::new(Line::from(hints)),
-        Rect::new(modal.x + 2, hint_y, hint_w, 1),
-    );
+    if max_scroll > 0 {
+        let first = scroll as usize + 1;
+        let last = (scroll as usize + geom.body.height as usize).min(total_lines);
+        let dash = if ascii { "-" } else { "–" };
+        let pos = format!("{first}{dash}{last} / {total_lines}");
+        let pos_w = pos.width() as u16;
+        let hint_budget = hint_w.saturating_sub(pos_w + 2);
+        let hints = tokens::fit_keycaps(theme, &hint_pairs, hint_budget as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(hints)),
+            Rect::new(modal.x + 2, geom.hint_y, hint_budget, 1),
+        );
+        tokens::put_right(
+            frame.buffer_mut(),
+            Rect::new(modal.x + 2, geom.hint_y, hint_w, 1),
+            &pos,
+            tokens::text(theme, Level::Tertiary).bg(bg),
+        );
+    } else {
+        let hints = tokens::fit_keycaps(theme, &hint_pairs, hint_w as usize);
+        frame.render_widget(
+            Paragraph::new(Line::from(hints)),
+            Rect::new(modal.x + 2, geom.hint_y, hint_w, 1),
+        );
+    }
 
     fx::apply_fade(frame.buffer_mut(), modal, theme.palette.canvas, alpha);
 }
@@ -1234,4 +1442,651 @@ fn draw_button(
                 Modifier::empty()
             }),
     );
+}
+
+fn draw_socks_live_preview(
+    app: &App,
+    buf: &mut ratatui::buffer::Buffer,
+    rect: Rect,
+    params: &crate::actions::Parameters,
+    modal_bg: Color,
+) {
+    if rect.width < 18 || rect.height < 6 {
+        return;
+    }
+    let theme = &app.theme.active;
+    let ascii = theme.flags.ascii;
+    let i = &app.ctx.i18n;
+
+    let card_bg = if theme.flags.paint_bg {
+        tokens::color(theme, Role::Sidebar)
+    } else {
+        modal_bg
+    };
+    let header_bg = if theme.flags.paint_bg {
+        tokens::color(theme, Role::SurfaceAlt)
+    } else {
+        card_bg
+    };
+    for y in rect.top()..rect.bottom() {
+        for x in rect.left()..rect.right() {
+            buf[(x, y)].set_symbol(" ").set_bg(card_bg);
+        }
+    }
+    for x in rect.left()..rect.right() {
+        buf[(x, rect.y)].set_symbol(" ").set_bg(header_bg);
+    }
+
+    let inner_x = rect.x + 1;
+    let inner_w = rect.width.saturating_sub(2) as usize;
+    let bottom = rect.bottom();
+
+    let header = format!(
+        "{} {}",
+        if ascii { "*" } else { "◆" },
+        i.text("ui.socks_preview_title")
+    );
+    buf.set_stringn(
+        inner_x,
+        rect.y,
+        clip_ascii_safe(&header, inner_w, ascii),
+        inner_w,
+        tokens::fg(theme, Role::Accent)
+            .bg(header_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let mut y = rect.y + 2;
+    if y >= bottom {
+        return;
+    }
+
+    let enabled = params.get("socks_enabled").map(String::as_str) != Some("off");
+    if !enabled {
+        let msg = format!(
+            "{} {}",
+            if ascii { "o" } else { "○" },
+            i.text("ui.socks_preview_disabled")
+        );
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(&msg, inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Secondary).bg(card_bg),
+        );
+        return;
+    }
+
+    let port_raw = params.get("socks_port").map_or("10808", String::as_str);
+    let listen_raw = params.get("socks_listen").map_or("0.0.0.0", String::as_str);
+    let udp = params.get("socks_udp").map(String::as_str) != Some("off");
+    let outbound = params.get("socks_out").map_or("direct", String::as_str);
+    let auth = params.get("socks_auth").map_or("auto", String::as_str);
+    let user = params
+        .get("socks_user")
+        .map(String::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("cqs");
+
+    let port_res = crate::ops::clash::socks::validate_port(port_raw);
+    let listen_res = crate::ops::clash::socks::normalize_listen(listen_raw);
+
+    let (endpoint, host, is_loopback, addr_valid) = match (&port_res, &listen_res) {
+        (Ok(port), Ok((norm_listen, ip))) => {
+            let bracketed = crate::ops::clash::socks::format_host_bracketed(norm_listen);
+            let public_v4 = match &app.snapshot.public.ipv4 {
+                crate::dashboard::Reading::Value(v) => Some(v.as_str()),
+                _ => None,
+            };
+            let target_host = if ip.is_unspecified() {
+                public_v4
+                    .map(crate::ops::clash::socks::format_host_bracketed)
+                    .unwrap_or_else(|| "<SERVER_IP>".into())
+            } else {
+                bracketed.clone()
+            };
+            (
+                format!("{bracketed}:{port}"),
+                format!("{target_host}:{port}"),
+                crate::ops::clash::socks::is_loopback_ip(ip),
+                true,
+            )
+        }
+        _ => (
+            format!("{listen_raw}:{port_raw}"),
+            format!("<SERVER_IP>:{port_raw}"),
+            false,
+            false,
+        ),
+    };
+
+    // 1. Traffic topology line
+    let arrow = if ascii { "->" } else { "──▶" };
+    let proto = if udp { "TCP+UDP" } else { "TCP" };
+    let out_label = if outbound == "direct" {
+        i.text("ui.socks_preview_out_direct")
+    } else {
+        i.text("ui.socks_preview_out_rule")
+    };
+    buf.set_stringn(
+        inner_x,
+        y,
+        clip_ascii_safe(i.text("ui.socks_preview_flow"), inner_w, ascii),
+        inner_w,
+        tokens::text(theme, Level::Tertiary).bg(card_bg),
+    );
+    y += 1;
+    if y < bottom {
+        let flow = format!("{endpoint} ({proto}) {arrow} {out_label}");
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(&flow, inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Primary)
+                .bg(card_bg)
+                .add_modifier(Modifier::BOLD),
+        );
+        y += 1;
+    }
+
+    // 2. Security & authentication status badge
+    if y < bottom {
+        let (badge_text, badge_role) = if !addr_valid {
+            (
+                format!(
+                    "{} {}",
+                    if ascii { "!" } else { "✗" },
+                    i.text("ui.socks_preview_bad_addr")
+                ),
+                Role::Danger,
+            )
+        } else if auth == "off" && !is_loopback {
+            (
+                format!(
+                    "{} {}",
+                    if ascii { "!" } else { "✗" },
+                    i.text("ui.socks_preview_auth_err")
+                ),
+                Role::Danger,
+            )
+        } else if auth == "off" {
+            (
+                format!(
+                    "{} {}",
+                    if ascii { "*" } else { "●" },
+                    i.text("ui.socks_preview_auth_loopback")
+                ),
+                Role::Info,
+            )
+        } else {
+            (
+                format!(
+                    "{} {}",
+                    if ascii { "+" } else { "✓" },
+                    i.format("ui.socks_preview_auth_ok", &[("user", user)])
+                ),
+                Role::Success,
+            )
+        };
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(&badge_text, inner_w, ascii),
+            inner_w,
+            tokens::fg(theme, badge_role)
+                .bg(card_bg)
+                .add_modifier(Modifier::BOLD),
+        );
+        y += 2;
+    }
+
+    let user_valid = crate::ops::clash::socks::validate_username(user).is_ok();
+    let safe_user = if user_valid { user } else { "<user>" };
+    let cred_prefix = if auth == "off" {
+        String::new()
+    } else if auth == "keep" {
+        format!("{safe_user}:<saved>@")
+    } else {
+        format!("{safe_user}:<auto>@")
+    };
+    let socks5h_uri = format!("socks5h://{cred_prefix}{host}");
+    let socks5_uri = format!("socks5://{cred_prefix}{host}");
+
+    // 3. SOCKS5h URI (remote DNS)
+    if y + 1 < bottom {
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(i.text("ui.socks_preview_socks5h"), inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Tertiary).bg(card_bg),
+        );
+        y += 1;
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(&socks5h_uri, inner_w, ascii),
+            inner_w,
+            tokens::fg(theme, Role::Accent)
+                .bg(card_bg)
+                .add_modifier(Modifier::BOLD),
+        );
+        y += 2;
+    }
+
+    // 4. SOCKS5 URI (client local DNS)
+    if y + 1 < bottom {
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(i.text("ui.socks_preview_socks5"), inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Tertiary).bg(card_bg),
+        );
+        y += 1;
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(&socks5_uri, inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Primary).bg(card_bg),
+        );
+        y += 2;
+    }
+
+    // 5. Quick curl test & 0600 credential card path
+    if y + 1 < bottom {
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(i.text("ui.socks_preview_curl"), inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Tertiary).bg(card_bg),
+        );
+        y += 1;
+        let curl_cmd = format!("curl -x '{socks5h_uri}' https://ifconfig.me");
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(&curl_cmd, inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Secondary).bg(card_bg),
+        );
+        y += 2;
+    }
+
+    if auth != "off" && y + 1 < bottom {
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(i.text("ui.socks_preview_cred_file"), inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Tertiary).bg(card_bg),
+        );
+        y += 1;
+        let cred_path = crate::ops::clash::socks::auth_path(&app.ctx)
+            .display()
+            .to_string();
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(&cred_path, inner_w, ascii),
+            inner_w,
+            tokens::text(theme, Level::Secondary).bg(card_bg),
+        );
+        y += 2;
+    }
+
+    if y < bottom && app.cached_socks_config().is_some_and(|c| c.enabled) {
+        let hint = format!(
+            "{} {}",
+            if ascii { ">" } else { "▸" },
+            i.text("ui.socks_preview_secret_hint")
+        );
+        buf.set_stringn(
+            inner_x,
+            y,
+            clip_ascii_safe(&hint, inner_w, ascii),
+            inner_w,
+            tokens::fg(theme, Role::Info).bg(card_bg),
+        );
+    }
+}
+
+fn build_socks_secret_lines(
+    app: &App,
+    modal: &super::super::state::SocksSecretModal,
+    inner_w: usize,
+) -> Vec<Line<'static>> {
+    let theme = &app.theme.active;
+    let ascii = theme.flags.ascii;
+    let i = &app.ctx.i18n;
+    let creds = &modal.creds;
+    let inner_w = inner_w.max(1);
+
+    let warn_style = tokens::fg(theme, Role::Warning).add_modifier(Modifier::BOLD);
+    let label_style = tokens::text(theme, Level::Tertiary);
+    let primary_style = tokens::text(theme, Level::Primary);
+    let primary_bold = primary_style.add_modifier(Modifier::BOLD);
+    let secret_style = if modal.show_password {
+        tokens::fg(theme, Role::Accent).add_modifier(Modifier::BOLD)
+    } else {
+        tokens::text(theme, Level::Secondary)
+    };
+    let muted_style = tokens::text(theme, Level::Secondary);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for row in wrap_words(i.text("ui.socks_secret_notice"), inner_w) {
+        lines.push(Line::from(Span::styled(row, warn_style)));
+    }
+    lines.push(Line::default());
+
+    let sep = if ascii { " | " } else { " · " };
+    let endpoint = format!(
+        "{}:{}",
+        crate::ops::clash::socks::format_host_bracketed(&creds.listen),
+        creds.port
+    );
+    let proto = if creds.udp { "TCP+UDP" } else { "TCP" };
+    let mode = if creds.outbound == "direct" {
+        "DIRECT"
+    } else {
+        "RULE"
+    };
+    let listen_summary = format!("{endpoint}{sep}{proto}{sep}{mode}");
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{}: ", i.text("ui.socks_secret_listen")),
+            label_style,
+        ),
+        Span::styled(
+            clip_ascii_safe(
+                &listen_summary,
+                inner_w.saturating_sub(i.text("ui.socks_secret_listen").width() + 2),
+                ascii,
+            ),
+            primary_bold,
+        ),
+    ]));
+
+    if creds.has_auth {
+        let user = creds.username.as_deref().unwrap_or("cqs");
+        let pass_text = if modal.show_password {
+            creds.password.as_deref().unwrap_or("")
+        } else {
+            "************************"
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{}: ", i.text("ui.socks_secret_user")), label_style),
+            Span::styled(user.to_owned(), primary_bold),
+        ]));
+        let pass_prefix = format!("{}: ", i.text("ui.socks_secret_pass"));
+        if pass_prefix.width() + pass_text.width() <= inner_w {
+            lines.push(Line::from(vec![
+                Span::styled(pass_prefix, label_style),
+                Span::styled(pass_text.to_owned(), secret_style),
+            ]));
+        } else {
+            lines.push(Line::from(Span::styled(pass_prefix, label_style)));
+            for chunk in wrap_cells(pass_text, inner_w) {
+                lines.push(Line::from(Span::styled(chunk, secret_style)));
+            }
+        }
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{}: ", i.text("ui.socks_secret_auth")), label_style),
+            Span::styled(
+                i.text("ui.socks_preview_auth_loopback").to_owned(),
+                tokens::fg(theme, Role::Info),
+            ),
+        ]));
+    }
+
+    let masked_h = creds.masked_uri("socks5h");
+    let masked_5 = creds.masked_uri("socks5");
+    let masked_curl = creds.masked_curl_cmd();
+    let uri_h = if modal.show_password {
+        creds.socks5h_uri.as_str()
+    } else {
+        masked_h.as_str()
+    };
+    let uri_5 = if modal.show_password {
+        creds.socks5_uri.as_str()
+    } else {
+        masked_5.as_str()
+    };
+    let curl = if modal.show_password {
+        creds.curl_cmd.as_str()
+    } else {
+        masked_curl.as_str()
+    };
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        i.text("ui.socks_secret_socks5h").to_owned(),
+        label_style,
+    )));
+    for chunk in wrap_cells(uri_h, inner_w) {
+        lines.push(Line::from(Span::styled(chunk, secret_style)));
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        i.text("ui.socks_secret_socks5").to_owned(),
+        label_style,
+    )));
+    for chunk in wrap_cells(uri_5, inner_w) {
+        lines.push(Line::from(Span::styled(
+            chunk,
+            if modal.show_password {
+                primary_style
+            } else {
+                muted_style
+            },
+        )));
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        i.text("ui.socks_secret_curl").to_owned(),
+        label_style,
+    )));
+    for chunk in wrap_cells(curl, inner_w) {
+        lines.push(Line::from(Span::styled(chunk, muted_style)));
+    }
+
+    if creds.has_auth {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            i.text("ui.socks_secret_file").to_owned(),
+            label_style,
+        )));
+        for chunk in wrap_cells(&creds.auth_file.display().to_string(), inner_w) {
+            lines.push(Line::from(Span::styled(chunk, label_style)));
+        }
+    }
+
+    lines
+}
+
+pub(in crate::tui) fn socks_secret_max_scroll(app: &App, area: Rect) -> u16 {
+    let Some(modal) = &app.socks_secret else {
+        return 0;
+    };
+    let geom = layout::SocksSecretGeometry::compute(
+        area,
+        &modal.creds,
+        modal.show_password,
+        &app.ctx.i18n,
+        app.theme.active.flags.ascii,
+    );
+    let lines = build_socks_secret_lines(app, modal, geom.body.width as usize);
+    lines.len().saturating_sub(geom.body.height as usize) as u16
+}
+
+fn draw_secret_chip(
+    app: &App,
+    buf: &mut ratatui::buffer::Buffer,
+    rect: Rect,
+    key: &str,
+    label: &str,
+    primary: bool,
+    base_bg: Color,
+) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let theme = &app.theme.active;
+    let ascii = theme.flags.ascii;
+    let hovered = app.hover.is_some_and(|p| rect.contains(p));
+    let (fg_col, bg_col) = if hovered {
+        (
+            tokens::color(theme, Role::OnAccent),
+            tokens::color(theme, Role::Accent),
+        )
+    } else if primary {
+        (
+            tokens::color(theme, Role::Accent),
+            if theme.flags.paint_bg {
+                tokens::color(theme, Role::SurfaceAlt)
+            } else {
+                base_bg
+            },
+        )
+    } else {
+        (
+            tokens::color(theme, Role::Text2),
+            if theme.flags.paint_bg {
+                tokens::color(theme, Role::SurfaceAlt)
+            } else {
+                base_bg
+            },
+        )
+    };
+    let text = if ascii {
+        format!("[{key} {label}]")
+    } else {
+        format!(" {key} {label} ")
+    };
+    buf.set_stringn(
+        rect.x,
+        rect.y,
+        clip_ascii_safe(&text, rect.width as usize, ascii),
+        rect.width as usize,
+        Style::default()
+            .fg(fg_col)
+            .bg(bg_col)
+            .add_modifier(if primary || hovered {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+    );
+}
+
+pub(super) fn draw_socks_secret(app: &App, frame: &mut Frame, area: Rect, alpha: f64) {
+    let Some(modal_state) = &app.socks_secret else {
+        return;
+    };
+    let theme = &app.theme.active;
+    let ascii = theme.flags.ascii;
+    let i = &app.ctx.i18n;
+    let geom = layout::SocksSecretGeometry::compute(
+        area,
+        &modal_state.creds,
+        modal_state.show_password,
+        i,
+        ascii,
+    );
+    let modal = geom.modal;
+
+    fx::apply_shadow(frame.buffer_mut(), modal, area, theme);
+    tokens::draw_surface_card(frame, modal, theme, Role::Elevated, Role::Warning, true);
+    let bg = if theme.flags.paint_bg {
+        tokens::color(theme, Role::Elevated)
+    } else {
+        Color::Reset
+    };
+
+    let title = format!(
+        " {} {} ",
+        tokens::glyph(theme, Glyph::Warning),
+        i.text("ui.socks_secret_title")
+    );
+    frame.buffer_mut().set_stringn(
+        modal.x + 2,
+        modal.y,
+        clip_ascii_safe(&title, modal.width.saturating_sub(4) as usize, ascii),
+        modal.width.saturating_sub(4) as usize,
+        tokens::fg(theme, Role::Warning)
+            .bg(bg)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let lines = build_socks_secret_lines(app, modal_state, geom.body.width as usize);
+    let total_lines = lines.len();
+    let max_scroll = total_lines.saturating_sub(geom.body.height as usize) as u16;
+    let scroll = modal_state.scroll.min(max_scroll);
+
+    if max_scroll > 0 {
+        let first = scroll as usize + 1;
+        let last = (scroll as usize + geom.body.height as usize).min(total_lines);
+        let pos = format!(" {first}-{last}/{total_lines} ");
+        let pos_w = pos.width() as u16;
+        if modal.width > pos_w + 8 {
+            frame.buffer_mut().set_stringn(
+                modal.right().saturating_sub(pos_w + 2),
+                modal.y,
+                &pos,
+                pos_w as usize,
+                tokens::text(theme, Level::Tertiary).bg(bg),
+            );
+        }
+    }
+
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), geom.body);
+
+    if let Some(rule_y) = geom.rule_y {
+        tokens::draw_rule(
+            frame.buffer_mut(),
+            modal.x + 2,
+            rule_y,
+            modal.width.saturating_sub(4),
+            theme,
+            bg,
+        );
+    }
+
+    let buf = frame.buffer_mut();
+    draw_secret_chip(app, buf, geom.btn_socks5h, "1", "SOCKS5h", true, bg);
+    draw_secret_chip(app, buf, geom.btn_socks5, "2", "SOCKS5", false, bg);
+    draw_secret_chip(
+        app,
+        buf,
+        geom.btn_password,
+        "3",
+        i.text("ui.socks_secret_btn_pass"),
+        false,
+        bg,
+    );
+    draw_secret_chip(app, buf, geom.btn_curl, "4", "curl", false, bg);
+    let mask_lbl = if modal_state.show_password {
+        i.text("ui.socks_secret_btn_hide")
+    } else {
+        i.text("ui.socks_secret_btn_show")
+    };
+    draw_secret_chip(app, buf, geom.btn_mask, "m", mask_lbl, false, bg);
+    draw_secret_chip(
+        app,
+        buf,
+        geom.btn_close,
+        "Esc",
+        i.text("key.close"),
+        false,
+        bg,
+    );
+
+    fx::apply_fade(frame.buffer_mut(), modal, theme.palette.canvas, alpha);
 }

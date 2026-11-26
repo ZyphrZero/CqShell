@@ -138,7 +138,22 @@ cqs run clash.logs --set lines=200 --set follow=on
 
 行数支持 `1–2000`，初始尾部读取限制为 1 MiB。跟随模式处理分段行及 Linux 日志轮换，可用 Ctrl+C 或 TUI 取消操作结束。读取时隐藏当前配置中的密钥、代理认证、订阅 URL，以及历史日志中的认证字段和 URL 查询参数。配置无法安全解析时拒绝输出原始日志。
 
-`clash.status` 还显示当前订阅、运行时长、控制器、面板和 TUN 状态。
+`clash.status` 还显示当前订阅、运行时长、控制器、面板、TUN 和独立 SOCKS5/5h 入站状态。
+
+## 独立 SOCKS5 / SOCKS5h 入站
+
+```bash
+cqs --yes run clash.socks.configure --set socks_enabled=on --set socks_port=10808 --set socks_listen=0.0.0.0 --set socks_udp=on --set socks_out=direct --set socks_auth=auto --set socks_user=cqs
+cqs run clash.socks.status
+cqs --yes run clash.socks.auth.generate
+cqs --yes run clash.socks.auth.set --set secret_file=/absolute/path/to/private-creds
+```
+
+TUI 在 **Mihomo 代理 -> SOCKS5 / 5h** 分组提供分栏实时连接与安全预览卡片，随端口、绑定地址、出站模式（`direct` 本机直连出口或 `rule` 跟随分流规则）和鉴权策略实时展示 `socks5h://`（远端 DNS 解析，推荐）与 `socks5://` 连接串及安全检查结果。
+
+非回环绑定（如 `0.0.0.0`、`::` 或局域网/公网网卡 IP）强制要求启用密码认证，禁止公网裸开无密码代理；密码由 `/dev/urandom` 生成或从权限 `0600` 的私有文件读取，绝不进入命令行参数、TUI 屏幕日志或 `clash.mixin.status` / `clash.logs` 输出。完整连接串保存在 `${CQS_CLASH_DATA_DIR}/socks5.auth`（权限 `0600`）。当 Mihomo 正在运行且已配置 `external-controller` 时，保存将自动热重载生效并在失败时回滚。
+
+在 TUI 中，可随时按 `Shift+S`（或在 `/` 命令面板中搜索“凭据”，以及在 SOCKS5 配置弹窗内按 `Ctrl+S`）打开**本地临时明文凭据弹窗**查看密码、`socks5h://` / `socks5://` 完整连接串与 `curl` 自检命令，并按 `1` / `2` / `3` / `4` 一键通过 OSC 52 复制到本机剪贴板；按 `m` 可即时遮罩/显明，按 `Esc` 关闭后立即从内存清除，绝不写入任务日志或 CLI 标准输出。
 
 ## TUN
 

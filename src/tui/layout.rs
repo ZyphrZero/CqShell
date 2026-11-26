@@ -1093,6 +1093,8 @@ pub(super) struct FormGeometry {
     pub buttons: [Rect; 2],
     /// Live simulated terminal preview area for `terminal.apply`.
     pub terminal_preview: Option<Rect>,
+    /// Live connection & security preview card for `clash.socks.configure`.
+    pub socks_preview: Option<Rect>,
 }
 
 /// Lay out wrapping choice chips for one field inside `[start_x, max_right)` starting at `top_y`.
@@ -1126,16 +1128,20 @@ fn layout_chips(
 impl FormGeometry {
     pub fn compute(area: Rect, form: &Form, app: &App) -> Self {
         let is_terminal = form.spec.id == "terminal.apply";
-        let split_preview = is_terminal && area.width >= 96;
+        let is_socks = form.spec.id == "clash.socks.configure";
+        let has_preview = is_terminal || is_socks;
+        let split_preview = has_preview && area.width >= 96;
         let margin_x = if area.width < 60 { 2 } else { 4 };
         let modal_w = if split_preview {
-            104.min(area.width.saturating_sub(4))
+            let target = if is_socks { 106 } else { 104 };
+            target.min(area.width.saturating_sub(4))
         } else {
             76.min(area.width.saturating_sub(margin_x))
         };
         let inner_w = modal_w.saturating_sub(4);
         let field_col_w = if split_preview {
-            44.min(inner_w.saturating_sub(36))
+            let target = if is_socks { 46 } else { 44 };
+            target.min(inner_w.saturating_sub(36))
         } else {
             inner_w
         };
@@ -1156,8 +1162,8 @@ impl FormGeometry {
 
         let max_modal_h = area.height.saturating_sub(2);
         let loose_fields_total: u16 = field_heights.iter().map(|&h| h + 1).sum::<u16>();
-        let compact_vertical = (is_terminal && !split_preview && area.height <= 26)
-            || (!split_preview && (4 + loose_fields_total + 5 > max_modal_h));
+        let compact_vertical = (has_preview && !split_preview && area.height <= 26)
+            || (4 + loose_fields_total + 5 > max_modal_h);
         let field_gap = if compact_vertical { 0u16 } else { 1u16 };
         let fields_total: u16 = field_heights.iter().map(|&h| h + field_gap).sum::<u16>();
 
@@ -1250,19 +1256,25 @@ impl FormGeometry {
             y = (y + fh + field_gap).min(preview_limit);
         }
 
-        let terminal_preview = if split_preview {
+        let right_preview = if split_preview {
             let px = modal.x + 2 + field_col_w + 3;
             let pw = modal.right().saturating_sub(px + 2);
             let py = modal.y + header_rows;
             let ph = btn_y.saturating_sub(py + 2);
             (pw >= 28 && ph >= 8).then_some(Rect::new(px, py, pw, ph))
-        } else if is_terminal {
-            let py = y.min(preview_limit);
-            let ph = cmd_y.saturating_sub(py);
-            (ph >= 3 && inner_w >= 20).then_some(Rect::new(modal.x + 2, py, inner_w, ph))
         } else {
             None
         };
+        let terminal_preview = if is_terminal {
+            right_preview.or_else(|| {
+                let py = y.min(preview_limit);
+                let ph = cmd_y.saturating_sub(py);
+                (ph >= 3 && inner_w >= 20).then_some(Rect::new(modal.x + 2, py, inner_w, ph))
+            })
+        } else {
+            None
+        };
+        let socks_preview = if is_socks { right_preview } else { None };
 
         let primary_key = if form.mode == super::state::FormMode::Optimization {
             "ui.save_selection"
@@ -1287,6 +1299,7 @@ impl FormGeometry {
             chips,
             buttons,
             terminal_preview,
+            socks_preview,
         }
     }
 
@@ -1744,6 +1757,133 @@ pub(super) fn notice_modal_rects(area: Rect, text: &str) -> (Rect, Rect) {
         modal.height.saturating_sub(4),
     );
     (modal, body)
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SocksSecretGeometry {
+    pub modal: Rect,
+    pub body: Rect,
+    pub rule_y: Option<u16>,
+    pub btn_socks5h: Rect,
+    pub btn_socks5: Rect,
+    pub btn_password: Rect,
+    pub btn_curl: Rect,
+    pub btn_mask: Rect,
+    pub btn_close: Rect,
+}
+
+impl SocksSecretGeometry {
+    pub fn compute(
+        area: Rect,
+        creds: &crate::ops::clash::socks::RevealedCredentials,
+        show_password: bool,
+        i18n: &I18n,
+        ascii: bool,
+    ) -> Self {
+        let margin_x = if area.width < 60 { 2 } else { 4 };
+        let modal_w = 88.min(area.width.saturating_sub(margin_x));
+        let inner_w = modal_w.saturating_sub(4).max(1) as usize;
+
+        let masked_h = creds.masked_uri("socks5h");
+        let masked_5 = creds.masked_uri("socks5");
+        let masked_curl = creds.masked_curl_cmd();
+        let uri_h = if show_password {
+            creds.socks5h_uri.as_str()
+        } else {
+            masked_h.as_str()
+        };
+        let uri_5 = if show_password {
+            creds.socks5_uri.as_str()
+        } else {
+            masked_5.as_str()
+        };
+        let curl = if show_password {
+            creds.curl_cmd.as_str()
+        } else {
+            masked_curl.as_str()
+        };
+        let file_str = creds.auth_file.display().to_string();
+
+        // Estimate natural body line count so the modal wraps snugly without clipping URIs.
+        let mut lines = 0usize;
+        lines += super::render::wrap_words(i18n.text("ui.socks_secret_notice"), inner_w).len();
+        lines += 2; // blank + listen/mode summary
+        lines += if creds.has_auth { 3 } else { 2 }; // auth rows + blank
+        lines += 1 + super::render::wrap_cells(uri_h, inner_w).len() + 1;
+        lines += 1 + super::render::wrap_cells(uri_5, inner_w).len() + 1;
+        lines += 1 + super::render::wrap_cells(curl, inner_w).len() + 1;
+        if creds.has_auth {
+            lines += 1 + super::render::wrap_cells(&file_str, inner_w).len();
+        }
+
+        let max_h = area.height.saturating_sub(2).max(1);
+        let chrome = if max_h >= 12 { 5u16 } else { 4u16 };
+        let modal_h = (lines as u16)
+            .saturating_add(chrome)
+            .clamp(12.min(max_h), max_h);
+        let modal = centered(area, modal_w, modal_h);
+        let rule_y = (modal.height >= 10).then(|| modal.bottom().saturating_sub(3));
+        let body_h = modal
+            .height
+            .saturating_sub(if rule_y.is_some() { 5 } else { 4 });
+        let body = Rect::new(
+            modal.x + 2,
+            modal.y + 2,
+            modal.width.saturating_sub(4),
+            body_h,
+        );
+
+        let btn_y = modal.bottom().saturating_sub(2);
+        let max_right = modal.right().saturating_sub(2);
+        let mut x = modal.x + 2;
+        let fmt_btn = |key: &str, label: &str| -> u16 {
+            if ascii {
+                format!("[{key} {label}]").width() as u16
+            } else {
+                format!(" {key} {label} ").width() as u16
+            }
+        };
+        let mut place = |w: u16| -> Rect {
+            if x + w > max_right || w == 0 {
+                return Rect::default();
+            }
+            let r = Rect::new(x, btn_y, w, 1);
+            x = x.saturating_add(w + 1);
+            r
+        };
+
+        let btn_socks5h = place(fmt_btn("1", "SOCKS5h"));
+        let btn_socks5 = place(fmt_btn("2", "SOCKS5"));
+        let btn_password = if creds.has_auth {
+            place(fmt_btn("3", i18n.text("ui.socks_secret_btn_pass")))
+        } else {
+            Rect::default()
+        };
+        let btn_curl = place(fmt_btn("4", "curl"));
+        let btn_mask = if creds.has_auth {
+            let lbl = if show_password {
+                i18n.text("ui.socks_secret_btn_hide")
+            } else {
+                i18n.text("ui.socks_secret_btn_show")
+            };
+            place(fmt_btn("m", lbl))
+        } else {
+            Rect::default()
+        };
+        let btn_close = place(fmt_btn("Esc", i18n.text("key.close")));
+
+        Self {
+            modal,
+            body,
+            rule_y,
+            btn_socks5h,
+            btn_socks5,
+            btn_password,
+            btn_curl,
+            btn_mask,
+            btn_close,
+        }
+    }
 }
 
 pub(super) fn full_log_modal(area: Rect) -> (Rect, Rect) {

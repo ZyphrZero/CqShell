@@ -2,6 +2,7 @@
 
 pub(super) mod logs;
 mod modals;
+pub(super) use modals::{help_max_scroll, socks_secret_max_scroll};
 mod overview;
 mod sidebar;
 mod terminal_preview;
@@ -268,7 +269,7 @@ pub(super) fn draw(app: &App, frame: &mut Frame) {
     }
 
     // Render topmost active modal matching the exact priority order in `tui/events.rs`:
-    // Confirmation -> Loading -> Picker/Form -> PromptPreview -> DockerModal ->
+    // Confirmation -> Loading -> SocksSecret -> Picker/Form -> PromptPreview -> DockerModal ->
     // Notice -> Help -> FullLogs -> CommandPalette.
     if app.confirmation.is_some() {
         modals::draw_confirmation(app, frame, area, modal_alpha);
@@ -276,6 +277,8 @@ pub(super) fn draw(app: &App, frame: &mut Frame) {
         if app.now.saturating_duration_since(loading.started) >= fx::LOADING_DELAY {
             modals::draw_loading(app, frame, area, loading, modal_alpha);
         }
+    } else if app.socks_secret.is_some() {
+        modals::draw_socks_secret(app, frame, area, modal_alpha);
     } else if let Some(form) = &app.form {
         if form.picker.is_some() {
             modals::draw_picker(app, frame, area, form, modal_alpha);
@@ -409,26 +412,41 @@ fn draw_footer(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
         .active_group()
         .is_some_and(|g| app.group_sections(g).is_some())
     {
+        let is_clash = app
+            .active_group()
+            .is_some_and(|g| super::state::GROUPS[g] == "clash");
         if mobile {
-            vec![
+            let mut v = vec![
                 ("↑↓", i.text("key.move")),
                 ("←→", i.text("key.section")),
                 ("↵", i.text("key.open")),
+            ];
+            if is_clash {
+                v.push(("Shift+S", i.text("key.socks_secret")));
+            }
+            v.extend([
                 ("[", i.text("nav.toggle")),
                 ("/", i.text("key.search")),
                 ("?", i.text("key.help")),
-            ]
+            ]);
+            v
         } else {
-            vec![
+            let mut v = vec![
                 ("↑↓", i.text("key.move")),
                 ("←→", i.text("key.section")),
                 ("↵", i.text("key.open")),
+            ];
+            if is_clash {
+                v.push(("Shift+S", i.text("key.socks_secret")));
+            }
+            v.extend([
                 ("c", i.text("key.copy")),
                 ("V", i.text("key.plain_view")),
                 ("/", i.text("key.search")),
                 ("T", i.text("nav.theme")),
                 ("?", i.text("key.help")),
-            ]
+            ]);
+            v
         }
     } else if mobile {
         vec![

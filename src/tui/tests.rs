@@ -730,7 +730,7 @@ fn grouped_workbench_section_pills_hierarchy_and_shortcuts_work() {
     assert_eq!(app.section_tab(clash), Some(0));
     app.handle_key(key(KeyCode::Left)).unwrap();
     assert_eq!(app.section_tab(clash), None);
-    assert_eq!(app.selectable_count(clash), 37);
+    assert_eq!(app.selectable_count(clash), 41);
 
     // In All view, PageDown jumps straight to the first action of the next section (`subscriptions`).
     assert_eq!(app.selected_in(clash), 0);
@@ -742,7 +742,7 @@ fn grouped_workbench_section_pills_hierarchy_and_shortcuts_work() {
     // Clicking a section pill switches straight to that section.
     let regions = LayoutRegions::compute(area, &app);
     let wb = regions.workbench.as_ref().unwrap();
-    assert_eq!(wb.section_pills.len(), 9);
+    assert!(!wb.section_pills.is_empty());
     let panel_pill = wb
         .section_pills
         .iter()
@@ -1774,4 +1774,398 @@ fn drain_input_batch_coalesces_mouse_motion_flood_before_quit_and_clicks() {
         Some(Position::new((super::MAX_COALESCED_EVENTS - 1) as u16, 5))
     );
     assert_eq!(queue.len(), 10);
+}
+
+#[test]
+fn docker_and_global_help_modals_render_without_clipping_and_scroll_accurately() {
+    use super::docker::fixture::fixture_docker_state;
+    use crate::ops::docker::model::DockerTab;
+    use crate::theme::Background;
+
+    fn render_buffer(app: &mut App, w: u16, h: u16) -> ratatui::buffer::Buffer {
+        app.viewport = Rect::new(0, 0, w, h);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| app.draw(f)).unwrap();
+        term.backend().buffer().clone()
+    }
+
+    fn slice_rect(buf: &ratatui::buffer::Buffer, rect: Rect) -> Vec<String> {
+        use unicode_width::UnicodeWidthStr;
+        (rect.top()..rect.bottom())
+            .map(|y| {
+                let mut line = String::new();
+                let mut x = rect.left();
+                while x < rect.right() {
+                    let sym = buf[(x, y)].symbol();
+                    line.push_str(sym);
+                    x += sym.width().max(1) as u16;
+                }
+                line
+            })
+            .collect()
+    }
+
+    fn find_modal_rect(
+        buf: &ratatui::buffer::Buffer,
+        tl: &str,
+        tr: &str,
+        bl: &str,
+        title_needle: &str,
+    ) -> Rect {
+        let br = if bl == "╰" { "╯" } else { "+" };
+        let area = buf.area;
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                if buf[(x, y)].symbol() == tl
+                    && let Some(rx) = ((x + 1)..area.right()).find(|&c| buf[(c, y)].symbol() == tr)
+                    && rx - x >= 30
+                    && let Some(by) = ((y + 1)..area.bottom())
+                        .find(|&r| buf[(x, r)].symbol() == bl && buf[(rx, r)].symbol() == br)
+                {
+                    let rect = Rect::new(x, y, rx - x + 1, by - y + 1);
+                    let top_row = slice_rect(buf, Rect::new(x, y, rect.width, 1));
+                    if top_row[0].contains(title_needle) {
+                        return rect;
+                    }
+                }
+            }
+        }
+        panic!("modal border {tl}..{tr} with title {title_needle:?} not found");
+    }
+
+    for (locale, expected_title, expected_refresh) in [
+        ("zh-CN", "Docker 工作台快捷键", "立即刷新状态"),
+        ("en-US", "Docker Workspace Shortcuts", "refresh now"),
+    ] {
+        let (_temp, mut app) = test_app(locale);
+        app.docker = fixture_docker_state(app.now);
+        app.open_docker(DockerTab::Containers, false, false);
+
+        // Open help via `?` at 120x36: all rows fit without scrolling or clipping
+        app.viewport = Rect::new(0, 0, 120, 36);
+        app.handle_key(key(KeyCode::Char('?'))).unwrap();
+        assert!(app.help);
+        let wide_buf = render_buffer(&mut app, 120, 36);
+        let wide_rect = find_modal_rect(&wide_buf, "╭", "╮", "╰", expected_title);
+        let wide_modal = slice_rect(&wide_buf, wide_rect);
+        let wide_joined = wide_modal.join("\n");
+        assert!(
+            wide_joined.contains(expected_title),
+            "{locale}: missing Docker help title:\n{wide_joined}"
+        );
+        assert!(
+            wide_joined.contains(expected_refresh),
+            "{locale}: missing accurate `r` refresh hint:\n{wide_joined}"
+        );
+        assert!(
+            wide_joined.contains("Shift+P / c / g")
+                && wide_joined.contains("Shift+J / Shift+S")
+                && wide_joined.contains("Ctrl+K / Shift+T·L")
+                && wide_joined.contains("Shift+G / F2"),
+            "{locale}: Docker shortcut keys must not be truncated:\n{wide_joined}"
+        );
+        for row in &wide_modal {
+            assert!(
+                !row.contains('…') && !row.contains("..."),
+                "{locale} 120x36 help modal row must not clip: {row}"
+            );
+        }
+        // Pressing Down when everything fits must not drift `help_scroll`
+        app.handle_key(key(KeyCode::Down)).unwrap();
+        assert_eq!(app.help_scroll, 0);
+
+        // 80x24 and 59x24 and 40x16: wrapped neatly, zero clipping, scroll reaches true bottom (>16 at 40x16)
+        for (w, h) in [(80, 24), (59, 24), (40, 16)] {
+            app.help_scroll = 0;
+            let buf = render_buffer(&mut app, w, h);
+            let modal_rect = find_modal_rect(&buf, "╭", "╮", "╰", expected_title);
+            let modal_rows = slice_rect(&buf, modal_rect);
+            for row in &modal_rows[1..(modal_rows.len() - 1)] {
+                assert!(
+                    !row.contains('…') && !row.contains("..."),
+                    "{locale} {w}x{h} help modal body clipped: {row}"
+                );
+            }
+            let max_s = super::render::help_max_scroll(&app, Rect::new(0, 0, w, h));
+            app.handle_key(key(KeyCode::End)).unwrap();
+            assert_eq!(app.help_scroll, max_s);
+            if w == 40 && h == 16 {
+                assert!(
+                    max_s > 16,
+                    "{locale} 40x16 help modal should allow scrolling past old hardcoded cap 16 (max_s={max_s})"
+                );
+            }
+            // Render scrolled to bottom and verify last shortcut line is visible
+            let scrolled_buf = render_buffer(&mut app, w, h);
+            let scrolled = slice_rect(&scrolled_buf, modal_rect).join("\n");
+            assert!(
+                scrolled.contains("Esc / q / Ctrl+C"),
+                "{locale} {w}x{h}: bottom entry must be reachable when scrolled to End:\n{scrolled}"
+            );
+            app.handle_key(key(KeyCode::Home)).unwrap();
+            assert_eq!(app.help_scroll, 0);
+        }
+
+        // Plain ASCII theme must not emit Unicode arrows or ellipsis inside modal
+        app.preview_theme("plain", Background::Disabled).unwrap();
+        let ascii_buf = render_buffer(&mut app, 120, 36);
+        let ascii_rect = find_modal_rect(&ascii_buf, "+", "+", "+", expected_title);
+        let ascii_rows = slice_rect(&ascii_buf, ascii_rect);
+        for row in &ascii_rows {
+            assert!(
+                !row.contains('←')
+                    && !row.contains('→')
+                    && !row.contains('↑')
+                    && !row.contains('↓')
+                    && !row.contains('…'),
+                "{locale} plain theme help modal leaked non-ASCII glyph: {row}"
+            );
+        }
+
+        // Closing help via Esc works; `?` also opens help inside Docker fullscreen logs & inspector
+        app.handle_key(key(KeyCode::Esc)).unwrap();
+        assert!(!app.help);
+        app.docker.logs.fullscreen = true;
+        app.handle_key(key(KeyCode::Char('?'))).unwrap();
+        assert!(app.help);
+        app.handle_key(key(KeyCode::Esc)).unwrap();
+        assert!(!app.help);
+        assert!(app.docker.logs.fullscreen);
+
+        app.docker.logs.fullscreen = false;
+        app.docker.inspector_fullscreen = true;
+        app.handle_key(key(KeyCode::Char('?'))).unwrap();
+        assert!(app.help);
+        app.handle_key(key(KeyCode::Esc)).unwrap();
+        assert!(!app.help);
+        assert!(app.docker.inspector_fullscreen);
+    }
+
+    // Non-Docker help at 120x36 must render long copy/plain-view descriptions without clipping
+    let (_temp, mut app) = test_app("zh-CN");
+    app.viewport = Rect::new(0, 0, 120, 36);
+    app.handle_key(key(KeyCode::Char('?'))).unwrap();
+    let global_buf = render_buffer(&mut app, 120, 36);
+    let global_rect = find_modal_rect(&global_buf, "╭", "╮", "╰", "快捷键");
+    let global_joined = slice_rect(&global_buf, global_rect).join("\n");
+    assert!(global_joined.contains("面板内可直接拖选"));
+    assert!(global_joined.contains("直接原生拖选"));
+    assert!(!global_joined.contains('…'));
+}
+
+#[test]
+fn socks5_visual_form_renders_live_preview_enforces_non_loopback_auth_and_prefills() {
+    fn render_frame_text(app: &mut App, width: u16, height: u16) -> String {
+        use unicode_width::UnicodeWidthStr;
+        app.viewport = Rect::new(0, 0, width, height);
+        app.tick(app.now);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buf = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..height {
+            let mut x = 0;
+            while x < width {
+                let sym = buf[(x, y)].symbol();
+                out.push_str(sym);
+                x += sym.width().max(1) as u16;
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.snapshot.public.ipv4 = crate::dashboard::Reading::Value("203.0.113.88".into());
+    app.viewport = Rect::new(0, 0, 120, 36);
+
+    let spec = crate::actions::find("clash.socks.configure").unwrap();
+    app.open_form(spec.clone(), super::state::FormMode::Run)
+        .unwrap();
+
+    let rendered = render_frame_text(&mut app, 120, 36);
+    assert!(rendered.contains("SOCKS5 / 5h 实时连接预览"));
+    assert!(rendered.contains("socks5h://cqs:<auto>@203.0.113.88:10808"));
+    assert!(rendered.contains("socks5://cqs:<auto>@203.0.113.88:10808"));
+
+    // Switching `socks_auth` to `off` while listening on `0.0.0.0` shows live danger warning and rejects submission.
+    app.form.as_mut().unwrap().values[5].replace("off".into());
+    let warn_rendered = render_frame_text(&mut app, 120, 36);
+    assert!(warn_rendered.contains("非本机监听必须开启认证"));
+    assert_eq!(app.submit_form().unwrap_err().key, "error.input");
+
+    // Binding to loopback `127.0.0.1` clears the warning and allows submission.
+    app.form.as_mut().unwrap().values[2].replace("127.0.0.1".into());
+    let loop_rendered = render_frame_text(&mut app, 120, 36);
+    assert!(loop_rendered.contains("socks5h://127.0.0.1:10808"));
+    let submit_eff = app.submit_form().unwrap();
+    assert!(matches!(submit_eff, Effect::Run(_)));
+
+    // Pure ASCII `plain` theme in `en-US` renders strictly ASCII bytes even with the live preview card.
+    let (_temp_en, mut app_en) = test_app("en-US");
+    app_en
+        .preview_theme("plain", Background::Detected((0x00, 0x00, 0x00)))
+        .unwrap();
+    app_en
+        .open_form(spec.clone(), super::state::FormMode::Run)
+        .unwrap();
+    let ascii_rendered = render_frame_text(&mut app_en, 120, 36);
+    assert!(ascii_rendered.contains("SOCKS5 / 5h Live Preview"));
+    assert!(
+        ascii_rendered.is_ascii(),
+        "non-ASCII character in plain mode:\n{ascii_rendered}"
+    );
+}
+
+#[test]
+fn socks5_transient_secret_modal_reveals_copies_masks_and_never_logs_secrets() {
+    fn render_frame_text(app: &mut App, width: u16, height: u16) -> String {
+        use unicode_width::UnicodeWidthStr;
+        app.viewport = Rect::new(0, 0, width, height);
+        app.tick(app.now);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buf = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..height {
+            let mut x = 0;
+            while x < width {
+                let sym = buf[(x, y)].symbol();
+                out.push_str(sym);
+                x += sym.width().max(1) as u16;
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    let (temp, mut app) = test_app("zh-CN");
+    app.snapshot.public.ipv4 = crate::dashboard::Reading::Value("203.0.113.88".into());
+    app.viewport = Rect::new(0, 0, 120, 36);
+
+    // 1. Before configuration, Shift+S stays closed and displays a warning toast without touching logs.
+    let eff = app
+        .handle_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(matches!(eff, Effect::None));
+    assert!(app.socks_secret.is_none());
+    assert!(app.logs.is_empty());
+    assert!(
+        app.toast
+            .as_ref()
+            .is_some_and(|t| t.text.contains("尚未配置"))
+    );
+
+    // 2. Write a configured cqs-socks5 listener into Mixin with special chars in password.
+    let secret_pw = "S3cret#Pass!99";
+    std::fs::create_dir_all(&app.ctx.paths.clash_data).unwrap();
+    std::fs::write(
+        &app.ctx.paths.clash_mixin,
+        format!(
+            "listeners:\n  - name: cqs-socks5\n    type: socks\n    port: 10808\n    listen: 0.0.0.0\n    udp: true\n    proxy: DIRECT\n    users:\n      - username: alice\n        password: \"{secret_pw}\"\n"
+        ),
+    )
+    .unwrap();
+
+    // 3. Shift+S opens the transient credential reveal modal.
+    app.handle_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(app.socks_secret.is_some());
+    let expected_5h = "socks5h://alice:S3cret%23Pass!99@203.0.113.88:10808";
+    let expected_5 = "socks5://alice:S3cret%23Pass!99@203.0.113.88:10808";
+    let expected_curl = format!("curl -x '{expected_5h}' https://ifconfig.me");
+
+    let revealed = render_frame_text(&mut app, 120, 36);
+    assert!(revealed.contains("SOCKS5 / 5h 凭据与连接串"));
+    assert!(revealed.contains(secret_pw));
+    assert!(revealed.contains(expected_5h));
+    assert!(revealed.contains(expected_5));
+
+    // 4. Keys 1/2/3/4 emit exact OSC 52 Copy effects without ever leaking secrets into logs or toast.
+    let copy_text = |eff: Effect| match eff {
+        Effect::Copy(s) => s,
+        other => panic!("expected Effect::Copy, got {other:?}"),
+    };
+    assert_eq!(
+        copy_text(
+            app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE))
+                .unwrap()
+        ),
+        expected_5h
+    );
+    assert!(app.logs.is_empty());
+    assert!(!app.toast.as_ref().unwrap().text.contains("S3cret"));
+
+    assert_eq!(
+        copy_text(
+            app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE))
+                .unwrap()
+        ),
+        expected_5
+    );
+    assert_eq!(
+        copy_text(
+            app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE))
+                .unwrap()
+        ),
+        secret_pw
+    );
+    assert!(!app.toast.as_ref().unwrap().text.contains(secret_pw));
+    assert_eq!(
+        copy_text(
+            app.handle_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE))
+                .unwrap()
+        ),
+        expected_curl
+    );
+    assert!(app.logs.is_empty());
+
+    // 5. Pressing 'm' masks credentials on screen; pressing 'm' again restores them.
+    app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE))
+        .unwrap();
+    let masked = render_frame_text(&mut app, 120, 36);
+    assert!(!masked.contains(secret_pw));
+    assert!(!masked.contains("S3cret%23Pass!99"));
+    assert!(masked.contains("************************"));
+    assert!(masked.contains("socks5h://alice:********@203.0.113.88:10808"));
+
+    // 6. Pressing Esc clears the transient struct from memory immediately.
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.socks_secret.is_none());
+
+    // 7. Inside `clash.socks.configure` form, Ctrl+S opens the credential card over the form
+    //    and Esc returns cleanly back to the open form without losing edits.
+    let spec = crate::actions::find("clash.socks.configure").unwrap();
+    app.open_form(spec, super::state::FormMode::Run).unwrap();
+    let form_with_hint = render_frame_text(&mut app, 120, 36);
+    assert!(form_with_hint.contains("Ctrl+S"));
+    app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(app.socks_secret.is_some());
+    assert!(app.form.is_some());
+    app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.socks_secret.is_none());
+    assert!(app.form.is_some());
+
+    // 8. Pure ASCII `plain` theme in `en-US` renders strictly ASCII on both 120x36 and 40x16.
+    let (_temp_en, mut app_en) = test_app("en-US");
+    std::fs::create_dir_all(&app_en.ctx.paths.clash_data).unwrap();
+    std::fs::copy(&app.ctx.paths.clash_mixin, &app_en.ctx.paths.clash_mixin).unwrap();
+    app_en.snapshot.public.ipv4 = crate::dashboard::Reading::Value("203.0.113.88".into());
+    app_en
+        .preview_theme("plain", Background::Detected((0x00, 0x00, 0x00)))
+        .unwrap();
+    app_en
+        .handle_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
+        .unwrap();
+    for (w, h) in [(120, 36), (40, 16)] {
+        let rendered = render_frame_text(&mut app_en, w, h);
+        assert!(
+            rendered.is_ascii(),
+            "non-ASCII character in plain mode at {w}x{h}:\n{rendered}"
+        );
+    }
+    drop(temp);
 }

@@ -32,8 +32,8 @@ pub(super) const LOADING_DELAY: Duration = Duration::from_millis(150);
 pub(super) const ANIMATION_FRAME: Duration = Duration::from_millis(33);
 pub(super) const SPINNER_FRAME: Duration = SPINNER_STEP;
 /// Gentle low-bandwidth cadence for restrained ambient focus/status breathing.
-pub(super) const AMBIENT_FRAME: Duration = Duration::from_millis(110);
-pub(super) const IDLE_FRAME: Duration = Duration::from_millis(250);
+pub(super) const AMBIENT_FRAME: Duration = Duration::from_millis(180);
+pub(super) const IDLE_FRAME: Duration = Duration::from_millis(400);
 
 pub(super) fn spinner(elapsed: Duration, ascii: bool) -> &'static str {
     let step = (elapsed.as_millis() / SPINNER_STEP.as_millis()) as usize;

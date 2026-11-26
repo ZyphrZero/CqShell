@@ -989,6 +989,127 @@
   },
   {
     "available": true,
+    "description": "只读查看独立 SOCKS5 / SOCKS5h 入站监听状态、绑定地址与端口、UDP 转发、出站路由模式、脱敏连接模板及私有凭据文件路径。",
+    "group": "clash",
+    "id": "clash.socks.status",
+    "interactive": false,
+    "label": "查看 SOCKS5 / 5h 状态",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "可视化配置独立 SOCKS5 / SOCKS5h 入站监听器（端口、绑定地址、UDP、本机直连或规则分流及强制非回环鉴权）；Mihomo 运行中且启用控制器时支持零停机热重载生效。",
+    "group": "clash",
+    "id": "clash.socks.configure",
+    "interactive": false,
+    "label": "可视化配置 SOCKS5 / 5h 入站",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "socks_enabled",
+        "required": true
+      },
+      {
+        "allow_custom": true,
+        "choices": [
+          "10808",
+          "21080",
+          "1080"
+        ],
+        "default": "10808",
+        "name": "socks_port",
+        "required": true
+      },
+      {
+        "allow_custom": true,
+        "choices": [
+          "0.0.0.0",
+          "::",
+          "127.0.0.1"
+        ],
+        "default": "0.0.0.0",
+        "name": "socks_listen",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "socks_udp",
+        "required": true
+      },
+      {
+        "choices": [
+          "direct",
+          "rule"
+        ],
+        "default": "direct",
+        "name": "socks_out",
+        "required": true
+      },
+      {
+        "choices": [
+          "auto",
+          "keep",
+          "off"
+        ],
+        "default": "auto",
+        "name": "socks_auth",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "cqs",
+        "name": "socks_user",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "使用系统加密随机源生成 24 位高强度 SOCKS5 密码，原子写入 Mixin 与 0600 私有凭据文件（socks5.auth），绝不在日志中回显明文。",
+    "group": "clash",
+    "id": "clash.socks.auth.generate",
+    "interactive": false,
+    "label": "生成 / 轮换 SOCKS5 随机密码",
+    "mutates": true,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "从权限 0600 的私有文件导入 username:password（或仅密码），更新独立 SOCKS5 / SOCKS5h 入站凭据与连接卡。",
+    "group": "clash",
+    "id": "clash.socks.auth.set",
+    "interactive": false,
+    "label": "从文件导入 SOCKS5 凭据",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "secret_file",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "只读查看 TUN 配置、链路及进程归属。",
     "group": "clash",
     "id": "clash.tun.status",

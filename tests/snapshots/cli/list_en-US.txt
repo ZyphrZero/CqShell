@@ -143,6 +143,22 @@ clash.mixin.status     View Mixin overrides
   Display persistent Mixin overrides with controller secrets and proxy authentication credentials redacted.
 clash.mixin.reset      Reset Mixin overrides
   While Mihomo is stopped, remove persistent Mixin overrides and rebuild the runtime config while preserving subscriptions and resources.
+clash.socks.status     SOCKS5 / 5h inbound status
+  Inspect the dedicated SOCKS5 / SOCKS5h inbound listener state, bind address and port, UDP relay, outbound routing, redacted URI templates and private credential file path.
+clash.socks.configure  Configure SOCKS5 / 5h inbound
+  Visually configure the dedicated SOCKS5 / SOCKS5h inbound listener (port, listen IP, UDP, direct or rule outbound, and enforced non-loopback authentication), with zero-downtime hot-reload when Mihomo is running with a controller.
+  socks_enabled=on ["on", "off"]
+  socks_port=10808 ["10808", "21080", "1080"]
+  socks_listen=0.0.0.0 ["0.0.0.0", "::", "127.0.0.1"]
+  socks_udp=on ["on", "off"]
+  socks_out=direct ["direct", "rule"]
+  socks_auth=auto ["auto", "keep", "off"]
+  socks_user=cqs []
+clash.socks.auth.generate Generate / rotate SOCKS5 password
+  Generate a 24-character CSPRNG SOCKS5 password and atomically write it to Mixin and the 0600 private credential card (socks5.auth) without echoing secrets to logs.
+clash.socks.auth.set   Set SOCKS5 credentials from file
+  Load username:password (or password) from a chmod 0600 private file into the dedicated SOCKS5 / SOCKS5h listener and update socks5.auth.
+  secret_file= []
 clash.tun.status       TUN configuration and ownership
   Read TUN settings, link state and process ownership.
 clash.tun.configure    Configure TUN mode

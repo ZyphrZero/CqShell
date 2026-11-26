@@ -36,6 +36,7 @@ mod logs;
 pub mod panel;
 pub mod service;
 pub mod settings;
+pub mod socks;
 pub mod tun;
 
 #[cfg(test)]
@@ -123,6 +124,7 @@ pub fn status(ctx: &Context) -> Result<()> {
     controller::status(ctx)?;
     panel::status(ctx)?;
     tun::status(ctx)?;
+    socks::status(ctx)?;
     Ok(())
 }
 
@@ -1054,6 +1056,7 @@ fn runtime_with_mixin(ctx: &Context, mixin: Value) -> Result<Vec<u8>> {
 fn render_runtime(base: Value, mixin: Value) -> Result<Vec<u8>> {
     let runtime = merge_config(base, mixin)?;
     controller::from_config(&runtime)?;
+    socks::validate_runtime(&runtime)?;
     let text = serde_yaml::to_string(&runtime).map_err(|e| Error::new("error.data", e))?;
     Ok(text.into_bytes())
 }
@@ -1225,6 +1228,10 @@ fn merge_map(base: &mut Value, mixin: Value) -> Result<()> {
         let name = key.as_str().unwrap_or_default();
         if matches!(name, "rules" | "proxies" | "proxy-groups") {
             merge_special_sequence(base_map, &key, value)?;
+        } else if name == "listeners" && value.is_sequence() {
+            merge_named_listeners(base_map, &key, value)?;
+        } else if name == "listeners" && value.is_mapping() {
+            merge_special_sequence(base_map, &key, value)?;
         } else if let Some(existing) = base_map.get_mut(&key) {
             if existing.is_mapping() && value.is_mapping() {
                 merge_map(existing, value)?;
@@ -1235,6 +1242,40 @@ fn merge_map(base: &mut Value, mixin: Value) -> Result<()> {
             base_map.insert(key, value);
         }
     }
+    Ok(())
+}
+
+fn merge_named_listeners(
+    map: &mut serde_yaml::Mapping,
+    key: &Value,
+    mixin_value: Value,
+) -> Result<()> {
+    let mixin_items = mixin_value
+        .as_sequence()
+        .ok_or_else(|| Error::new("error.data", "Mixin listeners must be a list"))?;
+    let mut combined = match map.remove(key) {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Sequence(existing)) => existing,
+        Some(_) => {
+            return Err(Error::new(
+                "error.data",
+                "Clash config listeners must be a list",
+            ));
+        }
+    };
+    for item in mixin_items {
+        let name = item.get("name").and_then(Value::as_str);
+        if let Some(target_name) = name
+            && let Some(pos) = combined
+                .iter()
+                .position(|orig| orig.get("name").and_then(Value::as_str) == Some(target_name))
+        {
+            combined[pos] = item.clone();
+        } else {
+            combined.push(item.clone());
+        }
+    }
+    map.insert(key.clone(), Value::Sequence(combined));
     Ok(())
 }
 
@@ -1472,6 +1513,7 @@ fn recover_interrupted_files(ctx: &Context) -> Result<()> {
             && path != &ctx.paths.clash_mixin
             && path != &ctx.paths.clash_config
             && path != &ctx.paths.clash_runtime
+            && path != &socks::auth_path(ctx)
             && !profile_file
         {
             return Err(Error::new("error.pending", path.display()));

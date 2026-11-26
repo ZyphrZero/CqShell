@@ -716,3 +716,157 @@ fn update_subcommand_help_aliases_and_argument_validation_have_no_side_effects()
         assert_eq!(update["mutates"], true);
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn tui_exits_promptly_when_pty_disconnects() {
+    use std::{
+        fs::File,
+        io::{Read, Write},
+        os::fd::{AsRawFd, FromRawFd},
+        os::unix::process::CommandExt,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    #[derive(Debug)]
+    enum Scenario {
+        MidStartupNoSighup,
+        ActiveLoopDropOnly,
+        ActiveLoopWithSighup,
+    }
+
+    for scenario in [
+        Scenario::MidStartupNoSighup,
+        Scenario::ActiveLoopDropOnly,
+        Scenario::ActiveLoopWithSighup,
+    ] {
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        let size = libc::winsize {
+            ws_row: 32,
+            ws_col: 120,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master_fd,
+                    &mut slave_fd,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    &size,
+                )
+            },
+            0
+        );
+        unsafe {
+            libc::fcntl(master_fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            libc::fcntl(slave_fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
+        let mut master = unsafe { File::from_raw_fd(master_fd) };
+        let slave = unsafe { File::from_raw_fd(slave_fd) };
+        let temp = tempfile::tempdir().unwrap();
+
+        let mut command = cli(temp.path());
+        command
+            .env("TERM", "xterm-256color")
+            .args(["--lang", "en-US", "--theme", "plain"])
+            .stdin(slave.try_clone().unwrap())
+            .stdout(slave.try_clone().unwrap())
+            .stderr(slave.try_clone().unwrap());
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        // Close parent's copy of slave FD so closing master immediately triggers kernel POLLHUP!
+        drop(slave);
+        unsafe {
+            libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK);
+        }
+
+        match scenario {
+            Scenario::MidStartupNoSighup => {
+                thread::sleep(Duration::from_millis(150));
+                drop(master);
+            }
+            Scenario::ActiveLoopDropOnly | Scenario::ActiveLoopWithSighup => {
+                let mut bytes = Vec::new();
+                let mut buf = [0u8; 8192];
+                let mut cpr_replied = 0usize;
+                let mut osc_replied = 0usize;
+                let ready_deadline = Instant::now() + Duration::from_secs(6);
+                while Instant::now() < ready_deadline {
+                    match master.read(&mut buf) {
+                        Ok(n) if n > 0 => bytes.extend_from_slice(&buf[..n]),
+                        _ => {}
+                    }
+                    let osc_cnt = bytes.windows(6).filter(|w| *w == b"\x1b]11;?").count();
+                    while osc_replied < osc_cnt {
+                        let _ = master.write_all(b"\x1b]11;rgb:0000/0000/0000\x07\x1b[?1;2c");
+                        osc_replied += 1;
+                    }
+                    let cpr_cnt = bytes.windows(4).filter(|w| *w == b"\x1b[6n").count();
+                    while cpr_replied < cpr_cnt {
+                        let _ = master.write_all(b"\x1b[1;1R");
+                        cpr_replied += 1;
+                    }
+                    if bytes.windows(7).any(|w| w == b"CqShell") {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(15));
+                }
+                assert!(
+                    bytes.windows(7).any(|w| w == b"CqShell"),
+                    "TUI did not finish initial render before hangup test"
+                );
+                if matches!(scenario, Scenario::ActiveLoopWithSighup) {
+                    unsafe {
+                        libc::kill(child.id() as libc::pid_t, libc::SIGHUP);
+                    }
+                }
+                drop(master);
+            }
+        }
+
+        let exit_deadline = Instant::now() + Duration::from_secs(4);
+        let exited = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if Instant::now() >= exit_deadline {
+                let pid = child.id();
+                let mut diag = format!("scenario={scenario:?} pid={pid}");
+                if let Ok(entries) = fs::read_dir(format!("/proc/{pid}/task")) {
+                    for ent in entries.flatten() {
+                        let p = ent.path();
+                        let wc = fs::read_to_string(p.join("wchan")).unwrap_or_default();
+                        let sc = fs::read_to_string(p.join("syscall")).unwrap_or_default();
+                        let st = fs::read_to_string(p.join("stat")).unwrap_or_default();
+                        diag.push_str(&format!(
+                            "\n  tid={:?} wchan={} sc={} stat={}",
+                            ent.file_name(),
+                            wc.trim(),
+                            sc.trim(),
+                            st.trim()
+                        ));
+                    }
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("cqs hung/spun after PTY disconnect: {diag}");
+            }
+            thread::sleep(Duration::from_millis(25));
+        };
+        assert!(
+            exited.is_some(),
+            "cqs hung/spun after PTY disconnect instead of exiting promptly"
+        );
+    }
+}

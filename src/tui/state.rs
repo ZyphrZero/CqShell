@@ -361,6 +361,15 @@ pub(super) struct Loading {
     pub started: Instant,
 }
 
+/// Transient in-memory modal showing `cqs-socks5` credentials inside TUI only.
+/// Cleared from memory immediately when closed; never appended to task logs.
+#[derive(Debug, Clone)]
+pub(super) struct SocksSecretModal {
+    pub creds: crate::ops::clash::socks::RevealedCredentials,
+    pub show_password: bool,
+    pub scroll: u16,
+}
+
 /// Interactive terminal prompt preview studio state (`terminal.preview`).
 #[derive(Debug, Clone)]
 pub(super) struct PromptPreview {
@@ -542,6 +551,12 @@ fn empty_listing(listing: Listing) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct SocksCacheEntry {
+    pub key: Option<(u64, Option<std::time::SystemTime>, u64)>,
+    pub config: Option<crate::ops::clash::socks::SocksConfig>,
+}
+
 pub struct App {
     pub(super) ctx: Context,
     /// Active navigation destination (starts on Overview Dashboard).
@@ -573,6 +588,7 @@ pub struct App {
     pub(super) task_ids: Vec<String>,
     pub(super) form: Option<Form>,
     pub(super) prompt_preview: Option<PromptPreview>,
+    pub(super) socks_secret: Option<SocksSecretModal>,
     pub(super) loading: Option<Loading>,
     pub(super) confirmation: Option<Confirmation>,
     pub(super) notice: Option<String>,
@@ -613,6 +629,9 @@ pub struct App {
     pub(super) docker: super::docker::state::DockerState,
     /// Optional title key when a `Task::DockerOp` is running.
     pub(super) docker_task_title: Option<&'static str>,
+    /// Stat-fingerprinted cache of `cqs-socks5` config so rendering never re-parses `mixin.yaml`
+    /// from disk every frame.
+    pub(super) socks_cache: RefCell<Option<SocksCacheEntry>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -684,6 +703,7 @@ impl App {
             task_ids: Vec::new(),
             form: None,
             prompt_preview: None,
+            socks_secret: None,
             loading: None,
             confirmation: None,
             notice: None,
@@ -719,6 +739,7 @@ impl App {
             last_cmd_rect: Cell::new(None),
             docker: super::docker::state::DockerState::default(),
             docker_task_title: None,
+            socks_cache: RefCell::new(None),
         }
     }
 
@@ -969,16 +990,9 @@ impl App {
     }
 
     pub(super) fn rows(&self, group: usize) -> Vec<Row> {
-        let specs = actions::specs();
-        let action = |id: &str| {
-            Row::Action(
-                specs
-                    .iter()
-                    .find(|spec| spec.id == id)
-                    .cloned()
-                    .expect("static action ID"),
-            )
-        };
+        let specs = actions::specs_slice();
+        let action =
+            |id: &str| Row::Action(actions::find_ref(id).expect("static action ID").clone());
         if group == OPTIMIZATION_GROUP {
             return actions::OPTIMIZATION
                 .iter()
@@ -1000,7 +1014,7 @@ impl App {
             }
             return out;
         }
-        sections::blocks(GROUPS[group], &specs)
+        sections::blocks(GROUPS[group], specs)
             .into_iter()
             .flat_map(|(section, ids)| {
                 let len = ids.len();
@@ -1013,9 +1027,18 @@ impl App {
     }
 
     pub(super) fn selectable_count(&self, group: usize) -> usize {
-        self.rows(group)
+        if group == OPTIMIZATION_GROUP {
+            return actions::OPTIMIZATION.len() + 1; // +1 for Row::Execute
+        }
+        if let Some(secs) = self.group_sections(group) {
+            return match self.section_tab(group) {
+                Some(sec_idx) => secs.get(sec_idx).map_or(0, |(_, ids)| ids.len()),
+                None => secs.iter().map(|(_, ids)| ids.len()).sum(),
+            };
+        }
+        actions::specs_slice()
             .iter()
-            .filter(|row| row.selectable())
+            .filter(|spec| spec.group == GROUPS[group])
             .count()
     }
 
@@ -1531,6 +1554,8 @@ impl App {
             1
         } else if self.loading.is_some() {
             2
+        } else if self.socks_secret.is_some() {
+            12
         } else if self.form.as_ref().is_some_and(|form| form.picker.is_some()) {
             3
         } else if self.form.is_some() {
@@ -1612,6 +1637,12 @@ impl App {
         }
     }
 
+    pub(super) fn has_ambient_motion(&self) -> bool {
+        !self.reduced_motion()
+            && fx::style_has_ambient_motion(self.theme.active.style)
+            && self.theme.active.palette.accent2.rgb().is_some()
+    }
+
     pub(super) fn frame_interval(&self) -> Duration {
         let reduced = self.reduced_motion();
         let sheen_active = !reduced
@@ -1642,11 +1673,44 @@ impl App {
             || (self.is_docker_view() && self.docker.desired_log_target().is_some())
         {
             fx::SPINNER_FRAME
-        } else if !reduced && fx::style_has_ambient_motion(self.theme.active.style) {
+        } else if self.has_ambient_motion() {
             fx::AMBIENT_FRAME
         } else {
             fx::IDLE_FRAME
         }
+    }
+
+    /// Whether the current frame has active motion, spinners, or fading toasts that require
+    /// continuous redraws even without user input or new telemetry snapshots.
+    pub(super) fn needs_continuous_redraw(&self) -> bool {
+        let reduced = self.reduced_motion();
+        let sheen_active = !reduced
+            && self
+                .snapshot
+                .local
+                .updated
+                .is_some_and(|at| self.now.saturating_duration_since(at) < fx::GAUGE_SHEEN);
+        let moving = self
+            .gauges
+            .iter()
+            .flatten()
+            .any(|tween| tween.moving(self.now, reduced))
+            || self.palette_morph.is_some()
+            || self.drawer_sliding()
+            || sheen_active
+            || self.toast.as_ref().is_some_and(|toast| {
+                let age = self.now.saturating_duration_since(toast.shown);
+                fx::toast_fading(age) || age >= fx::TOAST_LIFETIME
+            })
+            || self.dialog_fading()
+            || self.view_fading();
+        moving
+            || self.loading.is_some()
+            || self.worker.is_some()
+            || self.refreshing.is_some()
+            || snapshot_pending(&self.snapshot)
+            || (self.is_docker_view() && self.docker.desired_log_target().is_some())
+            || self.has_ambient_motion()
     }
 
     pub(super) fn task_title(&self) -> String {
@@ -1721,11 +1785,13 @@ impl App {
             self.task_title()
         );
         self.notify(summary, tone);
+        self.socks_cache.borrow_mut().take();
         self.completed_since_refresh = true;
         self.ctx.cancel.store(false, Ordering::SeqCst);
     }
 
-    pub(super) fn receive(&mut self) {
+    pub(super) fn receive(&mut self) -> bool {
+        let mut changed = false;
         let mut events = Vec::new();
         let mut disconnected = false;
         if let Some(receiver) = &self.receiver {
@@ -1739,6 +1805,9 @@ impl App {
                     }
                 }
             }
+        }
+        if !events.is_empty() {
+            changed = true;
         }
         for event in events {
             match event {
@@ -1770,6 +1839,7 @@ impl App {
             }
         }
         if self.worker.is_some() && disconnected {
+            changed = true;
             if let Some(worker) = self.worker.take() {
                 let _ = worker.join();
             }
@@ -1779,7 +1849,8 @@ impl App {
             )));
             self.receiver = None;
         }
-        self.receive_choices();
+        changed |= self.receive_choices();
+        changed
     }
 
     pub(super) fn record_start(&mut self, task: &Task) {
@@ -1878,6 +1949,30 @@ impl App {
                 values.insert("mirror".into(), existing.join(", "));
             }
         }
+        if spec.id == "clash.socks.configure"
+            && !self.parameters.contains_key(spec.id)
+            && let Ok(cfg) = crate::ops::clash::socks::inspect(&self.ctx)
+            && cfg.enabled
+        {
+            values = BTreeMap::from([
+                ("socks_enabled".into(), "on".into()),
+                ("socks_port".into(), cfg.port.to_string()),
+                ("socks_listen".into(), cfg.listen),
+                (
+                    "socks_udp".into(),
+                    if cfg.udp { "on" } else { "off" }.into(),
+                ),
+                ("socks_out".into(), cfg.outbound),
+                (
+                    "socks_auth".into(),
+                    if cfg.has_auth { "keep" } else { "off" }.into(),
+                ),
+                (
+                    "socks_user".into(),
+                    cfg.username.unwrap_or_else(|| "cqs".into()),
+                ),
+            ]);
+        }
         if spec.id == "github.proxy" {
             let saved_url = self.ctx.github_proxy.clone().unwrap_or_else(|| {
                 Preferences::read(&self.ctx.paths.preferences, false)
@@ -1951,13 +2046,13 @@ impl App {
         Ok(())
     }
 
-    fn receive_choices(&mut self) {
+    fn receive_choices(&mut self) -> bool {
         let Some(loading) = &self.loading else {
-            return;
+            return false;
         };
         let result = match loading.receiver.try_recv() {
             Ok(result) => result,
-            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Empty) => return false,
             Err(mpsc::TryRecvError::Disconnected) => Err(Error::new(
                 "error.io",
                 "choice loader exited without a result",
@@ -1967,6 +2062,7 @@ impl App {
         if let Err(error) = result.and_then(|options| self.show_form(loading, options)) {
             self.fail_ui(error);
         }
+        true
     }
 
     fn show_form(&mut self, loading: Loading, options: Vec<Vec<Choice>>) -> Result<()> {
@@ -2570,6 +2666,60 @@ impl App {
         }
     }
 
+    pub(super) fn open_socks_secret_modal(&mut self) -> Result<Effect> {
+        let public_v4 = match &self.snapshot.public.ipv4 {
+            Reading::Value(ip) if !ip.is_empty() => Some(ip.as_str()),
+            _ => None,
+        };
+        match crate::ops::clash::socks::reveal(&self.ctx, public_v4) {
+            Ok(Some(creds)) => {
+                self.socks_secret = Some(SocksSecretModal {
+                    creds,
+                    show_password: true,
+                    scroll: 0,
+                });
+            }
+            Ok(None) => {
+                let msg = self.ctx.i18n.text("toast.socks_not_configured").to_owned();
+                self.notify(msg, Tone::Warning);
+            }
+            Err(err) => {
+                let msg = self.ctx.i18n.error(&err);
+                self.notify(msg, Tone::Danger);
+            }
+        }
+        Ok(Effect::None)
+    }
+
+    pub(super) fn close_socks_secret(&mut self) {
+        self.socks_secret = None;
+    }
+
+    pub(super) fn copy_socks_secret_field(&mut self, value: String, field_key: &str) -> Effect {
+        let field = self.ctx.i18n.text(field_key);
+        let msg = self
+            .ctx
+            .i18n
+            .format("toast.copied_socks_field", &[("field", field)]);
+        self.notify(msg, Tone::Success);
+        Effect::Copy(value)
+    }
+
+    pub(super) fn copy_socks_secret_password(&mut self) -> Effect {
+        let password = self
+            .socks_secret
+            .as_ref()
+            .and_then(|m| m.creds.password.clone());
+        match password {
+            Some(pw) => self.copy_socks_secret_field(pw, "ui.socks_secret_field_password"),
+            None => {
+                let msg = self.ctx.i18n.text("toast.socks_no_password").to_owned();
+                self.notify(msg, Tone::Warning);
+                Effect::None
+            }
+        }
+    }
+
     pub(super) fn run_workbench_command(
         &mut self,
         cmd: palette::WorkbenchCommand,
@@ -2590,6 +2740,7 @@ impl App {
                 self.open_docker(self.docker.tab, next, false);
             }
             WorkbenchCommand::GithubProxy => return self.open_github_proxy_form(),
+            WorkbenchCommand::SocksSecret => return self.open_socks_secret_modal(),
             WorkbenchCommand::Theme => self.open_theme_drawer(),
             WorkbenchCommand::TransparentBg => self.toggle_transparent_bg(true),
             WorkbenchCommand::ReducedMotion => self.toggle_reduced_motion(true),
@@ -2606,10 +2757,50 @@ impl App {
         Ok(Effect::None)
     }
 
+    pub(super) fn cached_socks_config(&self) -> Option<crate::ops::clash::socks::SocksConfig> {
+        let stat_key = std::fs::metadata(&self.ctx.paths.clash_mixin)
+            .ok()
+            .map(|meta| {
+                #[cfg(unix)]
+                let ino = {
+                    use std::os::unix::fs::MetadataExt;
+                    meta.ino()
+                };
+                #[cfg(not(unix))]
+                let ino = 0u64;
+                (meta.len(), meta.modified().ok(), ino)
+            });
+        if let Some(entry) = self.socks_cache.borrow().as_ref()
+            && entry.key == stat_key
+        {
+            return entry.config.clone();
+        }
+        let parsed = crate::ops::clash::socks::inspect(&self.ctx).ok();
+        *self.socks_cache.borrow_mut() = Some(SocksCacheEntry {
+            key: stat_key,
+            config: parsed.clone(),
+        });
+        parsed
+    }
+
     pub(super) fn related_for(&self, spec: &Spec) -> Option<related::Related> {
         if spec.id == "github.proxy" {
             return Some(related::github_proxy(
                 self.ctx.github_proxy.as_deref(),
+                &self.ctx.i18n,
+            ));
+        }
+        if matches!(
+            spec.id,
+            "clash.socks.status"
+                | "clash.socks.configure"
+                | "clash.socks.auth.generate"
+                | "clash.socks.auth.set"
+        ) {
+            let cached = self.cached_socks_config();
+            return Some(related::clash_socks(
+                cached.as_ref(),
+                &self.snapshot,
                 &self.ctx.i18n,
             ));
         }

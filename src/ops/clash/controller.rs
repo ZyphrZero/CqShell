@@ -748,6 +748,21 @@ pub fn mode(ctx: &Context, mode: &str, persist: bool) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn push_runtime(ctx: &Context, settings: &Settings, runtime: &[u8]) -> Result<()> {
+    let payload = std::str::from_utf8(runtime)
+        .map_err(|_| invalid("generated runtime configuration is not valid UTF-8"))?;
+    let body = serde_json::to_vec(&serde_json::json!({ "payload": payload }))?;
+    request_with_timeout(
+        ctx,
+        settings,
+        "PUT",
+        "/configs?force=true",
+        &body,
+        Duration::from_secs(15),
+    )?;
+    Ok(())
+}
+
 /// Rebuild, validate, atomically publish `clash_runtime`, and hot-reload Mihomo
 /// via `PUT /configs?force=true` without restarting the process.
 pub fn reload(ctx: &Context) -> Result<()> {
