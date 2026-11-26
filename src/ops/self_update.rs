@@ -1002,7 +1002,7 @@ pub fn update(ctx: &Context, options: &UpdateOptions) -> Result<UpdateOutcome> {
         asset.name,
         target.display()
     );
-    ctx.confirm("confirm.self_update", &summary, "YES")?;
+    ctx.confirm("confirm.self_update", &summary)?;
 
     let work = tempfile::tempdir()?;
     let checksum_path = work.path().join("archive.sha256");

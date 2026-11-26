@@ -1632,11 +1632,15 @@ esac
                 let mut logs = Vec::new();
                 while let Ok(event) = rx.recv_timeout(Duration::from_secs(5)) {
                     match event {
-                        Event::Confirm { text, token, reply } => {
+                        Event::Confirm {
+                            text,
+                            danger,
+                            reply,
+                        } => {
                             assert!(!prompted);
                             assert!(text.contains("7.3.0-joeyblog-bbrv3"));
                             assert!(text.contains("SSH"));
-                            assert_eq!(token, "YES");
+                            assert!(danger);
                             prompted = true;
                             reply.send(accept).unwrap();
                         }

@@ -220,14 +220,14 @@ fn confirmation_policies_and_argument_validation_enforce_safety_tiers() {
     let vol_rm = DockerOp::VolumeRemove {
         names: vec!["pg_data".into()],
     };
-    assert_eq!(vol_rm.confirm_policy(), ConfirmPolicy::Token("REMOVE"));
+    assert_eq!(vol_rm.confirm_policy(), ConfirmPolicy::Danger);
 
     let batch_rm = DockerOp::ContainerRemove {
         ids: vec!["a".into(), "b".into(), "c".into()],
         names: vec!["a".into(), "b".into(), "c".into()],
         force: true,
     };
-    assert_eq!(batch_rm.confirm_policy(), ConfirmPolicy::Token("REMOVE"));
+    assert_eq!(batch_rm.confirm_policy(), ConfirmPolicy::Danger);
 
     let prune_vols = DockerOp::Prune {
         containers: true,
@@ -237,7 +237,24 @@ fn confirmation_policies_and_argument_validation_enforce_safety_tiers() {
         networks: false,
         build_cache: false,
     };
-    assert_eq!(prune_vols.confirm_policy(), ConfirmPolicy::Token("PRUNE"));
+    assert_eq!(prune_vols.confirm_policy(), ConfirmPolicy::Danger);
+
+    // Non-destructive modal-submitted and start/pull actions do not prompt a second time.
+    let pull = DockerOp::ImagePull {
+        reference: "nginx:alpine".into(),
+    };
+    assert_eq!(pull.confirm_policy(), ConfirmPolicy::None);
+    let net_create = DockerOp::NetworkCreate {
+        name: "app-net".into(),
+        subnet: String::new(),
+        ipv6: false,
+    };
+    assert_eq!(net_create.confirm_policy(), ConfirmPolicy::None);
+    let compose_up = DockerOp::ComposeUp {
+        project: "demo".into(),
+        config_files: vec!["/srv/compose.yml".into()],
+    };
+    assert_eq!(compose_up.confirm_policy(), ConfirmPolicy::None);
 
     // Reject option injection & trim padded names/references in commands()
     let padded_pull = DockerOp::ImagePull {

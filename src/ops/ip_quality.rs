@@ -39,7 +39,10 @@ pub fn arguments(locale: &str, family: &str, full_ip: &str) -> Result<Vec<String
 pub fn run(ctx: &Context, family: &str, full_ip: &str) -> Result<()> {
     let args = arguments(ctx.i18n.locale(), family, full_ip)?;
     ctx.require(&["curl", "bash"])?;
-    ctx.confirm("confirm.ip_quality", PROJECT, "RUN")?;
+    ctx.confirm(
+        "confirm.ip_quality",
+        format!("{PROJECT}\nip_family={family}, full_ip={full_ip}"),
+    )?;
     let work = tempfile::tempdir()?;
     let script = work.path().join("ipquality.sh");
     ctx.download(SCRIPT_URL, &script, 300)?;

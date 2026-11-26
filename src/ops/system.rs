@@ -151,17 +151,18 @@ pub fn clean(ctx: &Context, scope: &str) -> Result<()> {
     if !["standard", "full"].contains(&scope) {
         return Err(Error::new("error.input", scope));
     }
+    if scope == "full" {
+        ctx.confirm_danger(
+            "confirm.clean_full",
+            "/var/log, /root, /home, /ql; /tmp, /var/tmp; Docker",
+        )?;
+    }
     let _lock = Lock::acquire(&ctx.paths.kernel_lock)?;
     super::packages::run(ctx, &["clean"])?;
     ctx.run("journalctl", &["--vacuum-time=7d"])?;
     // Kernel removal is always explicit through the kernel module; autoremove may remove fallback kernels.
     ctx.log(ctx.i18n.text("notice.preserve_kernels"));
     if scope == "full" {
-        ctx.confirm(
-            "confirm.clean_full",
-            "/var/log, /root, /home, /ql; /tmp, /var/tmp; Docker",
-            "CLEAN",
-        )?;
         for root in ["/var/log", "/root", "/home", "/ql"] {
             if Path::new(root).exists() {
                 ctx.run(

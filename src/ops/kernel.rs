@@ -494,10 +494,9 @@ pub fn install(ctx: &Context, profile: &str, version: &str) -> Result<()> {
     if release.kernel == running {
         return Err(Error::new("error.running_kernel", running));
     }
-    ctx.confirm(
-        "confirm.kernel_download",
+    ctx.confirm_danger(
+        "confirm.kernel_install",
         format!("byJoey/Actions-bbr-v3 / {} / {profile}", release.kernel),
-        "DOWNLOAD",
     )?;
     for (asset, kind) in release.assets.iter().zip(["image", "headers"]) {
         let target = work.path().join(format!("{kind}.deb"));
@@ -507,7 +506,6 @@ pub fn install(ctx: &Context, profile: &str, version: &str) -> Result<()> {
         }
     }
     let config = validate_packages(ctx, work.path(), &release, &arch)?;
-    ctx.confirm("confirm.kernel_install", &release.kernel, "INSTALL")?;
     install_verified(ctx, work.path(), &release, &config, &running)
 }
 
@@ -565,7 +563,7 @@ pub(crate) fn reboot_after_install(ctx: &Context, installed: &str, running: &str
         // Installing with --yes must not also authorize a host reboot.
         let mut prompt = ctx.clone();
         prompt.yes = false;
-        match prompt.confirm("confirm.kernel_reboot", installed, "YES") {
+        match prompt.confirm_step("confirm.kernel_reboot", installed, true) {
             Ok(()) => return ctx.run("reboot", &[]),
             // Deferring a reboot does not cancel the completed installation.
             Err(error) if error.key == "error.cancelled" => (),
@@ -609,17 +607,13 @@ pub(crate) fn schedule_boot(
     if reboot_now {
         let mut prompt = ctx.clone();
         prompt.yes = false;
-        prompt.confirm(
+        prompt.confirm_step(
             "confirm.kernel_boot_reboot",
             format!("{running} -> {release}"),
-            "REBOOT",
+            true,
         )?;
     } else {
-        ctx.confirm(
-            "confirm.kernel_boot",
-            format!("{running} -> {release}"),
-            "BOOT",
-        )?;
+        ctx.confirm_danger("confirm.kernel_boot", format!("{running} -> {release}"))?;
     }
 
     let result = (|| {
@@ -702,7 +696,7 @@ pub fn remove(ctx: &Context, release: &str) -> Result<()> {
     let plan = super::packages::output(ctx, &args)?;
     validate_removal_plan(&plan, release)?;
     ctx.log(plan);
-    ctx.confirm("confirm.kernel_remove", release, "REMOVE")?;
+    ctx.confirm_danger("confirm.kernel_remove", release)?;
     let backup = backup_grub(ctx, &running)?;
     let mut args = vec!["purge", "-y"];
     args.extend(packages);

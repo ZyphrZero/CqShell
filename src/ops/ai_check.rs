@@ -54,11 +54,7 @@ pub fn arguments(report_mode: &str, share_link: &str, target_ip: &str) -> Result
 pub fn run(ctx: &Context, report_mode: &str, share_link: &str, target_ip: &str) -> Result<()> {
     let args = arguments(report_mode, share_link, target_ip)?;
     ctx.require(&["curl", "sh"])?;
-    ctx.confirm(
-        "confirm.ai_check",
-        format!("{SCRIPT_URL}\n{PROJECT}"),
-        "RUN",
-    )?;
+    ctx.confirm("confirm.ai_check", format!("{SCRIPT_URL}\n{PROJECT}"))?;
     let work = tempfile::tempdir()?;
     let script = resolve_script_path(&work.path().join("ipforai-check.sh"))?;
     ctx.download(SCRIPT_URL, &script, 300)?;

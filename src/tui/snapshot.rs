@@ -288,8 +288,7 @@ fn redesigned_tui_core_snapshot_matrix() {
     app.confirmation = Some(super::state::Confirmation {
         text: "Irreversible cleanup: remove old journals, temp files, and unused Docker data."
             .into(),
-        token: "YES".into(),
-        input: super::input::InputBuffer::default(),
+        danger: false,
         reply: tx,
         scroll: 0,
         accept: false,

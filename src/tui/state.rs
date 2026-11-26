@@ -441,8 +441,7 @@ impl PromptPreview {
 
 pub(super) struct Confirmation {
     pub text: String,
-    pub token: String,
-    pub input: InputBuffer,
+    pub danger: bool,
     pub reply: Sender<bool>,
     pub scroll: u16,
     pub accept: bool,
@@ -1812,12 +1811,15 @@ impl App {
         for event in events {
             match event {
                 Event::Log(text) => self.log(text),
-                Event::Confirm { text, token, reply } => {
+                Event::Confirm {
+                    text,
+                    danger,
+                    reply,
+                } => {
                     self.dialog_opened = Some(Instant::now());
                     self.confirmation = Some(Confirmation {
                         text,
-                        token,
-                        input: InputBuffer::default(),
+                        danger,
                         reply,
                         scroll: 0,
                         accept: false,

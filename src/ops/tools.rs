@@ -207,7 +207,10 @@ fn terminal_install_unlocked(ctx: &Context) -> Result<()> {
 }
 
 pub fn remote(ctx: &Context, url: &str) -> Result<()> {
-    ctx.confirm("confirm.remote", url, "RUN")?;
+    ctx.confirm("confirm.remote", url)?;
+    run_remote_script(ctx, url)
+}
+fn run_remote_script(ctx: &Context, url: &str) -> Result<()> {
     let work = tempfile::tempdir()?;
     let script = work.path().join("script.sh");
     ctx.download(url, &script, 300)?;
@@ -215,16 +218,23 @@ pub fn remote(ctx: &Context, url: &str) -> Result<()> {
     ctx.passthrough("bash", &[path(&script)?])
 }
 pub fn speedtest(ctx: &Context) -> Result<()> {
-    if !available("speedtest") {
+    const OOKLA_REPO_SCRIPT: &str =
+        "https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh";
+    let needs_install = !available("speedtest");
+    if needs_install {
         ctx.root()?;
+    }
+    let detail = if needs_install {
+        format!("Ookla\n{OOKLA_REPO_SCRIPT}")
+    } else {
+        "Ookla".into()
+    };
+    ctx.confirm("confirm.speedtest", detail)?;
+    if needs_install {
         let _lock = Lock::acquire(&ctx.paths.kernel_lock)?;
-        remote(
-            ctx,
-            "https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh",
-        )?;
+        run_remote_script(ctx, OOKLA_REPO_SCRIPT)?;
         super::packages::run(ctx, &["install", "-y", "speedtest"])?;
     }
-    ctx.confirm("confirm.speedtest", "Ookla", "ACCEPT")?;
     let output = ctx.output(
         "speedtest",
         &["--accept-license", "--accept-gdpr", "-f", "json"],

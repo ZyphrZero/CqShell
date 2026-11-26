@@ -22,7 +22,7 @@ pub enum Event {
     Log(String),
     Confirm {
         text: String,
-        token: String,
+        danger: bool,
         reply: Sender<bool>,
     },
     Step(Step),
@@ -64,7 +64,40 @@ pub struct Context {
     /// Optional normalized HTTPS prefix for GitHub acceleration proxy (e.g. `https://gh-proxy.com/`).
     pub github_proxy: Option<String>,
     pub(crate) environment: std::collections::BTreeMap<String, String>,
+    pub(crate) batch_confirmed: bool,
     recovering: bool,
+}
+
+/// Parses an interactive confirmation reply: `y`/`yes` accepts, `n`/`no` or empty rejects,
+/// and unrecognized input returns `None` so the caller can re-prompt.
+pub(crate) fn parse_confirm_reply(input: &str) -> Option<bool> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Some(true),
+        "n" | "no" | "" => Some(false),
+        _ => None,
+    }
+}
+
+fn read_confirm_reply(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    i18n: &I18n,
+    check_cancel: impl Fn() -> Result<()>,
+) -> Result<bool> {
+    let mut prompt_key = "ui.confirm_prompt";
+    loop {
+        check_cancel()?;
+        write!(writer, "{} ", i18n.text(prompt_key))?;
+        writer.flush()?;
+        let mut input = String::new();
+        if reader.read_line(&mut input)? == 0 {
+            return Ok(false);
+        }
+        if let Some(accepted) = parse_confirm_reply(&input) {
+            return Ok(accepted);
+        }
+        prompt_key = "ui.confirm_invalid";
+    }
 }
 
 impl Context {
@@ -78,6 +111,7 @@ impl Context {
             interactive: std::io::stdin().is_terminal(),
             github_proxy: None,
             environment: std::collections::BTreeMap::new(),
+            batch_confirmed: false,
             recovering: false,
         }
     }
@@ -169,18 +203,43 @@ impl Context {
             StepState::Finished { .. } => None,
         }
     }
-    pub fn confirm(&self, key: &str, detail: impl ToString, token: &str) -> Result<()> {
+    /// Standard pre-execution confirmation (`y`/`yes` or `n`/`no`). Skipped when `--yes` is set
+    /// or when the enclosing batch has already been confirmed by the user.
+    pub fn confirm(&self, key: &str, detail: impl ToString) -> Result<()> {
+        self.confirm_inner(key, detail, false, true)
+    }
+    /// High-risk pre-execution confirmation (`y`/`yes` or `n`/`no`, danger-styled in TUI).
+    /// Skipped when `--yes` is set or when the enclosing batch has already been confirmed.
+    pub fn confirm_danger(&self, key: &str, detail: impl ToString) -> Result<()> {
+        self.confirm_inner(key, detail, true, true)
+    }
+    /// Mid- or post-operation checkpoint confirmation (`y`/`yes` or `n`/`no`) that cannot be
+    /// subsumed by an upfront batch confirmation (for example, post-key SSH verification,
+    /// benchmark-selected mirror review, or post-install host reboot).
+    pub fn confirm_step(&self, key: &str, detail: impl ToString, danger: bool) -> Result<()> {
+        self.confirm_inner(key, detail, danger, false)
+    }
+    fn confirm_inner(
+        &self,
+        key: &str,
+        detail: impl ToString,
+        danger: bool,
+        allow_batch_skip: bool,
+    ) -> Result<()> {
         self.check()?;
         let text = self.i18n.format(key, &[("detail", &detail.to_string())]);
         if self.yes {
             self.log(text);
             return Ok(());
         }
+        if allow_batch_skip && self.batch_confirmed {
+            return Ok(());
+        }
         let accepted = if let Some(tx) = &self.events {
             let (reply, receive) = mpsc::channel();
             tx.send(Event::Confirm {
                 text,
-                token: token.into(),
+                danger,
                 reply,
             })
             .map_err(|e| Error::new("error.io", e))?;
@@ -194,13 +253,10 @@ impl Context {
             }
         } else if self.interactive {
             println!("{text}");
-            print!(
-                "{} ",
-                self.i18n.format("ui.type_confirm", &[("token", token)])
-            );
-            std::io::stdout().flush()?;
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)? > 0 && input.trim() == token
+            let stdin = std::io::stdin();
+            let mut reader = stdin.lock();
+            let mut stdout = std::io::stdout();
+            read_confirm_reply(&mut reader, &mut stdout, &self.i18n, || self.check())?
         } else {
             return Err(Error::new("error.confirm", "--yes"));
         };
@@ -947,5 +1003,31 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::ExecutableFileBusy);
         assert_eq!(attempts, 1);
+    }
+
+    #[test]
+    fn confirm_reply_parser_accepts_yes_no_and_reprompts_on_invalid_input() {
+        for accepted in ["y", "Y", "yes", "YES", "Yes", "  y \r\n", "\tyes\n"] {
+            assert_eq!(parse_confirm_reply(accepted), Some(true), "{accepted:?}");
+        }
+        for rejected in ["n", "N", "no", "NO", "No", "", "   \r\n"] {
+            assert_eq!(parse_confirm_reply(rejected), Some(false), "{rejected:?}");
+        }
+        for invalid in ["ye", "ok", "RUN", "REMOVE", "1"] {
+            assert_eq!(parse_confirm_reply(invalid), None, "{invalid:?}");
+        }
+
+        let i18n = I18n::load(Some("en-US"), None).unwrap();
+        let mut out = Vec::new();
+        let mut input = std::io::Cursor::new(b"maybe\ny\n".as_slice());
+        assert!(read_confirm_reply(&mut input, &mut out, &i18n, || Ok(())).unwrap());
+        let rendered = String::from_utf8(out).unwrap();
+        assert!(rendered.contains(i18n.text("ui.confirm_prompt")));
+        assert!(rendered.contains(i18n.text("ui.confirm_invalid")));
+
+        // EOF after invalid input safely cancels without looping.
+        let mut out = Vec::new();
+        let mut input = std::io::Cursor::new(b"nope\n".as_slice());
+        assert!(!read_confirm_reply(&mut input, &mut out, &i18n, || Ok(())).unwrap());
     }
 }

@@ -519,7 +519,6 @@ pub fn install(ctx: &Context, tool: Tool) -> Result<()> {
             package.digest,
             target.display()
         ),
-        "YES",
     )?;
     let archive = work.path().join("package");
     ctx.download(&package.url, &archive, 900)?;

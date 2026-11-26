@@ -10,12 +10,12 @@ use std::process::{Command, Stdio};
 /// Tiered confirmation policy matching the design's L0–L3 safety matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmPolicy {
-    /// L0: read-only or harmless recovery (no prompt).
+    /// L0: read-only, non-destructive start/pull, or already submitted in a dedicated modal.
     None,
-    /// L1 / L2: reversible or scoped removal (Yes/No confirmation, default Cancel).
+    /// L1 / L2: service disruption or scoped removal (Yes/No confirmation, default Cancel).
     YesNo,
-    /// L3: irreversible data destruction or large batch deletion (typed token required).
-    Token(&'static str),
+    /// L3: irreversible data destruction or large batch deletion (danger-styled Yes/No, default Cancel).
+    Danger,
 }
 
 /// Interactive terminal session specification (`docker exec -it`).
@@ -143,55 +143,56 @@ impl DockerOp {
         }
     }
 
-    /// Confirmation risk policy (L0 None, L1/L2 YesNo, L3 Typed Token).
+    /// Confirmation risk policy (L0 None, L1/L2 YesNo, L3 Danger Yes/No).
     pub fn confirm_policy(&self) -> ConfirmPolicy {
         match self {
-            Self::ContainerStart { .. } | Self::ContainerUnpause { .. } => ConfirmPolicy::None,
-            Self::ContainerStop { .. }
-            | Self::ContainerRestart { .. }
-            | Self::ContainerPause { .. }
+            Self::ContainerStart { .. }
+            | Self::ContainerUnpause { .. }
             | Self::ComposeUp { .. }
             | Self::ComposeStart { .. }
-            | Self::ComposeStop { .. }
-            | Self::ComposeRestart { .. }
             | Self::ComposePull { .. }
             | Self::ImagePull { .. }
             | Self::NetworkCreate { .. }
-            | Self::ServiceStart
+            | Self::ServiceStart => ConfirmPolicy::None,
+            Self::ContainerStop { .. }
+            | Self::ContainerRestart { .. }
+            | Self::ContainerPause { .. }
+            | Self::ComposeStop { .. }
+            | Self::ComposeRestart { .. }
             | Self::ServiceStop
             | Self::ServiceRestart => ConfirmPolicy::YesNo,
             Self::ContainerRemove { ids, .. } => {
                 if ids.len() >= 3 {
-                    ConfirmPolicy::Token("REMOVE")
+                    ConfirmPolicy::Danger
                 } else {
                     ConfirmPolicy::YesNo
                 }
             }
             Self::ImageRemove { ids, .. } => {
                 if ids.len() >= 3 {
-                    ConfirmPolicy::Token("REMOVE")
+                    ConfirmPolicy::Danger
                 } else {
                     ConfirmPolicy::YesNo
                 }
             }
             Self::NetworkRemove { ids, .. } => {
                 if ids.len() >= 3 {
-                    ConfirmPolicy::Token("REMOVE")
+                    ConfirmPolicy::Danger
                 } else {
                     ConfirmPolicy::YesNo
                 }
             }
-            Self::VolumeRemove { .. } => ConfirmPolicy::Token("REMOVE"),
+            Self::VolumeRemove { .. } => ConfirmPolicy::Danger,
             Self::ComposeDown { volumes, .. } => {
                 if *volumes {
-                    ConfirmPolicy::Token("REMOVE")
+                    ConfirmPolicy::Danger
                 } else {
                     ConfirmPolicy::YesNo
                 }
             }
             Self::Prune { volumes, .. } => {
                 if *volumes {
-                    ConfirmPolicy::Token("PRUNE")
+                    ConfirmPolicy::Danger
                 } else {
                     ConfirmPolicy::YesNo
                 }
@@ -576,16 +577,16 @@ impl DockerOp {
                     self.target_summary(),
                     self.cli_preview()
                 );
-                ctx.confirm("confirm.action", detail, "YES")?;
+                ctx.confirm("confirm.action", detail)?;
             }
-            ConfirmPolicy::Token(token) => {
+            ConfirmPolicy::Danger => {
                 let detail = format!(
                     "{}\n{}\n\n$ {}",
                     ctx.i18n.text(self.title_key()),
                     self.target_summary(),
                     self.cli_preview()
                 );
-                ctx.confirm("confirm.action", detail, token)?;
+                ctx.confirm_danger("confirm.action", detail)?;
             }
         }
         for (prog, args) in self.commands() {

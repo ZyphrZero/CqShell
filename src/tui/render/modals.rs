@@ -893,10 +893,10 @@ pub(super) fn draw_confirmation(app: &App, frame: &mut Frame, area: Rect, alpha:
     let geom = ConfirmationGeometry::compute(area, confirm, i);
 
     fx::apply_shadow(frame.buffer_mut(), geom.modal, area, theme);
-    let accent_role = if confirm.token == "YES" {
-        Role::Warning
-    } else {
+    let accent_role = if confirm.danger {
         Role::Danger
+    } else {
+        Role::Warning
     };
     tokens::draw_surface_card(frame, geom.modal, theme, Role::Elevated, accent_role, true);
     let bg = if theme.flags.paint_bg {
@@ -948,65 +948,41 @@ pub(super) fn draw_confirmation(app: &App, frame: &mut Frame, area: Rect, alpha:
     }
 
     let buf = frame.buffer_mut();
-    if confirm.token == "YES" {
-        draw_button(
-            app,
-            buf,
-            geom.buttons[0],
-            i.text("ui.cancel"),
-            !confirm.accept,
-            false,
-            bg,
+    draw_button(
+        app,
+        buf,
+        geom.buttons[0],
+        i.text("ui.cancel"),
+        !confirm.accept,
+        false,
+        bg,
+    );
+    draw_button(
+        app,
+        buf,
+        geom.buttons[1],
+        i.text("ui.confirm_execute"),
+        confirm.accept,
+        true,
+        bg,
+    );
+
+    let hint_y = geom.modal.bottom().saturating_sub(2);
+    if hint_y > geom.buttons[0].y {
+        let hint_w = geom.modal.width.saturating_sub(4);
+        let hints = tokens::fit_keycaps(
+            theme,
+            &[
+                ("Y", i.text("key.confirm")),
+                ("N/Esc", i.text("ui.cancel")),
+                ("←→", i.text("key.choose")),
+                ("↵", i.text("key.submit")),
+            ],
+            hint_w as usize,
         );
-        draw_button(
-            app,
-            buf,
-            geom.buttons[1],
-            i.text("ui.confirm_execute"),
-            confirm.accept,
-            true,
-            bg,
-        );
-    } else {
-        let prompt_y = geom.modal.bottom().saturating_sub(4);
-        let input_y = geom.modal.bottom().saturating_sub(3);
-        let prompt = i.format("ui.type_confirm", &[("token", &confirm.token)]);
-        buf.set_stringn(
-            geom.modal.x + 2,
-            prompt_y,
-            clip_ascii_safe(
-                &prompt,
-                geom.modal.width.saturating_sub(4) as usize,
-                theme.flags.ascii,
-            ),
-            geom.modal.width.saturating_sub(4) as usize,
-            tokens::fg(theme, Role::Danger)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-        );
-        let input_bg = if theme.flags.paint_bg {
-            tokens::color(theme, Role::Surface)
-        } else {
-            bg
-        };
-        for col in (geom.modal.x + 2)..geom.modal.right().saturating_sub(2) {
-            buf[(col, input_y)].set_symbol(" ").set_bg(input_bg);
-        }
-        let (vis, cx) = confirm
-            .input
-            .visible(geom.modal.width.saturating_sub(6) as usize);
-        buf.set_stringn(
-            geom.modal.x + 3,
-            input_y,
-            &vis,
-            geom.modal.width.saturating_sub(6) as usize,
-            tokens::text(theme, Level::Primary).bg(input_bg),
-        );
-        let cursor_col = (geom.modal.x + 3 + cx).min(geom.modal.right().saturating_sub(3));
-        buf[(cursor_col, input_y)].set_style(
-            Style::default()
-                .fg(tokens::color(theme, Role::OnAccent))
-                .bg(tokens::color(theme, Role::Danger)),
+        frame.render_widget(
+            Paragraph::new(Line::from(hints)),
+            Rect::new(geom.modal.x + 2, hint_y, hint_w, 1),
         );
     }
 

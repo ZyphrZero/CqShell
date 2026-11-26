@@ -549,7 +549,8 @@ pub fn apply(ctx: &Context, site: &str) -> Result<()> {
         return Err(Error::new("error.pending", pending.display()));
     }
     let before = preflight(apt, &host)?;
-    let site = if site == "auto" {
+    let auto = site == "auto";
+    let site = if auto {
         benchmark(ctx, &host)?[0].site.clone()
     } else {
         site.to_owned()
@@ -568,7 +569,11 @@ pub fn apply(ctx: &Context, site: &str) -> Result<()> {
             .collect::<Vec<_>>()
             .join("\n")
     );
-    ctx.confirm("confirm.mirror", detail, "YES")?;
+    if auto {
+        ctx.confirm_step("confirm.mirror", detail, false)?;
+    } else {
+        ctx.confirm("confirm.mirror", detail)?;
+    }
     let work = tempfile::tempdir()?;
     let script = work.path().join("LinuxMirrors.sh");
     ctx.download(SCRIPT_URL, &script, 60)?;

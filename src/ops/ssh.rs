@@ -169,7 +169,7 @@ pub fn key_login(ctx: &Context, public_key: &Path) -> Result<()> {
         storage::atomic_write(&target, current.as_bytes(), 0o600)?;
     }
     // Keep the installed public key on cancellation so a new connection can be tested.
-    ctx.confirm("confirm.key_tested", target.display(), "KEY-TESTED")?;
+    ctx.confirm_step("confirm.key_tested", target.display(), true)?;
     configure(
         ctx,
         &[

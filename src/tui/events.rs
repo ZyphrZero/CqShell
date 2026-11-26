@@ -823,101 +823,40 @@ impl App {
         let page = geom.body.height.saturating_sub(1).max(1);
         let max_scroll = geom.max_scroll();
 
-        let answer = if key.code == KeyCode::Esc {
-            Some(false)
-        } else if confirm.token == "YES" {
-            match key.code {
-                KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
-                    confirm.accept = !confirm.accept;
-                    None
-                }
-                KeyCode::Char('c' | 'C') => {
-                    let text = confirm.text.clone();
-                    return Ok(self.copy_plain(text));
-                }
-                KeyCode::Char('v' | 'V') => {
-                    let content = confirm.text.clone();
-                    let title = self.ctx.i18n.text("ui.confirm").to_owned();
-                    return Ok(Effect::PlainView { title, content });
-                }
-                KeyCode::Char('y' | 'Y') => Some(true),
-                KeyCode::Char('n' | 'N') => Some(false),
-                KeyCode::Enter => Some(confirm.accept),
-                KeyCode::Up | KeyCode::Char('k') => {
-                    confirm.scroll = confirm.scroll.saturating_sub(1);
-                    None
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    confirm.scroll = confirm.scroll.saturating_add(1).min(max_scroll);
-                    None
-                }
-                KeyCode::PageUp => {
-                    confirm.scroll = confirm.scroll.saturating_sub(page);
-                    None
-                }
-                KeyCode::PageDown => {
-                    confirm.scroll = confirm.scroll.saturating_add(page).min(max_scroll);
-                    None
-                }
-                _ => None,
+        let answer = match key.code {
+            KeyCode::Esc | KeyCode::Char('n' | 'N') => Some(false),
+            KeyCode::Char('y' | 'Y') => Some(true),
+            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+                confirm.accept = !confirm.accept;
+                None
             }
-        } else {
-            match key.code {
-                KeyCode::Enter if confirm.input.text == confirm.token => Some(true),
-                KeyCode::Up => {
-                    confirm.scroll = confirm.scroll.saturating_sub(1);
-                    None
-                }
-                KeyCode::Down => {
-                    confirm.scroll = confirm.scroll.saturating_add(1).min(max_scroll);
-                    None
-                }
-                KeyCode::Backspace => {
-                    confirm.input.backspace();
-                    None
-                }
-                KeyCode::Delete => {
-                    confirm.input.delete();
-                    None
-                }
-                KeyCode::Left => {
-                    confirm.input.left();
-                    None
-                }
-                KeyCode::Right => {
-                    confirm.input.right();
-                    None
-                }
-                KeyCode::Home => {
-                    confirm.input.cursor = 0;
-                    None
-                }
-                KeyCode::End => {
-                    confirm.input.cursor = confirm.input.text.len();
-                    None
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    confirm.input.clear();
-                    None
-                }
-                KeyCode::PageUp => {
-                    confirm.scroll = confirm.scroll.saturating_sub(page);
-                    None
-                }
-                KeyCode::PageDown => {
-                    confirm.scroll = confirm.scroll.saturating_add(page).min(max_scroll);
-                    None
-                }
-                KeyCode::Char(c)
-                    if !key
-                        .modifiers
-                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                {
-                    confirm.input.insert(c);
-                    None
-                }
-                _ => None,
+            KeyCode::Char('c' | 'C') => {
+                let text = confirm.text.clone();
+                return Ok(self.copy_plain(text));
             }
+            KeyCode::Char('v' | 'V') => {
+                let content = confirm.text.clone();
+                let title = self.ctx.i18n.text("ui.confirm").to_owned();
+                return Ok(Effect::PlainView { title, content });
+            }
+            KeyCode::Enter => Some(confirm.accept),
+            KeyCode::Up | KeyCode::Char('k') => {
+                confirm.scroll = confirm.scroll.saturating_sub(1);
+                None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                confirm.scroll = confirm.scroll.saturating_add(1).min(max_scroll);
+                None
+            }
+            KeyCode::PageUp => {
+                confirm.scroll = confirm.scroll.saturating_sub(page);
+                None
+            }
+            KeyCode::PageDown => {
+                confirm.scroll = confirm.scroll.saturating_add(page).min(max_scroll);
+                None
+            }
+            _ => None,
         };
 
         if let Some(answer) = answer {
@@ -1012,19 +951,17 @@ impl App {
                     confirm.scroll = confirm.scroll.saturating_add(3).min(geom.max_scroll());
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if confirm.token == "YES" {
-                        let answer = if geom.buttons[0].contains(point) {
-                            Some(false)
-                        } else if geom.buttons[1].contains(point) {
-                            Some(true)
-                        } else {
-                            None
-                        };
-                        if let Some(answer) = answer {
-                            let confirm = self.confirmation.take().expect("confirm");
-                            let _ = confirm.reply.send(answer);
-                            return Ok(Effect::None);
-                        }
+                    let answer = if geom.buttons[0].contains(point) {
+                        Some(false)
+                    } else if geom.buttons[1].contains(point) {
+                        Some(true)
+                    } else {
+                        None
+                    };
+                    if let Some(answer) = answer {
+                        let confirm = self.confirmation.take().expect("confirm");
+                        let _ = confirm.reply.send(answer);
+                        return Ok(Effect::None);
                     }
                     if geom.body.contains(point) {
                         self.drag_select =

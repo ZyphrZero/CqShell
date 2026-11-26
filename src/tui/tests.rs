@@ -374,8 +374,7 @@ fn mouse_clicks_route_to_sidebar_overview_cards_and_modals_safely() {
     let (tx, rx) = mpsc::channel();
     app.confirmation = Some(Confirmation {
         text: "Confirm dangerous op?".into(),
-        token: "YES".into(),
-        input: super::input::InputBuffer::default(),
+        danger: true,
         reply: tx,
         scroll: 0,
         accept: false,
@@ -384,7 +383,7 @@ fn mouse_clicks_route_to_sidebar_overview_cards_and_modals_safely() {
     assert!(app.confirmation.is_some());
     assert!(rx.try_recv().is_err());
 
-    // Clicking Confirm button accepts
+    // Clicking Confirm button accepts even for danger-tier confirmations (no typed token required)
     let geom = layout::ConfirmationGeometry::compute(
         area,
         app.confirmation.as_ref().unwrap(),
@@ -394,6 +393,21 @@ fn mouse_clicks_route_to_sidebar_overview_cards_and_modals_safely() {
         .unwrap();
     assert!(app.confirmation.is_none());
     assert!(rx.recv().unwrap());
+
+    // Pressing `y` / `n` answers danger confirmations immediately
+    for (ch, expected) in [('y', true), ('n', false)] {
+        let (tx, rx) = mpsc::channel();
+        app.confirmation = Some(Confirmation {
+            text: "Confirm dangerous op?".into(),
+            danger: true,
+            reply: tx,
+            scroll: 0,
+            accept: false,
+        });
+        app.handle_key(key(KeyCode::Char(ch))).unwrap();
+        assert!(app.confirmation.is_none());
+        assert_eq!(rx.recv().unwrap(), expected);
+    }
 }
 
 #[test]
@@ -477,6 +491,30 @@ fn plain_theme_in_english_renders_strictly_pure_ascii_borders_and_glyphs() {
             text.push_str(sym);
         }
         assert!(text.contains("+-"), "expected ASCII border in {nav:?}");
+    }
+
+    for danger in [false, true] {
+        let (tx, _rx) = mpsc::channel();
+        app.confirmation = Some(Confirmation {
+            text: "Confirm plain ASCII operation.".into(),
+            danger,
+            reply: tx,
+            scroll: 0,
+            accept: false,
+        });
+        for (w, h) in [(80, 24), (40, 16)] {
+            app.viewport = Rect::new(0, 0, w, h);
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| app.draw(f)).unwrap();
+            for cell in &term.backend().buffer().content {
+                assert!(
+                    cell.symbol().is_ascii(),
+                    "Non-ASCII glyph {:?} leaked in plain confirm modal (danger={danger}, {w}x{h})",
+                    cell.symbol()
+                );
+            }
+        }
+        app.confirmation = None;
     }
 }
 
@@ -1149,7 +1187,7 @@ fn docker_workspace_keyboard_mouse_and_safety_flows_work_end_to_end() {
     app.handle_key(key(KeyCode::Esc)).unwrap();
     assert_eq!(app.docker.filtered_containers().len(), 6);
 
-    // 3. Multi-select 3 containers and trigger batch remove -> requires L3 `REMOVE` token!
+    // 3. Multi-select 3 containers and trigger batch remove -> requires L3 Danger Yes/No confirm
     app.docker.set_cursor(0);
     app.handle_key(key(KeyCode::Char(' '))).unwrap();
     app.handle_key(key(KeyCode::Down)).unwrap();
@@ -1159,7 +1197,7 @@ fn docker_workspace_keyboard_mouse_and_safety_flows_work_end_to_end() {
     assert_eq!(app.docker.selected_count(), 3);
     match app.handle_key(key(KeyCode::Char('d'))).unwrap() {
         Effect::Run(Task::DockerOp(op)) => {
-            assert_eq!(op.confirm_policy(), ConfirmPolicy::Token("REMOVE"));
+            assert_eq!(op.confirm_policy(), ConfirmPolicy::Danger);
         }
         other => panic!("expected batch remove DockerOp, got {other:?}"),
     }
@@ -1220,7 +1258,7 @@ fn docker_workspace_keyboard_mouse_and_safety_flows_work_end_to_end() {
         Effect::None
     ));
 
-    // 8. Prune wizard (`Shift+P`) with volumes checked yields `PRUNE` token policy
+    // 8. Prune wizard (`Shift+P`) with volumes checked yields L3 Danger Yes/No policy
     app.handle_key(key(KeyCode::Char('P'))).unwrap();
     assert!(matches!(
         app.docker.modal,
@@ -1233,7 +1271,7 @@ fn docker_workspace_keyboard_mouse_and_safety_flows_work_end_to_end() {
     app.handle_key(key(KeyCode::Char(' '))).unwrap();
     match app.handle_key(key(KeyCode::Enter)).unwrap() {
         Effect::Run(Task::DockerOp(op @ DockerOp::Prune { volumes: true, .. })) => {
-            assert_eq!(op.confirm_policy(), ConfirmPolicy::Token("PRUNE"));
+            assert_eq!(op.confirm_policy(), ConfirmPolicy::Danger);
         }
         other => panic!("expected Prune op with volumes=true, got {other:?}"),
     }
@@ -1442,8 +1480,7 @@ fn mobile_viewports_including_59x24_and_40x16_render_and_interact_cleanly() {
             let (tx, _rx) = mpsc::channel();
             mapp.confirmation = Some(Confirmation {
                 text: "Confirm mobile operation with wrapping details.".into(),
-                token: "REMOVE".into(),
-                input: super::input::InputBuffer::default(),
+                danger: true,
                 reply: tx,
                 scroll: 0,
                 accept: false,

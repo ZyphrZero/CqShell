@@ -1631,7 +1631,7 @@ impl ConfirmationGeometry {
         let text_w = modal_w.saturating_sub(4).max(1) as usize;
         let wrapped = super::render::wrap_words(&confirm.text, text_w);
         let total_lines = wrapped.len();
-        let footer_rows = if confirm.token == "YES" { 5 } else { 6 };
+        let footer_rows = 5;
         let modal_h =
             (total_lines as u16 + footer_rows + 3).clamp(10, area.height.saturating_sub(2));
         let modal = centered(area, modal_w, modal_h);

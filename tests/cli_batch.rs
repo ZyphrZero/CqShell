@@ -11,7 +11,7 @@
 //! 1. `confirm.batch` lists every job as `n. name (k=v, …)` with all parameters, defaults
 //!    included, and only the name for jobs without parameters (requirement 11.1).
 //! 2. With `--yes`, batch items no longer log the generic `confirm.action` text
-//!    (requirement 11.2); terminal.restore keeps its RESTORE confirmation (requirement 11.3).
+//!    (requirement 11.2), including `terminal.restore` which is already covered by `confirm.batch`.
 //!
 //! Progress and completion lines, operation output, error lines, the final error and the
 //! exit status are unchanged.
@@ -60,7 +60,7 @@ const CASES: &[Case] = &[
             "tcp.tune.rtt=80",
         ],
     },
-    // terminal.restore still asks for RESTORE inside a batch.
+    // terminal.restore is covered by confirm.batch without duplicating confirm.action.
     Case {
         name: "yes_restore",
         yes: true,
@@ -249,8 +249,8 @@ fn batch_output_without_an_event_receiver_matches_the_old_binary() {
                 &i18n.format("confirm.batch", &[("detail", &numbered.join("\n"))]),
                 &format!("confirm.batch of {} {locale}", case.name),
             );
-            // Change 2: the generic confirmation is logged only for terminal.restore. The
-            // operations reach it only where the platform and root checks pass.
+            // Change 2: the generic confirmation is skipped for all batch items (covered by
+            // confirm.batch). The operations reach it only where platform/root checks pass.
             for (spec, parameters) in &jobs {
                 let generic = i18n.format(
                     "confirm.action",
@@ -277,7 +277,7 @@ fn batch_output_without_an_event_receiver_matches_the_old_binary() {
                     spec.id,
                     case.name
                 );
-                if reached && spec.id != "terminal.restore" {
+                if reached {
                     replace_once(
                         &mut expected,
                         &format!("{generic}\n"),

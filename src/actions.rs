@@ -352,20 +352,36 @@ pub const OPTIMIZATION: &[&str] = &[
     "ssh.key",
 ];
 
-/// Actions whose effect the user can undo, so a reviewed form submission runs them without
-/// the generic confirmation. Each entry was reviewed individually (design, component 8);
-/// every other action is not reversible.
+/// Actions whose effect is reversible or non-destructive, so a reviewed TUI form submission
+/// runs them directly without popping a redundant confirmation dialog.
 const REVERSIBLE: &[&str] = &[
     "bbr.enable",
     "tcp.tune",
     "github.proxy",
     "system.timezone",
+    "swap.create",
     "terminal.apply",
+    "tools.install",
+    "docker.mirror",
+    "docker.ipv6",
+    "test.io",
     "clash.proxy.select",
     "clash.mode",
+    "clash.sub.add",
+    "clash.sub.import",
+    "clash.sub.use",
+    "clash.sub.update",
+    "clash.controller.configure",
+    "clash.connections",
+    "clash.secret.set",
+    "clash.panel.install",
+    "clash.geodata.update",
     "clash.settings.configure",
     "clash.dns.configure",
     "clash.socks.configure",
+    "clash.socks.auth.set",
+    "clash.tun.configure",
+    "clash.service.install",
 ];
 
 static SPECS_CACHE: OnceLock<Vec<Spec>> = OnceLock::new();
@@ -1381,7 +1397,8 @@ pub enum Prompt {
     Batch,
 }
 
-/// Actions that ask for their own, more specific confirmation instead of the generic one.
+/// Actions that ask for their own specific confirmation (never doubled by `confirm.action`)
+/// or are non-destructive/trivially reversible operations that execute without prompting.
 fn self_confirming(kind: Kind) -> bool {
     matches!(
         kind,
@@ -1390,9 +1407,39 @@ fn self_confirming(kind: Kind) -> bool {
             | Kind::KernelBoot
             | Kind::AiInstall(_)
             | Kind::MirrorApply
+            | Kind::Clean
+            | Kind::SshKey
+            | Kind::DockerInstall
+            | Kind::Speedtest
+            | Kind::IpTest
+            | Kind::AiTest
+            | Kind::RouteTest
+            | Kind::Performance
             | Kind::ClashInstall
             | Kind::ClashStart
+            | Kind::ClashStop
+            | Kind::ClashReload
+            | Kind::ToolInstall(_)
+            | Kind::TerminalInstall
             | Kind::SelfUpdate
+    )
+}
+
+/// Generic-confirmed actions that carry destructive or access-disrupting risk (danger-styled in TUI).
+fn is_danger_generic(kind: Kind) -> bool {
+    matches!(
+        kind,
+        Kind::SshPort
+            | Kind::SwapRemove
+            | Kind::TerminalRestore
+            | Kind::DockerClean
+            | Kind::DockerUninstall
+            | Kind::Uninstall
+            | Kind::ClashSubscriptionRemove
+            | Kind::ClashSecretClear
+            | Kind::ClashMixinReset
+            | Kind::ClashPanelRemove
+            | Kind::ClashServiceRemove
     )
 }
 
@@ -1402,12 +1449,10 @@ fn needs_generic(spec: &Spec, prompt: Prompt) -> bool {
         && !self_confirming(spec.kind)
         && match prompt {
             Prompt::Generic => true,
-            // Skipping the prompt for reviewed reversible actions is the rule itself, not
-            // a fallback path.
+            // Reviewed form submissions for reversible/additive actions run directly.
             Prompt::Reviewed => !spec.reversible,
-            // The batch confirmation covers every item; restoring the terminal baseline
-            // still asks for its RESTORE token.
-            Prompt::Batch => spec.kind == Kind::TerminalRestore,
+            // The upfront batch confirmation covers every listed item without repeating.
+            Prompt::Batch => false,
         }
 }
 
@@ -1442,15 +1487,11 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
                 .collect::<Vec<_>>()
                 .join("\n")
         );
-        ctx.confirm(
-            "confirm.action",
-            detail,
-            if spec.kind == Kind::TerminalRestore {
-                "RESTORE"
-            } else {
-                "YES"
-            },
-        )?;
+        if is_danger_generic(spec.kind) {
+            ctx.confirm_danger("confirm.action", detail)?;
+        } else {
+            ctx.confirm("confirm.action", detail)?;
+        }
     }
     use Kind::*;
     match spec.kind {
@@ -1683,7 +1724,9 @@ fn run_batch(ctx: &Context, jobs: &[(Spec, Parameters)], steps: &mut [StepRecord
             format!("{}. {label} ({})", n + 1, values.join(", "))
         });
     }
-    ctx.confirm("confirm.batch", lines.join("\n"), "YES")?;
+    ctx.confirm("confirm.batch", lines.join("\n"))?;
+    let mut item_ctx = ctx.clone();
+    item_ctx.batch_confirmed = true;
     let mut failures = Vec::new();
     for (index, (spec, p)) in jobs.iter().enumerate() {
         ctx.check()?;
@@ -1695,7 +1738,7 @@ fn run_batch(ctx: &Context, jobs: &[(Spec, Parameters)], steps: &mut [StepRecord
         };
         ctx.step(step(StepState::Started));
         let started = Instant::now();
-        let result = run(ctx, spec, p, Prompt::Batch);
+        let result = run(&item_ctx, spec, p, Prompt::Batch);
         let elapsed = started.elapsed();
         let outcome = match &result {
             Ok(()) => Outcome::Done,
@@ -1757,8 +1800,9 @@ mod tests {
     #[test]
     fn generic_confirmation_follows_the_entry_point_table() {
         // Written out from the design rather than derived from the implementation: actions
-        // with their own confirmation, and the reviewed reversible actions.
-        const OWN_CONFIRMATION: &[&str] = &[
+        // with their own confirmation (or non-destructive/trivially reversible skip), and
+        // reviewed form actions that run directly without a second confirmation.
+        const OWN_OR_SKIPPED: &[&str] = &[
             "kernel.install",
             "kernel.remove",
             "kernel.boot",
@@ -1766,8 +1810,31 @@ mod tests {
             "ai.claude.install",
             "ai.codex.install",
             "system.mirror.apply",
+            "system.clean",
+            "ssh.key",
+            "docker.install",
+            "test.speed",
+            "test.ip",
+            "test.ai",
+            "test.route",
+            "test.performance",
             "clash.install",
             "clash.start",
+            "clash.stop",
+            "clash.reload",
+            "tools.curl",
+            "tools.wget",
+            "tools.nano",
+            "tools.unzip",
+            "tools.tar",
+            "tools.tmux",
+            "tools.iftop",
+            "tools.btop",
+            "tools.gdu",
+            "tools.fzf",
+            "tools.git",
+            "tools.gh",
+            "terminal.install",
             "app.update",
         ];
         const REVIEWED_REVERSIBLE: &[&str] = &[
@@ -1775,27 +1842,43 @@ mod tests {
             "tcp.tune",
             "github.proxy",
             "system.timezone",
+            "swap.create",
             "terminal.apply",
+            "tools.install",
+            "docker.mirror",
+            "docker.ipv6",
+            "test.io",
             "clash.proxy.select",
             "clash.mode",
+            "clash.sub.add",
+            "clash.sub.import",
+            "clash.sub.use",
+            "clash.sub.update",
+            "clash.controller.configure",
+            "clash.connections",
+            "clash.secret.set",
+            "clash.panel.install",
+            "clash.geodata.update",
             "clash.settings.configure",
             "clash.dns.configure",
             "clash.socks.configure",
+            "clash.socks.auth.set",
+            "clash.tun.configure",
+            "clash.service.install",
         ];
-        // Component 8, "generic confirmation per entry point".
         let expected = |spec: &Spec, prompt: Prompt| {
             let entry = match prompt {
-                // `cqs run`, TUI activation without a form: always.
+                // `cqs run`, TUI activation without a form: generic confirm unless self-confirming/skipped.
                 Prompt::Generic => true,
-                // TUI Run-mode form submission: only when not reversible.
+                // TUI Run-mode form submission: only when not reversible/additive.
                 Prompt::Reviewed => !REVIEWED_REVERSIBLE.contains(&spec.id),
-                // Each batch item: only terminal.restore.
-                Prompt::Batch => spec.id == "terminal.restore",
+                // Upfront batch confirmation covers every item without duplicating.
+                Prompt::Batch => false,
             };
-            spec.changes && !OWN_CONFIRMATION.contains(&spec.id) && entry
+            spec.changes && !OWN_OR_SKIPPED.contains(&spec.id) && entry
         };
         let specs = specs();
-        for id in OWN_CONFIRMATION.iter().chain(REVIEWED_REVERSIBLE) {
+        for id in OWN_OR_SKIPPED.iter().chain(REVIEWED_REVERSIBLE) {
             assert!(specs.iter().any(|s| s.id == *id), "{id} is not an action");
         }
         let mut cases = 0;
@@ -1808,7 +1891,7 @@ mod tests {
                     Prompt::Generic => assert_eq!(
                         shown,
                         spec.changes && !self_confirming(spec.kind),
-                        "{} changed its existing confirmation",
+                        "{} generic confirmation mismatch",
                         spec.id
                     ),
                     Prompt::Reviewed => {
@@ -1816,11 +1899,7 @@ mod tests {
                             assert!(!shown, "{} asks again after its form", spec.id);
                         }
                     }
-                    Prompt::Batch => assert!(
-                        !shown || spec.kind == Kind::TerminalRestore,
-                        "{} asks inside a batch",
-                        spec.id
-                    ),
+                    Prompt::Batch => assert!(!shown, "{} asks again inside a batch", spec.id),
                 }
             }
         }
@@ -1830,7 +1909,7 @@ mod tests {
     /// What a batch sent to its event receiver.
     #[derive(Default)]
     struct Sent {
-        confirmations: Vec<(String, String)>,
+        confirmations: Vec<(String, bool)>,
         logs: Vec<String>,
         steps: Vec<Step>,
     }
@@ -1850,8 +1929,12 @@ mod tests {
         // The channel closes when the worker drops its context.
         loop {
             match rx.recv_timeout(Duration::from_secs(30)) {
-                Ok(Event::Confirm { text, token, reply }) => {
-                    sent.confirmations.push((text, token));
+                Ok(Event::Confirm {
+                    text,
+                    danger,
+                    reply,
+                }) => {
+                    sent.confirmations.push((text, danger));
                     reply.send(accept).unwrap();
                 }
                 Ok(Event::Log(text)) => sent.logs.push(text),
@@ -1891,15 +1974,51 @@ mod tests {
         let detail = "1. Tune TCP buffers (bandwidth=1000, rtt=80)\n2. Restore TCP settings";
         assert_eq!(
             sent.confirmations,
-            [(
-                i18n.format("confirm.batch", &[("detail", detail)]),
-                "YES".to_owned()
-            )]
+            [(i18n.format("confirm.batch", &[("detail", detail)]), false)]
         );
         assert_eq!(report.result.unwrap_err().key, "error.cancelled");
         assert_eq!(report.steps, [not_run("tcp.tune"), not_run("tcp.restore")]);
         assert!(sent.steps.is_empty() && sent.logs.is_empty());
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn batch_confirmed_skips_pre_exec_confirms_but_keeps_mid_action_checkpoints() {
+        use crate::runtime::Event;
+        use std::sync::mpsc;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        ctx.yes = false;
+        ctx.interactive = false;
+        ctx.batch_confirmed = true;
+
+        let (tx, rx) = mpsc::channel();
+        ctx.events = Some(tx);
+
+        // Pre-execution confirmations are skipped when the enclosing batch was already confirmed.
+        ctx.confirm("confirm.ip_quality", "https://github.com/xykt/IPQuality")
+            .unwrap();
+        ctx.confirm_danger("confirm.clean_full", "/tmp").unwrap();
+        assert!(rx.try_recv().is_err());
+
+        // Mid-action safety checkpoints (e.g. post-key SSH test / reboot) still ask interactively.
+        let worker_ctx = ctx.clone();
+        let worker =
+            std::thread::spawn(move || worker_ctx.confirm_step("confirm.key_tested", "k", true));
+        match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            Event::Confirm {
+                text,
+                danger,
+                reply,
+            } => {
+                assert!(text.contains("SSH"));
+                assert!(danger);
+                reply.send(true).unwrap();
+            }
+            other => panic!("expected checkpoint confirm, got {other:?}"),
+        }
+        worker.join().unwrap().unwrap();
     }
 
     #[test]
