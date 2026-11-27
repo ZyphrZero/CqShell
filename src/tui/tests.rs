@@ -4598,3 +4598,15 @@ fn mcp_access_modal_masks_tokens_copies_via_osc52_switches_modes_rotates_and_is_
         }
     }
 }
+
+#[test]
+fn touch_medium_workbench_scrollbar_handles_two_line_rows_without_underflow() {
+    let (_temp, mut app) = test_app("zh-CN");
+    app.ui_density = super::layout::UiDensityMode::Auto;
+    app.goto_nav(NavTarget::Group(0)); // System group (12 items; > visual_rows but < visible_h in 59x34)
+    for _ in 0..4 {
+        let _ = render_clash_frame_text(&mut app, 59, 34);
+        app.handle_key(key(KeyCode::Down)).unwrap();
+    }
+    let _ = render_clash_frame_text(&mut app, 59, 34);
+}

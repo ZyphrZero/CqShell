@@ -21,39 +21,35 @@
 
 ## 界面预览
 
-### 桌面端 TUI（概览仪表盘 · 一键优化 · Mihomo 代理工作台）
+> 以下演示动画均由真实 `cqs` TUI 离线逐帧渲染录制（`v0.2.0`），展示全功能交互、双专属 6 标签工作台与移动端窄屏触控适配。
+
+### 桌面端全功能交互（概览仪表盘 · 实时主题/样式渐变 · 一键优化 · 命令面板 · `Shift+M` MCP 脱敏密钥卡）
 
 <p align="center">
-  <img src="assets/screenshots/desktop-overview-hud.png" alt="CqShell 概览仪表盘（精密角框 HUD 风格）" width="100%" />
+  <img src="assets/demos/desktop-tour.gif" alt="CqShell 桌面端全功能交互演示（概览、主题渐变、一键优化、命令面板与 Shift+M MCP 密钥卡）" width="100%" />
 </p>
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/screenshots/desktop-optimization-checklist.png" alt="一键优化批处理清单" width="100%" /><br />
-      <sub>一键优化批处理清单与实时状态对比</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/screenshots/desktop-mihomo-workbench.png" alt="Mihomo 代理双栏工作台" width="100%" /><br />
-      <sub>Mihomo 代理工作台 · 分区胶囊与命令预览</sub>
-    </td>
-  </tr>
-</table>
-
-### 移动端响应式适配（iOS Termius 竖屏 + 软键盘）
+### 专属 6 标签工作台（Mihomo 代理工作台 · Docker 容器工作台）
 
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="assets/screenshots/mobile-overview.png" alt="移动端堆叠概览仪表盘" width="320" /><br />
-      <sub>自动切换堆叠概览卡片与紧凑快捷操作列表</sub>
+      <img src="assets/demos/mihomo-workspace.gif" alt="Mihomo 6 标签可视化工作台（实时流量图谱、代理延迟排序、订阅配额与服务解锁）" width="100%" /><br />
+      <sub><code>cqs mihomo</code> · 实时流量图谱、策略组延迟排序、配额与服务解锁</sub>
     </td>
     <td align="center" width="50%">
-      <img src="assets/screenshots/mobile-sidebar-drawer.png" alt="移动端浮层侧边导航抽屉" width="320" /><br />
-      <sub>可随时呼出/收起的浮层导航抽屉（按 <code>[</code> 或点击左上角）</sub>
+      <img src="assets/demos/docker-workspace.gif" alt="Docker 6 标签专属工作台（容器多选、实时指标 Sparkline、日志与 Compose 拓扑）" width="100%" /><br />
+      <sub><code>cqs docker</code> · 容器多选批量操作、实时指标、流式日志与 Compose</sub>
     </td>
   </tr>
 </table>
+
+### 移动端窄屏自适应与触控体验（59×34 竖屏 · 浮层导航抽屉 · 底部拇指操作栏）
+
+<p align="center">
+  <img src="assets/demos/mobile-touch.gif" alt="移动端窄屏自适应触控演示（堆叠概览、浮层侧栏抽屉、底部拇指栏与 Mihomo/Docker 适配）" width="380" /><br />
+  <sub>自动启用 <code>TouchMedium</code> 触控密度、底部拇指快捷栏与浮层导航抽屉（按 <code>[</code>）</sub>
+</p>
 
 ## 核心特性
 
@@ -408,10 +404,11 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-生成 TUI 真实渲染缓冲区的 JSON / HTML 视觉检视快照：
+生成 TUI 真实渲染缓冲区的 JSON / HTML 视觉检视快照，或离线逐帧重新录制 README 演示 GIF（需 Node.js 22+、Chrome/Chromium 与 `ffmpeg`）：
 
 ```bash
 cargo run --release --example tui_snapshot -- target/previews/status.json 120 36 zh-CN obsidian '#0b1119' auto
+node scripts/render_gifs.mjs
 ```
 
 ---
@@ -426,6 +423,7 @@ cargo run --release --example tui_snapshot -- target/previews/status.json 120 36
 - [byJoey/Actions-bbr-v3](https://github.com/byJoey/Actions-bbr-v3) — BBRv3 功能参考与第三方内核包来源
 - [kejilion/sh](https://github.com/kejilion/sh) — 系统管理工具参考
 - [nelvko/clashctl](https://github.com/nelvko/clashctl) — Mihomo 代理管理与命令交互参考
+- [chen08209/FlClash](https://github.com/chen08209/FlClash) — Mihomo 可视化工作台交互、出站 IP 画像与服务解锁检测参考
 - [xykt/IPQuality](https://github.com/xykt/IPQuality) — IP 质量体检执行项目
 - [xjokerabab/ipforai](https://github.com/xjokerabab/ipforai) — AI 网络环境与服务分流检测（`ipforai.cc`）
 

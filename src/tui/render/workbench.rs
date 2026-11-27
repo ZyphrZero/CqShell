@@ -592,9 +592,10 @@ fn draw_action_list(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, grou
 
     // Subtle scroll indicator on right edge if rows overflow
     if rows.len() > geom.visual_rows.len() && visible_h >= 3 {
-        let thumb_h = ((visible_h * visible_h) / rows.len()).max(1);
-        let max_scroll = rows.len() - visible_h;
-        let thumb_pos = (scroll * (visible_h - thumb_h))
+        let visible_items = geom.visual_rows.len().max(1);
+        let thumb_h = ((visible_h * visible_items) / rows.len()).clamp(1, visible_h);
+        let max_scroll = rows.len().saturating_sub(visible_items);
+        let thumb_pos = (scroll.min(max_scroll) * (visible_h - thumb_h))
             .checked_div(max_scroll)
             .unwrap_or(0);
         let track_x = area.right().saturating_sub(1);

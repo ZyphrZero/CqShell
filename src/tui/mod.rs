@@ -28,6 +28,8 @@ mod state;
 mod theme_drawer;
 
 #[cfg(test)]
+mod gif_recorder;
+#[cfg(test)]
 mod snapshot;
 #[cfg(test)]
 mod tests;

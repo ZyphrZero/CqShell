@@ -21,39 +21,35 @@
 
 ## Screenshots
 
-### Desktop TUI (Overview Dashboard · One-Click Optimization · Mihomo Workbench)
+> All animated demos below are recorded frame-by-frame offline from the real `cqs` TUI (`v0.2.0`), covering the core workbench, dedicated 6-tab Docker & Mihomo workspaces, native `Shift+M` MCP access card, and adaptive mobile touch UI.
+
+### Desktop TUI Tour (Overview · Live Theme/Style Morphing · Optimization · Command Palette · `Shift+M` MCP Card)
 
 <p align="center">
-  <img src="assets/screenshots/desktop-overview-hud.png" alt="CqShell Overview Dashboard (Cyber HUD style)" width="100%" />
+  <img src="assets/demos/desktop-tour.gif" alt="CqShell Desktop TUI Interactive Tour (Overview, Theme Morphing, Optimization, Command Palette & Shift+M MCP Access Card)" width="100%" />
 </p>
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <img src="assets/screenshots/desktop-optimization-checklist.png" alt="One-Click Optimization Checklist" width="100%" /><br />
-      <sub>One-Click Optimization batch checklist with live host state</sub>
-    </td>
-    <td align="center" width="50%">
-      <img src="assets/screenshots/desktop-mihomo-workbench.png" alt="Mihomo Proxy Workbench" width="100%" /><br />
-      <sub>Mihomo Proxy dual-pane workbench with section pills & CLI preview</sub>
-    </td>
-  </tr>
-</table>
-
-### Mobile Responsive Layout (iOS Termius Portrait + On-Screen Keyboard)
+### Dedicated 6-Tab Workspaces (Mihomo Proxy · Docker Management)
 
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="assets/screenshots/mobile-overview.png" alt="Mobile Stacked Overview Dashboard" width="320" /><br />
-      <sub>Stacked telemetry cards and compact quick actions on narrow screens</sub>
+      <img src="assets/demos/mihomo-workspace.gif" alt="Mihomo 6-Tab Visual Workspace (Live Traffic Atlas, Proxy Latency Sort, Quota & Service Unlock Checks)" width="100%" /><br />
+      <sub><code>cqs mihomo</code> · Live traffic atlas, latency sorting, quotas &amp; unlock checks</sub>
     </td>
     <td align="center" width="50%">
-      <img src="assets/screenshots/mobile-sidebar-drawer.png" alt="Mobile Overlay Navigation Drawer" width="320" /><br />
-      <sub>Floating overlay navigation drawer (press <code>[</code> or tap the top-left button)</sub>
+      <img src="assets/demos/docker-workspace.gif" alt="Docker 6-Tab Workspace (Multi-Select Containers, Live Sparklines, Logs & Compose Topology)" width="100%" /><br />
+      <sub><code>cqs docker</code> · Multi-select batch actions, live stats, streaming logs &amp; Compose</sub>
     </td>
   </tr>
 </table>
+
+### Mobile Responsive & Adaptive Touch Layout (59×34 Portrait · Floating Drawer · Bottom Thumb Bar)
+
+<p align="center">
+  <img src="assets/demos/mobile-touch.gif" alt="Mobile Responsive Touch Demo (Stacked Overview, Floating Sidebar Drawer, Bottom Thumb Bar & Mihomo/Docker Views)" width="380" /><br />
+  <sub>Automatic <code>TouchMedium</code> density, bottom thumb bar &amp; floating drawer (press <code>[</code>)</sub>
+</p>
 
 ## Highlights
 
@@ -400,10 +396,11 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-Export real TUI render buffers to JSON / HTML for visual QA:
+Export real TUI render buffers to JSON / HTML for visual QA, or re-record the offline README demo GIFs (requires Node.js 22+, Chrome/Chromium, and `ffmpeg`):
 
 ```bash
 cargo run --release --example tui_snapshot -- target/previews/status.json 120 36 en-US obsidian '#0b1119' auto
+node scripts/render_gifs.mjs
 ```
 
 ---
@@ -418,6 +415,7 @@ Upstream inspirations and integrations:
 - [byJoey/Actions-bbr-v3](https://github.com/byJoey/Actions-bbr-v3) — BBRv3 reference and third-party kernel packages
 - [kejilion/sh](https://github.com/kejilion/sh) — system management reference
 - [nelvko/clashctl](https://github.com/nelvko/clashctl) — Mihomo proxy management and CLI ergonomics reference
+- [chen08209/FlClash](https://github.com/chen08209/FlClash) — Mihomo visual workspace UX, outbound IP profile, and service unlock check reference
 - [xykt/IPQuality](https://github.com/xykt/IPQuality) — IP quality benchmark runner
 - [xjokerabab/ipforai](https://github.com/xjokerabab/ipforai) — AI network environment and service routing checker (`ipforai.cc`)
 
