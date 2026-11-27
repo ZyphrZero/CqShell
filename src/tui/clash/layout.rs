@@ -4,7 +4,9 @@
 use super::state::{ClashModal, ClashState};
 use crate::{
     i18n::I18n,
-    ops::clash::model::{ClashAvailability, ClashTab, IpQualityLevel, IpQualityOutcome},
+    ops::clash::model::{
+        ClashAvailability, ClashTab, IpQualityLevel, IpQualityOutcome, ServiceTarget,
+    },
     theme::Role,
     tui::{layout::list_offset, state::App},
 };
@@ -48,6 +50,8 @@ pub(in crate::tui) struct OverviewGeom {
     pub profile_switch_btn: Option<Rect>,
     pub profile_update_btn: Option<Rect>,
     pub services_card: Rect,
+    pub service_cell_hits: Vec<(Rect, ServiceTarget)>,
+    pub service_check_btn: Option<Rect>,
     pub exit_probe_btn: Option<Rect>,
     pub socks_secret_btn: Option<Rect>,
     pub webui_btn: Option<Rect>,
@@ -721,11 +725,41 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
         }
     }
 
+    let mut service_cell_hits = Vec::new();
+    let mut service_check_btn = None;
     let mut exit_probe_btn = None;
     let mut socks_secret_btn = None;
     let mut webui_btn = None;
+    if services_card.width >= 24 && services_card.height >= 5 {
+        let ix = services_card.x + 2;
+        let iw = services_card.width.saturating_sub(4);
+        let btn_y = services_card.bottom().saturating_sub(2);
+        let grid_rows = if services_card.height >= 7 && services_card.y + 3 < btn_y {
+            2usize
+        } else if services_card.y + 2 < btn_y {
+            1usize
+        } else {
+            0usize
+        };
+        if grid_rows > 0 && iw >= 20 {
+            let cols = if iw >= 34 { 2usize } else { 1usize };
+            let gap = if cols > 1 { 1u16 } else { 0 };
+            let cell_w = iw.saturating_sub(gap * (cols.saturating_sub(1) as u16)) / (cols as u16);
+            let pinned = cl.pinned_service_targets(grid_rows * cols);
+            for (idx, target) in pinned.into_iter().enumerate() {
+                let r = idx / cols;
+                let c = idx % cols;
+                let cx = ix + (c as u16) * (cell_w + gap);
+                let cy = services_card.y + 2 + r as u16;
+                if cy < btn_y && cell_w >= 8 {
+                    service_cell_hits.push((Rect::new(cx, cy, cell_w, 1), target));
+                }
+            }
+        }
+    }
     if services_card.width >= 28 && services_card.height >= 4 {
         let by = services_card.bottom().saturating_sub(2);
+        let c_lbl = format!(" [c] {} ", i.text("clash.key.services"));
         let n_lbl = format!(" [N] {} ", i.text("clash.key.probe_exit"));
         let s_lbl = format!(" [S] {} ", i.text("clash.key.socks_card"));
         let w_key = if cl.snapshot.summary.panel_url.is_some() {
@@ -734,11 +768,17 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
             "clash.key.webui_install"
         };
         let w_lbl = format!(" [w] {} ", i.text(w_key));
+        let cw = c_lbl.width() as u16;
         let nw = n_lbl.width() as u16;
         let sw = s_lbl.width() as u16;
         let ww = w_lbl.width() as u16;
         let left_bound = services_card.x + 2;
         let mut right = services_card.right().saturating_sub(2);
+        if right >= left_bound + cw {
+            right -= cw;
+            service_check_btn = Some(Rect::new(right, by, cw, 1));
+            right = right.saturating_sub(1);
+        }
         if right >= left_bound + nw {
             right -= nw;
             exit_probe_btn = Some(Rect::new(right, by, nw, 1));
@@ -812,6 +852,8 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
         profile_switch_btn,
         profile_update_btn,
         services_card,
+        service_cell_hits,
+        service_check_btn,
         exit_probe_btn,
         socks_secret_btn,
         webui_btn,
@@ -1822,6 +1864,12 @@ pub(in crate::tui) struct ClashModalGeometry {
     pub outbound_copy_btn: Option<Rect>,
     pub outbound_hide_btn: Option<Rect>,
     pub outbound_close_btn: Option<Rect>,
+    pub service_summary_y: Option<u16>,
+    pub service_check_btn: Option<Rect>,
+    pub service_check_all_btn: Option<Rect>,
+    pub service_manage_btn: Option<Rect>,
+    pub service_copy_ip_btn: Option<Rect>,
+    pub service_close_btn: Option<Rect>,
     pub confirm_yes: Option<Rect>,
     pub confirm_no: Option<Rect>,
 }
@@ -1849,6 +1897,15 @@ impl ClashModalGeometry {
                 let content_rows = outbound_rows.as_ref().map_or(14, Vec::len).clamp(8, 22) as u16;
                 (64u16, content_rows + 5)
             }
+            ClashModal::ServiceStatus { manage, .. } => {
+                let count = if *manage {
+                    cl.ordered_services().len()
+                } else {
+                    cl.enabled_services().len()
+                };
+                let rows = count.clamp(5, 13) as u16;
+                (70u16, rows + 6)
+            }
             ClashModal::Confirm { .. } => (56u16, 9u16),
         };
         let w = target_w
@@ -1872,6 +1929,12 @@ impl ClashModalGeometry {
         let mut outbound_copy_btn = None;
         let mut outbound_hide_btn = None;
         let mut outbound_close_btn = None;
+        let mut service_summary_y = None;
+        let mut service_check_btn = None;
+        let mut service_check_all_btn = None;
+        let mut service_manage_btn = None;
+        let mut service_copy_ip_btn = None;
+        let mut service_close_btn = None;
         let mut confirm_yes = None;
         let mut confirm_no = None;
 
@@ -1986,6 +2049,95 @@ impl ClashModalGeometry {
                     }
                 }
             }
+            ClashModal::ServiceStatus { cursor, manage } => {
+                let targets = if *manage {
+                    cl.ordered_services()
+                } else {
+                    cl.enabled_services()
+                };
+                let by = box_rect.bottom().saturating_sub(2);
+                let list_y = box_rect.y + 1;
+                let has_summary = by >= list_y + 4;
+                let list_bottom = if has_summary {
+                    service_summary_y = Some(by - 1);
+                    by - 1
+                } else {
+                    by
+                };
+                let vis = list_bottom.saturating_sub(list_y) as usize;
+                let total = targets.len();
+                let clamped_cur = if total == 0 {
+                    0
+                } else {
+                    (*cursor).min(total - 1)
+                };
+                let scroll = list_offset(total, clamped_cur, vis.max(1));
+                for slot in 0..vis {
+                    let idx = scroll + slot;
+                    if idx >= total {
+                        break;
+                    }
+                    item_rows.push((
+                        Rect::new(inner.x, list_y + slot as u16, inner.width, 1),
+                        idx,
+                    ));
+                }
+
+                if by > box_rect.y + 1 && inner.width >= 16 {
+                    let mut bx = inner.x;
+                    let max_r = inner.right();
+                    let primary_lbl = if *manage {
+                        format!(" [Space] {} ", i.text("clash.service.toggle"))
+                    } else {
+                        format!(" [Enter] {} ", i.text("clash.service.check_one"))
+                    };
+                    let pw = primary_lbl.width() as u16;
+                    if bx + pw <= max_r {
+                        service_check_btn = Some(Rect::new(bx, by, pw, 1));
+                        bx = bx.saturating_add(pw + 1);
+                    }
+                    let all_lbl = if *manage {
+                        format!(" [r] {} ", i.text("clash.service.reset"))
+                    } else {
+                        format!(" [a] {} ", i.text("clash.service.check_all"))
+                    };
+                    let aw = all_lbl.width() as u16;
+                    if bx + aw <= max_r {
+                        service_check_all_btn = Some(Rect::new(bx, by, aw, 1));
+                        bx = bx.saturating_add(aw + 1);
+                    }
+                    let manage_lbl = if *manage {
+                        format!(" [m] {} ", i.text("clash.service.back"))
+                    } else {
+                        format!(" [m] {} ", i.text("clash.service.manage"))
+                    };
+                    let mw = manage_lbl.width() as u16;
+                    if bx + mw <= max_r {
+                        service_manage_btn = Some(Rect::new(bx, by, mw, 1));
+                        bx = bx.saturating_add(mw + 1);
+                    }
+                    if !*manage
+                        && let Some(&focused_target) = targets.get(clamped_cur)
+                        && cl
+                            .service_entry(focused_target)
+                            .and_then(|e| e.result.as_ref())
+                            .and_then(|r| r.ip.as_deref())
+                            .is_some()
+                    {
+                        let cp_lbl = format!(" [y] {} ", i.text("clash.outbound.copy_ip"));
+                        let cpw = cp_lbl.width() as u16;
+                        if bx + cpw <= max_r {
+                            service_copy_ip_btn = Some(Rect::new(bx, by, cpw, 1));
+                            bx = bx.saturating_add(cpw + 1);
+                        }
+                    }
+                    let close_lbl = format!(" [Esc] {} ", i.text("key.close"));
+                    let clw = close_lbl.width() as u16;
+                    if max_r >= bx + clw {
+                        service_close_btn = Some(Rect::new(max_r - clw, by, clw, 1));
+                    }
+                }
+            }
             ClashModal::Confirm { .. } => {
                 let by = box_rect.bottom().saturating_sub(2);
                 let btn_w = 12u16.min(inner.width / 2);
@@ -2025,6 +2177,12 @@ impl ClashModalGeometry {
             outbound_copy_btn,
             outbound_hide_btn,
             outbound_close_btn,
+            service_summary_y,
+            service_check_btn,
+            service_check_all_btn,
+            service_manage_btn,
+            service_copy_ip_btn,
+            service_close_btn,
             confirm_yes,
             confirm_no,
         }

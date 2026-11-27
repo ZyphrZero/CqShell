@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     ops::clash::model::{
-        IpQualityLevel, IpQualityOutcome, format_bytes, format_bytes_compact,
+        IpQualityLevel, IpQualityOutcome, UserinfoSource, format_bytes, format_bytes_compact,
         format_relative_epoch, format_speed_compact, format_uptime,
     },
     theme::{Level, Role},
@@ -546,6 +546,9 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
 
+    let effective_quota = cl.snapshot.effective_active_userinfo();
+    let sep = tokens::glyph(theme, Glyph::Separator);
+
     if let Some(prof) = cl.snapshot.active_profile() {
         let name_budget = geom
             .profile_update_btn
@@ -581,11 +584,53 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
                 .updated_epoch
                 .map(|ts| format_relative_epoch(ts, now_epoch))
                 .unwrap_or_else(|| "-".to_owned());
-            let sep = tokens::glyph(theme, Glyph::Separator);
-            let mut sub = format!("{} {sep} {age}", prof.host);
-            if let Some(exp) = prof.userinfo.and_then(|u| u.expire_date()) {
-                sub.push_str(&format!(" {sep} {} {exp}", i.text("clash.profile.expire")));
-            }
+            let host_lbl = if prof.is_local {
+                i.text("clash.profile.local")
+            } else {
+                prof.host.as_str()
+            };
+            let extra = if let Some((info, source)) = &effective_quota {
+                if let Some(exp_ts) = info.expire
+                    && let Some(exp) = info.expire_date()
+                {
+                    if exp_ts <= now_epoch {
+                        Some(format!("{exp} ({})", i.text("clash.profile.expired")))
+                    } else if let Some(days) = info.days_until_expire(now_epoch) {
+                        Some(format!(
+                            "{exp} ({})",
+                            i.format("clash.profile.days_left", &[("days", &days.to_string())])
+                        ))
+                    } else {
+                        Some(format!("{} {exp}", i.text("clash.profile.expire")))
+                    }
+                } else {
+                    match source {
+                        UserinfoSource::Provider(name) => {
+                            Some(i.format("clash.profile.from_provider", &[("name", name)]))
+                        }
+                        UserinfoSource::Providers(count) => Some(i.format(
+                            "clash.profile.from_providers",
+                            &[("count", &count.to_string())],
+                        )),
+                        UserinfoSource::Profile if info.total > 0 || info.used() > 0 => {
+                            Some(i.text("clash.profile.no_expiry").to_owned())
+                        }
+                        UserinfoSource::Profile => None,
+                    }
+                }
+            } else {
+                None
+            };
+            let sub = if let Some(extra) = extra {
+                let full = format!("{host_lbl} {sep} {age} {sep} {extra}");
+                if full.width() <= iw {
+                    full
+                } else {
+                    format!("{host_lbl} {sep} {extra}")
+                }
+            } else {
+                format!("{host_lbl} {sep} {age}")
+            };
             buf.set_stringn(
                 ix,
                 card.y + 2,
@@ -596,44 +641,146 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
         }
 
         if card.height >= 5 {
-            if let Some(info) = prof.userinfo.filter(|u| u.total > 0) {
-                let pct = (info.ratio() * 100.0).round() as u64;
-                let quota = format!(
-                    "{pct}%  {} / {}",
-                    format_bytes_compact(info.used()),
-                    format_bytes_compact(info.total)
-                );
-                let fill_role = if pct >= 90 {
-                    Role::Danger
-                } else if pct >= 75 {
-                    Role::Warning
-                } else {
-                    Role::Accent
-                };
-                buf.set_stringn(
-                    ix,
-                    card.y + 3,
-                    clip_ascii_safe(&quota, iw, ascii),
-                    iw,
-                    tokens::fg(theme, fill_role).bg(bg),
-                );
-                if card.height >= 6 {
-                    draw_progress_bar(
-                        buf,
-                        Rect::new(ix, card.y + 4, iw as u16, 1),
-                        info.ratio(),
-                        fill_role,
-                        theme,
-                        bg,
+            if let Some((info, _)) = &effective_quota {
+                if info.total > 0 {
+                    let pct = (info.ratio() * 100.0).round() as u64;
+                    let quota = format!(
+                        "{pct}% {}  {} / {}",
+                        i.text("clash.profile.used"),
+                        format_bytes_compact(info.used()),
+                        format_bytes_compact(info.total)
+                    );
+                    let fill_role = if pct >= 90 {
+                        Role::Danger
+                    } else if pct >= 75 {
+                        Role::Warning
+                    } else {
+                        Role::Accent
+                    };
+                    buf.set_stringn(
+                        ix,
+                        card.y + 3,
+                        clip_ascii_safe(&quota, iw, ascii),
+                        iw,
+                        tokens::fg(theme, fill_role).bg(bg),
+                    );
+                    if card.height >= 6 {
+                        draw_progress_bar(
+                            buf,
+                            Rect::new(ix, card.y + 4, iw as u16, 1),
+                            info.ratio(),
+                            fill_role,
+                            theme,
+                            bg,
+                        );
+                    }
+                } else if info.used() > 0 {
+                    let used_line = format!(
+                        "{} {}",
+                        i.text("clash.profile.used"),
+                        format_bytes_compact(info.used())
+                    );
+                    buf.set_stringn(
+                        ix,
+                        card.y + 3,
+                        clip_ascii_safe(&used_line, iw, ascii),
+                        iw,
+                        tokens::fg(theme, Role::Accent).bg(bg),
+                    );
+                } else if let Some(exp) = info.expire_date() {
+                    let exp_line = format!("{} {exp}", i.text("clash.profile.expire"));
+                    buf.set_stringn(
+                        ix,
+                        card.y + 3,
+                        clip_ascii_safe(&exp_line, iw, ascii),
+                        iw,
+                        tokens::text(theme, Level::Secondary).bg(bg),
                     );
                 }
-            } else {
+            } else if cl.userinfo_probing_profile.as_deref() == Some(prof.name.as_str()) {
+                let loading = format!("{} {}", app.spin(), i.text("clash.profile.quota_loading"));
                 buf.set_stringn(
                     ix,
                     card.y + 3,
-                    clip_ascii_safe(i.text("clash.profile.no_quota"), iw, ascii),
+                    clip_ascii_safe(&loading, iw, ascii),
+                    iw,
+                    tokens::fg(theme, Role::Accent).bg(bg),
+                );
+            } else if !prof.is_local {
+                buf.set_stringn(
+                    ix,
+                    card.y + 3,
+                    clip_ascii_safe(i.text("clash.profile.no_quota_remote"), iw, ascii),
                     iw,
                     tokens::text(theme, Level::Tertiary).bg(bg),
+                );
+            } else {
+                let local_stats = i.format(
+                    "clash.profile.local_stats",
+                    &[
+                        ("groups", &cl.snapshot.visible_groups().len().to_string()),
+                        ("rules", &cl.snapshot.rules.len().to_string()),
+                    ],
+                );
+                buf.set_stringn(
+                    ix,
+                    card.y + 3,
+                    clip_ascii_safe(&local_stats, iw, ascii),
+                    iw,
+                    tokens::text(theme, Level::Secondary).bg(bg),
+                );
+            }
+        }
+    } else if let Some((info, source)) = &effective_quota {
+        let title_line = match source {
+            UserinfoSource::Provider(name) => {
+                i.format("clash.profile.from_provider", &[("name", name)])
+            }
+            UserinfoSource::Providers(count) => i.format(
+                "clash.profile.from_providers",
+                &[("count", &count.to_string())],
+            ),
+            UserinfoSource::Profile => i.text("clash.profile.none").to_owned(),
+        };
+        buf.set_stringn(
+            ix,
+            card.y + 1,
+            clip_ascii_safe(&title_line, iw, ascii),
+            iw,
+            tokens::text(theme, Level::Primary)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        );
+        if card.height >= 4 && info.total > 0 {
+            let pct = (info.ratio() * 100.0).round() as u64;
+            let quota = format!(
+                "{pct}% {}  {} / {}",
+                i.text("clash.profile.used"),
+                format_bytes_compact(info.used()),
+                format_bytes_compact(info.total)
+            );
+            let fill_role = if pct >= 90 {
+                Role::Danger
+            } else if pct >= 75 {
+                Role::Warning
+            } else {
+                Role::Accent
+            };
+            buf.set_stringn(
+                ix,
+                card.y + 2,
+                clip_ascii_safe(&quota, iw, ascii),
+                iw,
+                tokens::fg(theme, fill_role).bg(bg),
+            );
+            if card.height >= 5 {
+                draw_progress_bar(
+                    buf,
+                    Rect::new(ix, card.y + 3, iw as u16, 1),
+                    info.ratio(),
+                    fill_role,
+                    theme,
+                    bg,
                 );
             }
         }
@@ -671,11 +818,37 @@ fn draw_services_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     let bg = surface_bg(theme, Role::SurfaceAlt);
     let buf = frame.buffer_mut();
 
+    let enabled = cl.enabled_services();
+    let checked = enabled
+        .iter()
+        .filter_map(|t| cl.service_entry(*t).and_then(|e| e.result.as_ref()))
+        .count();
+    let ok = enabled
+        .iter()
+        .filter_map(|t| cl.service_entry(*t).and_then(|e| e.result.as_ref()))
+        .filter(|r| r.status.is_available())
+        .count();
+    let right_meta = if cl.any_service_probing() {
+        format!("{} {}", app.spin(), i.text("clash.service.checking"))
+    } else if checked > 0 && ok == checked {
+        i.format(
+            "clash.service.all_ok",
+            &[("ok", &ok.to_string()), ("total", &checked.to_string())],
+        )
+    } else if checked > ok {
+        i.format(
+            "clash.service.abnormal_count",
+            &[("count", &(checked - ok).to_string())],
+        )
+    } else {
+        String::new()
+    };
+
     draw_card_title(
         buf,
         card,
-        i.text("clash.overview.services"),
-        "",
+        i.text("clash.service.title"),
+        &right_meta,
         theme,
         Role::SurfaceAlt,
     );
@@ -683,14 +856,15 @@ fn draw_services_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     let ix = card.x + 2;
     let iw = card.width.saturating_sub(4) as usize;
     let sep = tokens::glyph(theme, Glyph::Separator);
+    let dot_on = tokens::glyph(theme, Glyph::DotOn);
+    let dot_off = tokens::glyph(theme, Glyph::DotOff);
 
-    // Line 1: Ports + allow-lan + TUN
+    // Line 1: Compact server listeners summary (mixed/http port + LAN/TUN + SOCKS5)
     let port_str = sum
         .mixed_port
         .map(|p| format!("mixed:{p}"))
         .or_else(|| sum.http_port.map(|p| format!("http:{p}")))
         .unwrap_or_else(|| "port:-".to_owned());
-    let lan_str = if sum.allow_lan { "LAN:ON" } else { "LAN:OFF" };
     let tun_str = if sum.tun_enabled {
         if sum.tun_stack.is_empty() {
             "TUN:ON".to_owned()
@@ -700,17 +874,120 @@ fn draw_services_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     } else {
         "TUN:OFF".to_owned()
     };
-    let line1 = format!("{port_str} {sep} {lan_str} {sep} {tun_str}");
+    let socks_str = match &sum.socks5_listen {
+        Some(listen) => format!("SOCKS5 {listen}"),
+        None => {
+            if sum.allow_lan {
+                format!("LAN:ON {sep} {}", i.text("clash.overview.socks_off"))
+            } else {
+                i.text("clash.overview.socks_off").to_owned()
+            }
+        }
+    };
+    let line1 = format!("{port_str} {sep} {tun_str} {sep} {socks_str}");
     buf.set_stringn(
         ix,
         card.y + 1,
         clip_ascii_safe(&line1, iw, ascii),
         iw,
-        tokens::text(theme, Level::Primary).bg(bg),
+        tokens::text(theme, Level::Secondary).bg(bg),
     );
 
-    // Line 2: Managed cqs-socks5 inbound
-    if card.height >= 4 {
+    // Lines 2-3: Clickable pinned service status grid (FlClash-style)
+    let btn_y = card.bottom().saturating_sub(2);
+    if !geom.service_cell_hits.is_empty() {
+        for &(cell, target) in &geom.service_cell_hits {
+            let hov = app.hover.is_some_and(|p| cell.contains(p));
+            let cbg = if hov {
+                tokens::color(theme, Role::Selection)
+            } else {
+                surface_bg(theme, Role::Surface)
+            };
+            fill_rect_bg(buf, cell, cbg);
+
+            let entry = cl.service_entry(target);
+            let probing = entry.is_some_and(|e| e.probing);
+            let result = entry.and_then(|e| e.result.as_ref());
+
+            let (glyph_s, glyph_style) = if probing {
+                (
+                    app.spin().to_owned(),
+                    tokens::fg(theme, Role::Accent).bg(cbg),
+                )
+            } else if let Some(res) = result {
+                let role = if res.status.is_available() {
+                    Role::Success
+                } else if res.status.is_warning() {
+                    Role::Warning
+                } else {
+                    Role::Danger
+                };
+                (dot_on.to_owned(), tokens::fg(theme, role).bg(cbg))
+            } else {
+                (
+                    dot_off.to_owned(),
+                    tokens::text(theme, Level::Tertiary).bg(cbg),
+                )
+            };
+            buf.set_stringn(cell.x, cell.y, &glyph_s, 1, glyph_style);
+
+            let (metric, metric_style) = if probing {
+                ("...".to_owned(), tokens::fg(theme, Role::Accent).bg(cbg))
+            } else if let Some(res) = result {
+                if res.status.is_available()
+                    && let Some(ms) = res.delay_ms
+                {
+                    let label = if cell.width >= 22
+                        && let Some(reg) = res.region.as_deref()
+                    {
+                        format!("{reg} {ms}ms")
+                    } else {
+                        format!("{ms}ms")
+                    };
+                    let st = if ms < 400 {
+                        tokens::fg(theme, Role::Success).bg(cbg)
+                    } else {
+                        tokens::text(theme, Level::Primary).bg(cbg)
+                    };
+                    (label, st)
+                } else {
+                    let role = if res.status.is_available() {
+                        Role::Success
+                    } else if res.status.is_warning() {
+                        Role::Warning
+                    } else {
+                        Role::Danger
+                    };
+                    (
+                        i.text(res.status.label_key()).to_owned(),
+                        tokens::fg(theme, role).bg(cbg),
+                    )
+                }
+            } else {
+                ("-".to_owned(), tokens::text(theme, Level::Tertiary).bg(cbg))
+            };
+
+            let mw = metric.width().min(cell.width as usize / 2);
+            let name_budget = (cell.width as usize).saturating_sub(mw + 3);
+            if name_budget > 0 {
+                buf.set_stringn(
+                    cell.x + 2,
+                    cell.y,
+                    clip_ascii_safe(target.label(), name_budget, ascii),
+                    name_budget,
+                    tokens::text(theme, Level::Primary).bg(cbg),
+                );
+            }
+            if mw > 0 {
+                tokens::put_right(
+                    buf,
+                    cell,
+                    &clip_ascii_safe(&metric, mw, ascii),
+                    metric_style,
+                );
+            }
+        }
+    } else if card.height >= 4 && card.y + 2 < btn_y {
         let socks_line = match &sum.socks5_listen {
             Some(listen) => format!(
                 "SOCKS5 {listen} ({})",
@@ -718,44 +995,12 @@ fn draw_services_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
             ),
             None => i.text("clash.overview.socks_off").to_owned(),
         };
-        let socks_style = if sum.socks5_listen.is_some() {
-            tokens::fg(theme, Role::Success).bg(bg)
-        } else {
-            tokens::text(theme, Level::Tertiary).bg(bg)
-        };
         buf.set_stringn(
             ix,
             card.y + 2,
             clip_ascii_safe(&socks_line, iw, ascii),
             iw,
-            socks_style,
-        );
-    }
-
-    // Line 3: Exit Probe connectivity latency (Google / GitHub)
-    let btn_y = card.bottom().saturating_sub(2);
-    if card.height >= 5 && card.y + 3 < btn_y {
-        let probe_line = if cl.exit_probing && cl.exit_probe.is_none() {
-            format!("{} {}", app.spin(), i.text("clash.overview.probing"))
-        } else if let Some(p) = &cl.exit_probe {
-            let g = p
-                .google_ms
-                .map(|m| format!("{m}ms"))
-                .unwrap_or_else(|| "-".into());
-            let gh = p
-                .github_ms
-                .map(|m| format!("{m}ms"))
-                .unwrap_or_else(|| "-".into());
-            format!("Google {g} {sep} GitHub {gh}")
-        } else {
-            i.text("clash.overview.probe_idle").to_owned()
-        };
-        buf.set_stringn(
-            ix,
-            card.y + 3,
-            clip_ascii_safe(&probe_line, iw, ascii),
-            iw,
-            tokens::text(theme, Level::Secondary).bg(bg),
+            tokens::text(theme, Level::Tertiary).bg(bg),
         );
     }
 
@@ -806,6 +1051,11 @@ fn draw_services_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
         let lbl = format!(" [N] {} ", i.text("clash.key.probe_exit"));
         let hov = app.hover.is_some_and(|p| btn.contains(p));
         draw_pill_chip(buf, btn, &lbl, cl.exit_probing, hov, theme, bg);
+    }
+    if let Some(btn) = geom.service_check_btn {
+        let lbl = format!(" [c] {} ", i.text("clash.key.services"));
+        let hov = app.hover.is_some_and(|p| btn.contains(p));
+        draw_pill_chip(buf, btn, &lbl, cl.any_service_probing(), hov, theme, bg);
     }
 }
 

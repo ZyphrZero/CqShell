@@ -769,6 +769,7 @@ pub fn run_with_target(
     let mut last_stats_on = false;
     let mut was_in_clash = false;
     let mut last_clash_tab = ClashTab::Overview;
+    let mut last_clash_log_stream = false;
 
     let mut app = App::new(ctx);
     app.configure_theme(
@@ -844,6 +845,9 @@ pub fn run_with_target(
             let in_clash = app.is_clash_view();
             if in_clash {
                 if !was_in_clash {
+                    clash_monitor.send(ClashMonitorCmd::SetPinnedServices(
+                        app.clash.pinned_service_targets(4),
+                    ));
                     clash_monitor.send(ClashMonitorCmd::Wake(app.clash.tab));
                     last_clash_tab = app.clash.tab;
                 } else if app.clash.tab != last_clash_tab {
@@ -852,6 +856,12 @@ pub fn run_with_target(
                 }
             } else if was_in_clash {
                 clash_monitor.send(ClashMonitorCmd::LeaveClash);
+            }
+            let clash_log_stream =
+                in_clash && app.clash.tab == ClashTab::Tools && app.clash.tools_log_mode;
+            if clash_log_stream != last_clash_log_stream {
+                clash_monitor.send(ClashMonitorCmd::SetLogStream(clash_log_stream));
+                last_clash_log_stream = clash_log_stream;
             }
             was_in_clash = in_clash;
 

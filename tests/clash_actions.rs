@@ -44,6 +44,8 @@ fn clash_controls_have_bilingual_cli_metadata_without_writing_state() {
             ("settings.configure", true),
             ("dns.status", false),
             ("dns.configure", true),
+            ("dns.query", false),
+            ("cache.flush", true),
             ("mixin.status", false),
             ("mixin.reset", true),
             ("socks.status", false),
@@ -93,6 +95,23 @@ fn clash_controls_have_bilingual_cli_metadata_without_writing_state() {
         assert_eq!(
             field("clash.tun.configure", "tun_stack")["choices"],
             serde_json::json!(["system", "gvisor", "mixed"])
+        );
+        assert_eq!(
+            field("clash.tun.configure", "tun_bypass_private")["default"],
+            "on"
+        );
+        assert_eq!(
+            field("clash.tun.configure", "tun_strict_route")["default"],
+            "off"
+        );
+        assert_eq!(field("clash.stop", "stop_force")["default"], "off");
+        assert_eq!(
+            field("clash.settings.configure", "tcp_concurrent")["default"],
+            "on"
+        );
+        assert_eq!(
+            field("clash.dns.configure", "dns_preset")["choices"],
+            serde_json::json!(["china", "global", "keep"])
         );
         assert_eq!(field("clash.logs", "follow")["default"], "off");
         assert_eq!(

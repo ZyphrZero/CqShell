@@ -4,9 +4,13 @@ use crate::ops::clash::model::{
     ClashAvailability, ClashRuntimeSummary, ClashSnapshot, ConnectionItem, ExitProbeResult,
     IpQuality, IpQualityFailure, IpQualityOutcome, IpQualitySource, IpQualitySourceStatus, IpType,
     ProfileSummary, ProxyGroupItem, ProxyGroupKind, ProxyNodeItem, ProxyProviderItem, RuleItem,
-    RuleProviderItem, SubscriptionUserinfo, TrafficSample,
+    RuleProviderItem, ServiceCheckItem, ServiceEntryState, ServiceProbeStatus, ServiceTarget,
+    SubscriptionUserinfo, TrafficSample,
 };
-use std::{collections::VecDeque, time::Instant};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    time::Instant,
+};
 
 pub(in crate::tui) fn sample_snapshot() -> ClashSnapshot {
     let mut history = VecDeque::new();
@@ -470,4 +474,75 @@ pub(in crate::tui) fn sample_probe_quality_failed() -> ExitProbeResult {
         github_ms: None,
         checked_at: Instant::now(),
     }
+}
+
+pub(in crate::tui) fn sample_service_states() -> BTreeMap<ServiceTarget, ServiceEntryState> {
+    let now = Instant::now();
+    let mut map = BTreeMap::new();
+    let items = [
+        ServiceCheckItem {
+            target: ServiceTarget::Google,
+            status: ServiceProbeStatus::Available,
+            delay_ms: Some(184),
+            region: Some("US".into()),
+            ip: Some("198.51.100.44".into()),
+            exit_node: Some("JP-Opt-02".into()),
+            checked_at: now,
+        },
+        ServiceCheckItem {
+            target: ServiceTarget::GitHub,
+            status: ServiceProbeStatus::Available,
+            delay_ms: Some(246),
+            region: Some("SG".into()),
+            ip: Some("203.0.113.106".into()),
+            exit_node: Some("SG-AnyTLS".into()),
+            checked_at: now,
+        },
+        ServiceCheckItem {
+            target: ServiceTarget::ChatGpt,
+            status: ServiceProbeStatus::Available,
+            delay_ms: Some(512),
+            region: Some("US".into()),
+            ip: Some("198.51.100.44".into()),
+            exit_node: Some("SG-AnyTLS".into()),
+            checked_at: now,
+        },
+        ServiceCheckItem {
+            target: ServiceTarget::Claude,
+            status: ServiceProbeStatus::Restricted,
+            delay_ms: Some(610),
+            region: Some("HK".into()),
+            ip: Some("192.0.2.88".into()),
+            exit_node: Some("HK-HY2-01".into()),
+            checked_at: now,
+        },
+        ServiceCheckItem {
+            target: ServiceTarget::Netflix,
+            status: ServiceProbeStatus::OriginalsOnly,
+            delay_ms: Some(390),
+            region: Some("JP".into()),
+            ip: None,
+            exit_node: Some("JP-Opt-02".into()),
+            checked_at: now,
+        },
+        ServiceCheckItem {
+            target: ServiceTarget::TikTok,
+            status: ServiceProbeStatus::Timeout,
+            delay_ms: None,
+            region: None,
+            ip: None,
+            exit_node: None,
+            checked_at: now,
+        },
+    ];
+    for item in items {
+        map.insert(
+            item.target,
+            ServiceEntryState {
+                probing: false,
+                result: Some(item),
+            },
+        );
+    }
+    map
 }

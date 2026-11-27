@@ -408,7 +408,17 @@
     "interactive": false,
     "label": "Stop Mihomo",
     "mutates": true,
-    "parameters": [],
+    "parameters": [
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "stop_force",
+        "required": true
+      }
+    ],
     "root": false,
     "unavailable_reason": null
   },
@@ -905,6 +915,34 @@
         "default": "info",
         "name": "log_level",
         "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "tcp_concurrent",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "unified_delay",
+        "required": true
+      },
+      {
+        "choices": [
+          "strict",
+          "always",
+          "off"
+        ],
+        "default": "strict",
+        "name": "find_process_mode",
+        "required": true
       }
     ],
     "root": false,
@@ -944,7 +982,8 @@
       {
         "choices": [
           "china",
-          "global"
+          "global",
+          "keep"
         ],
         "default": "china",
         "name": "dns_preset",
@@ -960,6 +999,51 @@
         "required": true
       }
     ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Resolve a domain name directly through Mihomo's built-in DNS engine (GET /dns/query) to verify fake-ip or upstream answers.",
+    "group": "clash",
+    "id": "clash.dns.query",
+    "interactive": false,
+    "label": "Query Mihomo DNS",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "example.com",
+        "name": "dns_domain",
+        "required": true
+      },
+      {
+        "choices": [
+          "A",
+          "AAAA",
+          "CNAME",
+          "TXT",
+          "MX",
+          "NS",
+          "HTTPS"
+        ],
+        "default": "A",
+        "name": "dns_record_type",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Clear Mihomo's in-memory Fake-IP pool and DNS cache via the REST controller without restarting the daemon.",
+    "group": "clash",
+    "id": "clash.cache.flush",
+    "interactive": false,
+    "label": "Flush Fake-IP and DNS caches",
+    "mutates": true,
+    "parameters": [],
     "root": false,
     "unavailable_reason": null
   },
@@ -1170,6 +1254,24 @@
         ],
         "default": "on",
         "name": "dns_hijack",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "tun_strict_route",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "tun_bypass_private",
         "required": true
       }
     ],

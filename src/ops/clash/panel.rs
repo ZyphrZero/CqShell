@@ -783,7 +783,7 @@ pub fn install(ctx: &Context, panel: &str, requested: &str) -> Result<()> {
     let applied = publish(ctx, &release, &bytes)?;
     let suffix = match applied {
         MixinApplied::SavedWhileStopped => "start Mihomo to serve /ui/",
-        MixinApplied::HotReloaded => "hot-reloaded; /ui/ is ready",
+        MixinApplied::Patched | MixinApplied::HotReloaded => "hot-reloaded; /ui/ is ready",
         MixinApplied::Restarted => "applied (Mihomo restarted); /ui/ is ready",
     };
     ctx.message(
@@ -831,6 +831,18 @@ fn publish(ctx: &Context, release: &Release, bytes: &[u8]) -> Result<MixinApplie
             let key = Value::String("external-controller".into());
             if map.get(&key).is_none_or(|value| value.as_str() == Some("")) {
                 map.insert(key, Value::String("127.0.0.1:9090".into()));
+            }
+            #[cfg(any(unix, test))]
+            {
+                let secret_key = Value::String("secret".into());
+                if map
+                    .get(&secret_key)
+                    .and_then(Value::as_str)
+                    .is_none_or(|s| s.is_empty())
+                {
+                    let secret = yaml_prep::generate_hex_secret(32)?;
+                    map.insert(secret_key, Value::String(secret));
+                }
             }
         }
         Ok(())
@@ -887,44 +899,56 @@ pub fn remove(ctx: &Context) -> Result<()> {
 }
 
 fn configured_directory(ctx: &Context) -> Result<Option<PathBuf>> {
-    let bytes = if matches!(state(ctx)?, State::Running(_)) {
-        storage::check_path(&ctx.paths.clash_runtime, true)?;
-        fs::read(&ctx.paths.clash_runtime)?
+    let raw_ui = if matches!(state(ctx)?, State::Running(_)) {
+        runtime_cache::load_file(&ctx.paths.clash_runtime)
+            .map_err(|error| {
+                if error.key == "error.data" {
+                    Error::new("error.data", "cannot parse panel configuration")
+                } else {
+                    error
+                }
+            })?
+            .external_ui
+            .clone()
     } else {
-        build_runtime_config(ctx).map_err(|error| {
+        let bytes = build_runtime_config(ctx).map_err(|error| {
             if error.key == "error.data" {
                 Error::new("error.data", "cannot parse panel configuration")
             } else {
                 error
             }
-        })?
-    };
-    let value: Value = serde_yaml::from_slice(&bytes)
-        .map_err(|_| Error::new("error.data", "cannot parse panel configuration"))?;
-    match value.get("external-ui") {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(path)) if path.is_empty() => Ok(None),
-        Some(Value::String(path)) => {
-            let path = Path::new(path);
-            let path = if path.is_absolute() {
-                path.to_path_buf()
-            } else {
-                ctx.paths.clash_resources.join(path)
-            };
-            storage::check_path(&path, false)?;
-            if !path.starts_with(&ctx.paths.clash_resources) {
+        })?;
+        let value: Value = serde_yaml::from_slice(&bytes)
+            .map_err(|_| Error::new("error.data", "cannot parse panel configuration"))?;
+        match value.get("external-ui") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(path)) if path.is_empty() => None,
+            Some(Value::String(path)) => Some(path.clone()),
+            _ => {
                 return Err(Error::new(
-                    "error.path",
-                    "panel path must be inside Mihomo resources",
+                    "error.data",
+                    "external-ui must be a path string",
                 ));
             }
-            Ok(Some(path))
         }
-        _ => Err(Error::new(
-            "error.data",
-            "external-ui must be a path string",
-        )),
+    };
+    let Some(path_str) = raw_ui else {
+        return Ok(None);
+    };
+    let path = Path::new(&path_str);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        ctx.paths.clash_resources.join(path)
+    };
+    storage::check_path(&path, false)?;
+    if !path.starts_with(&ctx.paths.clash_resources) {
+        return Err(Error::new(
+            "error.path",
+            "panel path must be inside Mihomo resources",
+        ));
     }
+    Ok(Some(path))
 }
 
 fn installed_panel(ctx: &Context) -> Result<Option<Installed>> {

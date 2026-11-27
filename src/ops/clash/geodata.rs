@@ -235,15 +235,29 @@ pub fn update(ctx: &Context, preset: &str) -> Result<()> {
         storage::atomic_write(&destination, &bytes, 0o600)?;
         updated.push(format!("{} ({})", spec.local_name, format_bytes(spec.size)));
     }
+    let mut reload_note = "";
+    if !updated.is_empty()
+        && matches!(state(ctx), Ok(State::Running(_)))
+        && controller::effective_settings(ctx).ok().flatten().is_some()
+    {
+        match controller::reload(ctx) {
+            Ok(()) => reload_note = "; hot-reloaded into running Mihomo",
+            Err(_) => reload_note = "; reload Mihomo to apply updated GeoData",
+        }
+    }
     let summary = match (updated.is_empty(), skipped.is_empty()) {
         (true, _) => format!(
             "preset={}; all {} files already up to date",
             preset.id(),
             skipped.len()
         ),
-        (false, true) => format!("preset={}; updated: {}", preset.id(), updated.join(", ")),
+        (false, true) => format!(
+            "preset={}; updated: {}{reload_note}",
+            preset.id(),
+            updated.join(", ")
+        ),
         (false, false) => format!(
-            "preset={}; updated: {}; unchanged: {}",
+            "preset={}; updated: {}; unchanged: {}{reload_note}",
             preset.id(),
             updated.join(", "),
             skipped.join(", ")

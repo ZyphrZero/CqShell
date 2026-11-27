@@ -58,6 +58,7 @@ clash.start            启动 Mihomo
   校验主配置与 Mixin YAML，原子发布运行配置，然后以带归属校验的 PID 记录启动 Mihomo。
 clash.stop             停止 Mihomo
   向 CqShell 记录的 Mihomo 进程发送 SIGTERM 并等待退出。
+  stop_force=off ["off", "on"]
 clash.reload           热重载运行配置
   重新合成并通过 Mihomo 校验运行配置，原子发布后调用控制器热重载，无需重启进程；失败自动回滚。
 clash.mode             切换代理运行模式
@@ -132,13 +133,22 @@ clash.settings.configure 核心代理设置
   clash_ipv6=off ["off", "on"]
   sniffer=on ["on", "off"]
   log_level=info ["info", "warning", "error", "debug", "silent"]
+  tcp_concurrent=on ["on", "off"]
+  unified_delay=on ["on", "off"]
+  find_process_mode=strict ["strict", "always", "off"]
 clash.dns.status       查看 DNS 配置状态
   只读查看当前生效的 Mihomo DNS 开关、增强模式、IPv6 解析、上游 nameserver 与 fallback 数量。
 clash.dns.configure    配置 DNS 预设
   配置 fake-ip / redir-host / 关闭，内置国内分流 DoH（阿里/腾讯 + Cloudflare/Google 回落）或海外 DoH 预设与常见 fake-ip-filter；Mihomo 运行中将自动热重载或重启生效。
   dns_mode=fake-ip ["fake-ip", "redir-host", "off"]
-  dns_preset=china ["china", "global"]
+  dns_preset=china ["china", "global", "keep"]
   dns_ipv6=off ["off", "on"]
+clash.dns.query        在线 DNS 解析诊断
+  直接通过运行中的 Mihomo 内置 DNS 引擎（GET /dns/query）解析域名，快速验证 Fake-IP 或上游返回结果。
+  dns_domain=example.com []
+  dns_record_type=A ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "HTTPS"]
+clash.cache.flush      清理 Fake-IP 与 DNS 缓存
+  通过控制器即时清空 Mihomo 内存中的 Fake-IP 池与 DNS 解析缓存，无需重启核心进程。
 clash.mixin.status     查看 Mixin 覆盖配置
   查看持久化 Mixin 覆盖内容，自动脱敏控制器密钥与代理认证凭据。
 clash.mixin.reset      重置 Mixin 覆盖配置
@@ -168,6 +178,8 @@ clash.tun.configure    配置 TUN 模式
   tun_device=cqs-tun []
   auto_route=on ["on", "off"]
   dns_hijack=on ["on", "off"]
+  tun_strict_route=off ["off", "on"]
+  tun_bypass_private=on ["on", "off"]
 clash.logs             查看 / 跟随 Mihomo 日志
   读取有界日志尾部并隐藏密钥、代理认证及订阅参数；跟随模式可取消。
   lines=100 []

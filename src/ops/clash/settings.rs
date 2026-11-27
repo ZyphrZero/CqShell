@@ -4,6 +4,23 @@ use super::*;
 use serde_yaml::Mapping;
 
 const VALID_LOG_LEVELS: &[&str] = &["info", "warning", "error", "debug", "silent"];
+const VALID_FIND_PROCESS_MODES: &[&str] = &["strict", "always", "off"];
+const DEFAULT_PROXY_USER: &str = "cqs";
+
+const DEFAULT_FAKE_IP_FILTER: &[&str] = &[
+    "*.lan",
+    "*.local",
+    "localhost.ptlogin2.qq.com",
+    "dns.msftncsi.com",
+    "www.msftconnecttest.com",
+    "time.*.com",
+    "ntp.*.com",
+    "+.pool.ntp.org",
+];
+
+pub(crate) fn proxy_auth_path(ctx: &Context) -> PathBuf {
+    ctx.paths.clash_data.join("proxy.auth")
+}
 
 fn key(name: &str) -> Value {
     Value::String(name.into())
@@ -79,7 +96,30 @@ fn sniffer_mapping() -> Mapping {
     root
 }
 
-/// Persist core Mihomo listener, IPv6, domain sniffing, and log-level settings into Mixin.
+fn validate_find_process_mode(value: &str) -> Result<()> {
+    if !VALID_FIND_PROCESS_MODES.contains(&value) {
+        return Err(Error::new(
+            "error.input",
+            "find-process-mode must be strict, always or off",
+        ));
+    }
+    Ok(())
+}
+
+fn render_proxy_auth_card(port: u16, username: &str, password: &str) -> Vec<u8> {
+    format!(
+        "# CqShell managed mixed-port LAN proxy credentials (mode 0600)\n\
+         listen=0.0.0.0:{port}\n\
+         username={username}\n\
+         password={password}\n"
+    )
+    .into_bytes()
+}
+
+/// Persist core Mihomo listener, IPv6, domain sniffing, performance, and log-level settings into Mixin.
+/// Enabling `allow_lan` automatically provisions `0600` authentication (`proxy.auth`) and strips
+/// `skip-auth-prefixes` so a server never exposes an unauthenticated open proxy.
+#[allow(clippy::too_many_arguments)]
 pub fn configure(
     ctx: &Context,
     mixed_port: &str,
@@ -87,41 +127,96 @@ pub fn configure(
     ipv6: bool,
     sniffer: bool,
     log_level: &str,
+    tcp_concurrent: bool,
+    unified_delay: bool,
+    find_process_mode: &str,
 ) -> Result<()> {
     let port = validate_mixed_port(mixed_port)?;
     validate_log_level(log_level)?;
-    let applied = edit_mixin_and_apply(ctx, MixinApplyMode::HotReloadOrRestart, |map| {
-        map.insert(key("mixed-port"), Value::Number(port.into()));
-        map.insert(key("allow-lan"), Value::Bool(allow_lan));
-        map.insert(
-            key("bind-address"),
-            key(if allow_lan { "*" } else { "127.0.0.1" }),
-        );
-        map.insert(key("ipv6"), Value::Bool(ipv6));
-        map.insert(key("log-level"), key(log_level));
-        if sniffer {
-            map.insert(key("sniffer"), Value::Mapping(sniffer_mapping()));
-        } else {
-            let entry = map
-                .entry(key("sniffer"))
-                .or_insert_with(|| Value::Mapping(Mapping::new()));
-            match entry.as_mapping_mut() {
-                Some(sniffer_map) => {
-                    sniffer_map.insert(key("enable"), Value::Bool(false));
-                }
-                None => {
-                    let mut disabled = Mapping::new();
-                    disabled.insert(key("enable"), Value::Bool(false));
-                    *entry = Value::Mapping(disabled);
+    validate_find_process_mode(find_process_mode)?;
+    let mut generated_auth = false;
+    let applied = edit_mixin_with_patch_and_extras(
+        ctx,
+        MixinApplyMode::HotReloadOrRestart,
+        |map, extras| {
+            let prev_sniffer = map.get(key("sniffer")).cloned();
+            let prev_auth = map.get(key("authentication")).cloned();
+            let prev_skip = map.get(key("skip-auth-prefixes")).cloned();
+
+            let bind_addr = if allow_lan { "*" } else { "127.0.0.1" };
+            map.insert(key("mixed-port"), Value::Number(port.into()));
+            map.insert(key("allow-lan"), Value::Bool(allow_lan));
+            map.insert(key("bind-address"), key(bind_addr));
+            map.insert(key("ipv6"), Value::Bool(ipv6));
+            map.insert(key("log-level"), key(log_level));
+            map.insert(key("tcp-concurrent"), Value::Bool(tcp_concurrent));
+            map.insert(key("unified-delay"), Value::Bool(unified_delay));
+            map.insert(key("find-process-mode"), key(find_process_mode));
+            if allow_lan {
+                map.remove(key("skip-auth-prefixes"));
+                if !yaml_prep::has_valid_authentication(map) {
+                    let password = yaml_prep::generate_alnum_password()?;
+                    let entry = format!("{DEFAULT_PROXY_USER}:{password}");
+                    map.insert(key("authentication"), Value::Sequence(vec![key(&entry)]));
+                    let card = render_proxy_auth_card(port, DEFAULT_PROXY_USER, &password);
+                    extras.push((
+                        proxy_auth_path(ctx),
+                        Some(storage::Saved::new(&card, 0o600)),
+                    ));
+                    generated_auth = true;
                 }
             }
+            if sniffer {
+                map.insert(key("sniffer"), Value::Mapping(sniffer_mapping()));
+            } else {
+                let entry = map
+                    .entry(key("sniffer"))
+                    .or_insert_with(|| Value::Mapping(Mapping::new()));
+                match entry.as_mapping_mut() {
+                    Some(sniffer_map) => {
+                        sniffer_map.insert(key("enable"), Value::Bool(false));
+                    }
+                    None => {
+                        let mut disabled = Mapping::new();
+                        disabled.insert(key("enable"), Value::Bool(false));
+                        *entry = Value::Mapping(disabled);
+                    }
+                }
+            }
+
+            let can_live_patch = !generated_auth
+                && map.get(key("sniffer")) == prev_sniffer.as_ref()
+                && map.get(key("authentication")) == prev_auth.as_ref()
+                && map.get(key("skip-auth-prefixes")) == prev_skip.as_ref();
+            if can_live_patch {
+                Ok(Some(serde_json::json!({
+                    "mixed-port": port,
+                    "allow-lan": allow_lan,
+                    "bind-address": bind_addr,
+                    "ipv6": ipv6,
+                    "log-level": log_level,
+                    "tcp-concurrent": tcp_concurrent,
+                    "unified-delay": unified_delay,
+                    "find-process-mode": find_process_mode,
+                })))
+            } else {
+                Ok(None)
+            }
+        },
+    )?;
+    let auth_note = if allow_lan {
+        if generated_auth {
+            "; auth=auto-generated (proxy.auth)"
+        } else {
+            "; auth=retained"
         }
-        Ok(())
-    })?;
+    } else {
+        ""
+    };
     ctx.message(
         "notice.clash_settings",
         format!(
-            "mixed-port={port}; allow-lan={allow_lan}; ipv6={ipv6}; sniffer={sniffer}; log-level={log_level}; {}",
+            "mixed-port={port}; allow-lan={allow_lan}{auth_note}; ipv6={ipv6}; sniffer={sniffer}; log-level={log_level}; tcp-concurrent={tcp_concurrent}; unified-delay={unified_delay}; find-process-mode={find_process_mode}; {}",
             applied.suffix()
         ),
     );
@@ -186,12 +281,28 @@ pub fn dns_status(ctx: &Context) -> Result<()> {
     Ok(())
 }
 
-fn dns_mapping(mode: &str, preset: &str, ipv6: bool) -> Mapping {
-    let mut dns = Mapping::new();
+fn merge_string_list(existing: Option<&Value>, additions: &[&str]) -> Value {
+    let mut items = existing
+        .and_then(Value::as_sequence)
+        .cloned()
+        .unwrap_or_default();
+    for &entry in additions {
+        let val = key(entry);
+        if !items.contains(&val) {
+            items.push(val);
+        }
+    }
+    Value::Sequence(items)
+}
+
+/// Apply incremental field-level DNS updates while preserving user/subscription keys such as
+/// `nameserver-policy`, `proxy-server-nameserver`, `listen`, `respect-rules`, and custom `fake-ip-filter`.
+fn apply_dns_fields(dns: &mut Mapping, mode: &str, preset: &str, ipv6: bool) {
     dns.insert(key("enable"), Value::Bool(true));
     dns.insert(key("ipv6"), Value::Bool(ipv6));
     dns.insert(key("enhanced-mode"), key(mode));
-    dns.insert(key("respect-rules"), Value::Bool(false));
+    dns.entry(key("respect-rules"))
+        .or_insert(Value::Bool(false));
     match preset {
         "china" => {
             dns.insert(
@@ -225,29 +336,23 @@ fn dns_mapping(mode: &str, preset: &str, ipv6: bool) -> Mapping {
                 string_list(&["https://1.1.1.1/dns-query", "https://dns.google/dns-query"]),
             );
             dns.insert(key("fallback"), Value::Sequence(Vec::new()));
+            dns.remove(key("fallback-filter"));
         }
+        "keep" => {}
         _ => unreachable!(),
     }
     if mode == "fake-ip" {
-        dns.insert(key("fake-ip-range"), key("198.18.0.1/16"));
-        dns.insert(
-            key("fake-ip-filter"),
-            string_list(&[
-                "*.lan",
-                "*.local",
-                "localhost.ptlogin2.qq.com",
-                "dns.msftncsi.com",
-                "www.msftconnecttest.com",
-                "time.*.com",
-                "ntp.*.com",
-                "+.pool.ntp.org",
-            ]),
-        );
+        dns.entry(key("fake-ip-range"))
+            .or_insert_with(|| key("198.18.0.1/16"));
+        let merged_filter =
+            merge_string_list(dns.get(key("fake-ip-filter")), DEFAULT_FAKE_IP_FILTER);
+        dns.insert(key("fake-ip-filter"), merged_filter);
+    } else {
+        dns.remove(key("fake-ip-range"));
     }
-    dns
 }
 
-/// Configure Mihomo's DNS mode (`fake-ip`, `redir-host`, or `off`) and upstream preset.
+/// Configure Mihomo's DNS mode (`fake-ip`, `redir-host`, or `off`) and upstream preset (`china`, `global`, or `keep`).
 pub fn dns_configure(ctx: &Context, mode: &str, preset: &str, ipv6: bool) -> Result<()> {
     if !matches!(mode, "fake-ip" | "redir-host" | "off") {
         return Err(Error::new(
@@ -255,37 +360,26 @@ pub fn dns_configure(ctx: &Context, mode: &str, preset: &str, ipv6: bool) -> Res
             "DNS mode must be fake-ip, redir-host or off",
         ));
     }
-    if !matches!(preset, "china" | "global") {
+    if !matches!(preset, "china" | "global" | "keep") {
         return Err(Error::new(
             "error.input",
-            "DNS preset must be china or global",
+            "DNS preset must be china, global or keep",
         ));
     }
     let applied = edit_mixin_and_apply(ctx, MixinApplyMode::HotReloadOrRestart, |map| {
+        let entry = map
+            .entry(key("dns"))
+            .or_insert_with(|| Value::Mapping(Mapping::new()));
+        if !entry.is_mapping() {
+            *entry = Value::Mapping(Mapping::new());
+        }
+        let dns_map = entry
+            .as_mapping_mut()
+            .ok_or_else(|| Error::new("error.data", "dns must be a map"))?;
         if mode == "off" {
-            let entry = map
-                .entry(key("dns"))
-                .or_insert_with(|| Value::Mapping(Mapping::new()));
-            match entry.as_mapping_mut() {
-                Some(dns_map) => {
-                    dns_map.insert(key("enable"), Value::Bool(false));
-                }
-                None => {
-                    let mut disabled = Mapping::new();
-                    disabled.insert(key("enable"), Value::Bool(false));
-                    *entry = Value::Mapping(disabled);
-                }
-            }
+            dns_map.insert(key("enable"), Value::Bool(false));
         } else {
-            let existing_listen = map
-                .get(key("dns"))
-                .and_then(Value::as_mapping)
-                .and_then(|dns| dns.get(key("listen")).cloned());
-            let mut dns = dns_mapping(mode, preset, ipv6);
-            if let Some(listen) = existing_listen {
-                dns.insert(key("listen"), listen);
-            }
-            map.insert(key("dns"), Value::Mapping(dns));
+            apply_dns_fields(dns_map, mode, preset, ipv6);
         }
         Ok(())
     })?;
@@ -359,7 +453,7 @@ pub fn mixin_reset(ctx: &Context) -> Result<()> {
     let applied = reset_mixin_and_apply(
         ctx,
         MixinApplyMode::RestartIfRunning,
-        &[(socks::auth_path(ctx), None)],
+        &[(socks::auth_path(ctx), None), (proxy_auth_path(ctx), None)],
     )?;
     ctx.message(
         "notice.clash_mixin",
@@ -380,9 +474,16 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let ctx = crate::tests::context(temp.path());
         ensure_layout(&ctx).unwrap();
-        fs::write(&ctx.paths.clash_mixin, "custom: keep\n").unwrap();
+        fs::write(
+            &ctx.paths.clash_mixin,
+            "custom: keep\nskip-auth-prefixes:\n  - 0.0.0.0/0\n",
+        )
+        .unwrap();
 
-        configure(&ctx, "7891", true, true, true, "warning").unwrap();
+        configure(
+            &ctx, "7891", true, true, true, "warning", true, true, "strict",
+        )
+        .unwrap();
         let mixin: Value =
             serde_yaml::from_slice(&fs::read(&ctx.paths.clash_mixin).unwrap()).unwrap();
         assert_eq!(mixin["mixed-port"], 7891);
@@ -390,27 +491,60 @@ mod tests {
         assert_eq!(mixin["bind-address"], "*");
         assert_eq!(mixin["ipv6"], true);
         assert_eq!(mixin["log-level"], "warning");
+        assert_eq!(mixin["tcp-concurrent"], true);
+        assert_eq!(mixin["unified-delay"], true);
+        assert_eq!(mixin["find-process-mode"], "strict");
         assert_eq!(mixin["sniffer"]["enable"], true);
         assert_eq!(mixin["sniffer"]["sniff"]["TLS"]["ports"][0], 443);
         assert_eq!(mixin["custom"], "keep");
+        // Enabling allow-lan auto-provisions authentication + 0600 proxy.auth and clears skip-auth-prefixes.
+        assert!(mixin.get("skip-auth-prefixes").is_none());
+        let auth = mixin["authentication"].as_sequence().unwrap();
+        assert_eq!(auth.len(), 1);
+        assert!(auth[0].as_str().unwrap().starts_with("cqs:"));
+        assert!(proxy_auth_path(&ctx).is_file());
+        #[cfg(unix)]
+        assert_eq!(storage::mode(&proxy_auth_path(&ctx)).unwrap(), 0o600);
 
-        configure(&ctx, "7890", false, false, false, "info").unwrap();
+        configure(
+            &ctx, "7890", false, false, false, "info", false, false, "off",
+        )
+        .unwrap();
         let mixin: Value =
             serde_yaml::from_slice(&fs::read(&ctx.paths.clash_mixin).unwrap()).unwrap();
         assert_eq!(mixin["bind-address"], "127.0.0.1");
         assert_eq!(mixin["sniffer"]["enable"], false);
+        assert_eq!(mixin["tcp-concurrent"], false);
+        assert_eq!(mixin["unified-delay"], false);
+        assert_eq!(mixin["find-process-mode"], "off");
 
         for bad_port in ["", "0", "65536", "abc"] {
             assert!(validate_mixed_port(bad_port).is_err(), "{bad_port}");
         }
-        assert!(configure(&ctx, "7890", false, false, false, "trace").is_err());
+        assert!(
+            configure(
+                &ctx, "7890", false, false, false, "trace", true, true, "strict"
+            )
+            .is_err()
+        );
+        assert!(
+            configure(
+                &ctx, "7890", false, false, false, "info", true, true, "invalid"
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn dns_configure_supports_china_global_and_off_modes() {
+    fn dns_configure_supports_china_global_keep_and_off_modes_incrementally() {
         let temp = tempfile::tempdir().unwrap();
         let ctx = crate::tests::context(temp.path());
         ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_mixin,
+            "dns:\n  listen: 0.0.0.0:1053\n  respect-rules: true\n  nameserver-policy:\n    '+.corp.test': '192.0.2.53'\n  proxy-server-nameserver:\n    - '223.5.5.5'\n  fake-ip-filter:\n    - '*.custom.test'\n",
+        )
+        .unwrap();
 
         dns_configure(&ctx, "fake-ip", "china", true).unwrap();
         let mixin: Value =
@@ -420,7 +554,27 @@ mod tests {
         assert_eq!(mixin["dns"]["ipv6"], true);
         assert_eq!(mixin["dns"]["fallback-filter"]["geoip-code"], "CN");
         assert_eq!(mixin["dns"]["fake-ip-range"], "198.18.0.1/16");
+        // Incremental merge preserves existing policy/upstream/custom filter keys.
+        assert_eq!(mixin["dns"]["listen"], "0.0.0.0:1053");
+        assert_eq!(mixin["dns"]["respect-rules"], true);
+        assert_eq!(
+            mixin["dns"]["nameserver-policy"]["+.corp.test"],
+            "192.0.2.53"
+        );
+        assert_eq!(mixin["dns"]["proxy-server-nameserver"][0], "223.5.5.5");
+        let filters = mixin["dns"]["fake-ip-filter"].as_sequence().unwrap();
+        assert!(filters.contains(&key("*.custom.test")));
+        assert!(filters.contains(&key("*.lan")));
         dns_status(&ctx).unwrap();
+
+        dns_configure(&ctx, "fake-ip", "keep", false).unwrap();
+        let mixin: Value =
+            serde_yaml::from_slice(&fs::read(&ctx.paths.clash_mixin).unwrap()).unwrap();
+        assert_eq!(mixin["dns"]["ipv6"], false);
+        assert_eq!(
+            mixin["dns"]["nameserver"][0],
+            "https://dns.alidns.com/dns-query"
+        );
 
         dns_configure(&ctx, "redir-host", "global", false).unwrap();
         let mixin: Value =
@@ -429,6 +583,10 @@ mod tests {
         assert_eq!(mixin["dns"]["nameserver"][0], "https://1.1.1.1/dns-query");
         assert_eq!(mixin["dns"]["fallback"].as_sequence().unwrap().len(), 0);
         assert!(mixin["dns"].get("fake-ip-range").is_none());
+        assert_eq!(
+            mixin["dns"]["nameserver-policy"]["+.corp.test"],
+            "192.0.2.53"
+        );
 
         dns_configure(&ctx, "off", "china", false).unwrap();
         let mixin: Value =

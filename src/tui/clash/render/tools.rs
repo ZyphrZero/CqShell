@@ -221,6 +221,10 @@ fn draw_tool_inspector(app: &App, frame: &mut Frame, area: Rect, body: Rect) {
             "[i] / [N]".to_owned(),
             i.text("clash.tools.outbound_ip_desc").to_owned(),
         ),
+        ToolEntry::ServiceStatus => (
+            "[c]".to_owned(),
+            i.text("clash.tools.service_status_desc").to_owned(),
+        ),
         ToolEntry::SocksSecretCard => (
             "[Shift+S]".to_owned(),
             i.text("clash.tools.socks_secret_desc").to_owned(),

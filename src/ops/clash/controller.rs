@@ -12,6 +12,7 @@ const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 const MAX_HEADERS: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[derive(Debug, Clone)]
 pub(crate) struct Settings {
     pub address: String,
     pub url: String,
@@ -24,6 +25,14 @@ pub(crate) struct Settings {
 impl Settings {
     pub(crate) fn has_secret(&self) -> bool {
         !self.secret.is_empty()
+    }
+
+    pub(super) fn socket(&self) -> SocketAddr {
+        self.socket
+    }
+
+    pub(super) fn secret_str(&self) -> &str {
+        &self.secret
     }
 }
 
@@ -86,6 +95,19 @@ fn validate_listeners(map: &serde_yaml::Mapping, secret: &str) -> Result<()> {
             )));
         }
     }
+    for key in ["external-controller-unix", "external-controller-pipe"] {
+        let Some(raw) = map.get(Value::String(key.into())) else {
+            continue;
+        };
+        let raw = raw
+            .as_str()
+            .ok_or_else(|| invalid(&format!("{key} must be a path string")))?;
+        if !raw.trim().is_empty() && secret.is_empty() {
+            return Err(invalid(&format!(
+                "{key} requires a secret; configure a secret or remove the alternate controller"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -140,6 +162,17 @@ fn effective_config(ctx: &Context) -> Result<Value> {
 }
 
 pub(crate) fn effective_settings(ctx: &Context) -> Result<Option<Settings>> {
+    if matches!(state(ctx)?, State::Running(_)) {
+        return runtime_cache::load_file(&ctx.paths.clash_runtime)
+            .map(|cached| cached.controller.clone())
+            .map_err(|error| {
+                if error.key == "error.data" {
+                    invalid("cannot parse controller configuration")
+                } else {
+                    error
+                }
+            });
+    }
     from_config(&effective_config(ctx)?)
 }
 
@@ -157,7 +190,7 @@ pub fn status(ctx: &Context) -> Result<()> {
             "{}; secret={}",
             settings.url,
             if settings.secret.is_empty() {
-                "none"
+                "none (warning: unauthenticated)"
             } else {
                 "set (redacted)"
             }
@@ -206,9 +239,23 @@ pub(crate) fn enable_loopback_and_apply(ctx: &Context) -> Result<String> {
             Value::String("external-controller".into()),
             Value::String(address.clone()),
         );
+        #[cfg(any(unix, test))]
+        if map
+            .get(Value::String("secret".into()))
+            .and_then(Value::as_str)
+            .is_none_or(|s| s.is_empty())
+        {
+            let secret = yaml_prep::generate_hex_secret(32)?;
+            map.insert(Value::String("secret".into()), Value::String(secret));
+        }
         validate_override(ctx, map)
     })?;
     Ok(address)
+}
+
+/// Non-blocking single probe checking whether Mihomo's controller TCP socket is accepting connections.
+pub(super) fn probe_listening(settings: &Settings) -> bool {
+    TcpStream::connect_timeout(&settings.socket, Duration::from_millis(80)).is_ok()
 }
 
 /// Wait briefly for a freshly restarted Mihomo process to accept connections on its REST socket.
@@ -496,6 +543,349 @@ fn unchunk(mut bytes: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
+/// Reusable HTTP/1.1 Keep-Alive client for high-frequency local Mihomo controller polling.
+/// Eliminates per-request TCP handshake overhead and transparently reconnects once if the
+/// server closes an idle keep-alive socket.
+pub(crate) struct KeepAliveClient {
+    socket: SocketAddr,
+    address: String,
+    secret: String,
+    stream: Option<TcpStream>,
+    buf: Vec<u8>,
+}
+
+impl KeepAliveClient {
+    pub(crate) fn new(settings: &Settings) -> Self {
+        Self {
+            socket: settings.socket,
+            address: settings.address.clone(),
+            secret: settings.secret.clone(),
+            stream: None,
+            buf: Vec::with_capacity(8192),
+        }
+    }
+
+    pub(crate) fn matches_settings(&self, settings: &Settings) -> bool {
+        self.socket == settings.socket
+            && self.address == settings.address
+            && self.secret == settings.secret
+    }
+
+    fn reset(&mut self) {
+        self.stream = None;
+        self.buf.clear();
+    }
+
+    fn ensure_connected(&mut self) -> Result<()> {
+        if self.stream.is_some() {
+            return Ok(());
+        }
+        let stream =
+            TcpStream::connect_timeout(&self.socket, Duration::from_secs(3)).map_err(|_| {
+                Error::new(
+                    "error.command",
+                    "cannot connect to the configured Mihomo controller",
+                )
+            })?;
+        stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        self.buf.clear();
+        self.stream = Some(stream);
+        Ok(())
+    }
+
+    fn read_more(&mut self, ctx: &Context, start: Instant, timeout: Duration) -> Result<usize> {
+        let mut chunk = [0u8; 8192];
+        loop {
+            ctx.check()?;
+            if start.elapsed() > timeout {
+                self.reset();
+                return Err(Error::new("error.command", "controller response timed out"));
+            }
+            let Some(stream) = self.stream.as_mut() else {
+                return Err(Error::new("error.command", "controller socket closed"));
+            };
+            match stream.read(&mut chunk) {
+                Ok(n) => {
+                    if self.buf.len() + n > MAX_RESPONSE + MAX_HEADERS {
+                        self.reset();
+                        return Err(invalid("controller response exceeds 16 MiB"));
+                    }
+                    self.buf.extend_from_slice(&chunk[..n]);
+                    return Ok(n);
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    continue;
+                }
+                Err(_) => {
+                    self.reset();
+                    return Err(Error::new(
+                        "error.command",
+                        "cannot read controller response",
+                    ));
+                }
+            }
+        }
+    }
+
+    fn try_get_once(&mut self, ctx: &Context, path: &str, timeout: Duration) -> Result<Vec<u8>> {
+        ctx.check()?;
+        self.ensure_connected()?;
+        let start = Instant::now();
+        let auth = if self.secret.is_empty() {
+            String::new()
+        } else {
+            format!("Authorization: Bearer {}\r\n", self.secret)
+        };
+        let req = format!(
+            "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: keep-alive\r\nAccept: application/json\r\n{auth}\r\n",
+            self.address
+        );
+        if let Some(stream) = self.stream.as_mut()
+            && stream.write_all(req.as_bytes()).is_err()
+        {
+            self.reset();
+            return Err(Error::new(
+                "error.command",
+                "cannot send controller request",
+            ));
+        }
+
+        // Read until end of HTTP headers.
+        let split = loop {
+            if let Some(pos) = self.buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                if pos > MAX_HEADERS {
+                    self.reset();
+                    return Err(invalid("invalid controller HTTP headers"));
+                }
+                break pos;
+            }
+            if self.buf.len() > MAX_HEADERS {
+                self.reset();
+                return Err(invalid("invalid controller HTTP headers"));
+            }
+            let n = self.read_more(ctx, start, timeout)?;
+            if n == 0 {
+                self.reset();
+                return Err(Error::new(
+                    "error.command",
+                    "controller closed keep-alive connection",
+                ));
+            }
+        };
+
+        let header = std::str::from_utf8(&self.buf[..split])
+            .map_err(|_| invalid("invalid controller HTTP headers"))?
+            .to_owned();
+        self.buf.drain(..split + 4);
+
+        let mut lines = header.split("\r\n");
+        let mut status = lines.next().unwrap_or("").split_whitespace();
+        let http_ver = status.next();
+        if !matches!(http_ver, Some("HTTP/1.1" | "HTTP/1.0")) {
+            self.reset();
+            return Err(invalid("invalid controller HTTP status"));
+        }
+        let code: u16 = status
+            .next()
+            .and_then(|value| value.parse().ok())
+            .filter(|value| (100..600).contains(value))
+            .ok_or_else(|| invalid("invalid controller HTTP status"))?;
+
+        let mut length = None;
+        let mut chunked = false;
+        let mut server_close = http_ver == Some("HTTP/1.0");
+        for line in lines {
+            let (name, value) = line
+                .split_once(':')
+                .ok_or_else(|| invalid("invalid controller HTTP header"))?;
+            if name.eq_ignore_ascii_case("content-length") {
+                if length.is_some() {
+                    self.reset();
+                    return Err(invalid("duplicate controller Content-Length"));
+                }
+                length = Some(
+                    value
+                        .trim()
+                        .parse::<usize>()
+                        .map_err(|_| invalid("invalid controller Content-Length"))?,
+                );
+            } else if name.eq_ignore_ascii_case("transfer-encoding") {
+                if chunked || !value.trim().eq_ignore_ascii_case("chunked") {
+                    self.reset();
+                    return Err(invalid("unsupported controller Transfer-Encoding"));
+                }
+                chunked = true;
+            } else if name.eq_ignore_ascii_case("connection")
+                && value.to_ascii_lowercase().contains("close")
+            {
+                server_close = true;
+            }
+        }
+        if chunked && length.is_some() {
+            self.reset();
+            return Err(invalid("ambiguous controller response framing"));
+        }
+
+        let body = if let Some(expected) = length {
+            if expected > MAX_RESPONSE {
+                self.reset();
+                return Err(invalid("truncated or oversized controller response"));
+            }
+            while self.buf.len() < expected {
+                let n = self.read_more(ctx, start, timeout)?;
+                if n == 0 {
+                    self.reset();
+                    return Err(invalid("truncated or oversized controller response"));
+                }
+            }
+            self.buf.drain(..expected).collect::<Vec<u8>>()
+        } else if chunked {
+            let mut decoded = Vec::new();
+            loop {
+                let line_end = loop {
+                    if let Some(pos) = self.buf.windows(2).position(|w| w == b"\r\n") {
+                        break pos;
+                    }
+                    let n = self.read_more(ctx, start, timeout)?;
+                    if n == 0 {
+                        self.reset();
+                        return Err(invalid("truncated controller chunk"));
+                    }
+                };
+                let size = std::str::from_utf8(&self.buf[..line_end])
+                    .ok()
+                    .and_then(|v| v.split(';').next())
+                    .and_then(|v| usize::from_str_radix(v.trim(), 16).ok())
+                    .ok_or_else(|| invalid("invalid controller chunk size"))?;
+                self.buf.drain(..line_end + 2);
+                if size == 0 {
+                    // Drain trailing CRLF (or trailers ending in CRLFCRLF).
+                    loop {
+                        if self.buf.starts_with(b"\r\n") {
+                            self.buf.drain(..2);
+                            break;
+                        }
+                        if let Some(pos) = self.buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            self.buf.drain(..pos + 4);
+                            break;
+                        }
+                        let n = self.read_more(ctx, start, timeout)?;
+                        if n == 0 {
+                            self.reset();
+                            return Err(invalid("invalid controller chunk trailer"));
+                        }
+                    }
+                    break;
+                }
+                if size > MAX_RESPONSE - decoded.len() {
+                    self.reset();
+                    return Err(invalid("truncated or oversized controller chunk"));
+                }
+                while self.buf.len() < size + 2 {
+                    let n = self.read_more(ctx, start, timeout)?;
+                    if n == 0 {
+                        self.reset();
+                        return Err(invalid("truncated or oversized controller chunk"));
+                    }
+                }
+                if &self.buf[size..size + 2] != b"\r\n" {
+                    self.reset();
+                    return Err(invalid("truncated or oversized controller chunk"));
+                }
+                decoded.extend_from_slice(&self.buf[..size]);
+                self.buf.drain(..size + 2);
+            }
+            decoded
+        } else {
+            // No Content-Length and not chunked: read until EOF and drop connection.
+            server_close = true;
+            while self.read_more(ctx, start, timeout)? > 0 {}
+            std::mem::take(&mut self.buf)
+        };
+
+        if server_close {
+            self.reset();
+        }
+        if !(200..300).contains(&code) {
+            return Err(Error::new(
+                "error.command",
+                format!("controller returned HTTP {code}"),
+            ));
+        }
+        Ok(body)
+    }
+
+    pub(crate) fn get(&mut self, ctx: &Context, path: &str, timeout: Duration) -> Result<Vec<u8>> {
+        let reused = self.stream.is_some();
+        match self.try_get_once(ctx, path, timeout) {
+            Ok(body) => Ok(body),
+            Err(err) if reused && err.key == "error.command" && !err.detail.contains("HTTP ") => {
+                // Stale keep-alive socket closed by peer: transparently reconnect once.
+                self.reset();
+                self.try_get_once(ctx, path, timeout)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(crate) fn fetch_version(&mut self, ctx: &Context) -> Result<String> {
+        let body = self.get(ctx, "/version", Duration::from_secs(3))?;
+        parse_version_body(&body)
+    }
+
+    pub(crate) fn fetch_configs(&mut self, ctx: &Context) -> Result<ControllerConfigs> {
+        let body = self.get(ctx, "/configs", Duration::from_secs(3))?;
+        parse_configs_body(&body)
+    }
+
+    pub(crate) fn fetch_groups(
+        &mut self,
+        ctx: &Context,
+    ) -> Result<Vec<super::model::ProxyGroupItem>> {
+        let body = self.get(ctx, "/proxies", Duration::from_secs(4))?;
+        let mut json: Json = serde_json::from_slice(&body)
+            .map_err(|_| invalid("controller returned invalid JSON"))?;
+        let entries = json
+            .get_mut("proxies")
+            .and_then(Json::as_object_mut)
+            .map(std::mem::take)
+            .ok_or_else(|| invalid("controller response has no proxies map"))?;
+        Ok(build_group_items(entries))
+    }
+
+    pub(crate) fn fetch_connections_raw(&mut self, ctx: &Context) -> Result<RawConnections> {
+        let body = self.get(ctx, "/connections", Duration::from_secs(3))?;
+        parse_connections_body(&body)
+    }
+
+    pub(crate) fn fetch_rules(&mut self, ctx: &Context) -> Result<Vec<super::model::RuleItem>> {
+        let body = self.get(ctx, "/rules", Duration::from_secs(5))?;
+        parse_rules_body(&body)
+    }
+
+    pub(crate) fn fetch_proxy_providers(
+        &mut self,
+        ctx: &Context,
+    ) -> Result<Vec<super::model::ProxyProviderItem>> {
+        let body = self.get(ctx, "/providers/proxies", Duration::from_secs(4))?;
+        parse_proxy_providers_body(&body)
+    }
+
+    pub(crate) fn fetch_rule_providers(
+        &mut self,
+        ctx: &Context,
+    ) -> Result<Vec<super::model::RuleProviderItem>> {
+        let body = self.get(ctx, "/providers/rules", Duration::from_secs(4))?;
+        parse_rule_providers_body(&body)
+    }
+}
+
 fn proxy_map(ctx: &Context, settings: &Settings) -> Result<serde_json::Map<String, Json>> {
     let body = request(ctx, settings, "GET", "/proxies", &[])?;
     let mut json: Json =
@@ -681,6 +1071,7 @@ pub fn select(ctx: &Context, group: &str, node: &str) -> Result<()> {
             "node does not belong to the selected controller group",
         ));
     }
+    let prev_now = entry.get("now").and_then(Json::as_str);
     let body = serde_json::to_vec(&serde_json::json!({"name":node}))?;
     request(
         ctx,
@@ -689,6 +1080,10 @@ pub fn select(ctx: &Context, group: &str, node: &str) -> Result<()> {
         &format!("/proxies/{}", segment(group)),
         &body,
     )?;
+    if prev_now != Some(node) && matches!(state(ctx), Ok(State::Running(_))) {
+        let policy = CloseOnSwitchPolicy::from_preferences(ctx);
+        let _ = apply_close_on_switch(ctx, &settings, group, policy);
+    }
     ctx.message(
         "notice.clash_selected",
         redacted(&settings, &format!("{group} -> {node}")),
@@ -821,6 +1216,74 @@ pub fn mode(ctx: &Context, mode: &str, persist: bool) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn patch_configs(ctx: &Context, settings: &Settings, patch: &Json) -> Result<()> {
+    let body = serde_json::to_vec(patch)?;
+    request_with_timeout(
+        ctx,
+        settings,
+        "PATCH",
+        "/configs",
+        &body,
+        Duration::from_secs(5),
+    )?;
+    Ok(())
+}
+
+fn snapshot_selector_picks(ctx: &Context, settings: &Settings) -> BTreeMap<String, String> {
+    let Ok(entries) = proxy_map(ctx, settings) else {
+        return BTreeMap::new();
+    };
+    let mut picks = BTreeMap::new();
+    for (name, entry) in entries {
+        if entry.get("type").and_then(Json::as_str) == Some("Selector")
+            && let Some(now) = entry
+                .get("now")
+                .and_then(Json::as_str)
+                .filter(|s| !s.is_empty())
+        {
+            picks.insert(name, now.to_owned());
+        }
+    }
+    picks
+}
+
+fn restore_selector_picks(ctx: &Context, settings: &Settings, picks: &BTreeMap<String, String>) {
+    if picks.is_empty() {
+        return;
+    }
+    let Ok(entries) = proxy_map(ctx, settings) else {
+        return;
+    };
+    for (group, saved_now) in picks {
+        let Some(entry) = entries.get(group) else {
+            continue;
+        };
+        if entry.get("type").and_then(Json::as_str) != Some("Selector") {
+            continue;
+        }
+        if entry.get("now").and_then(Json::as_str) == Some(saved_now.as_str()) {
+            continue;
+        }
+        let has_member = entry
+            .get("all")
+            .and_then(Json::as_array)
+            .is_some_and(|all| all.iter().any(|v| v.as_str() == Some(saved_now.as_str())));
+        if !has_member {
+            continue;
+        }
+        if let Ok(body) = serde_json::to_vec(&serde_json::json!({ "name": saved_now })) {
+            let _ = request_with_timeout(
+                ctx,
+                settings,
+                "PUT",
+                &format!("/proxies/{}", segment(group)),
+                &body,
+                Duration::from_secs(3),
+            );
+        }
+    }
+}
+
 pub(super) fn push_runtime(ctx: &Context, settings: &Settings, runtime: &[u8]) -> Result<()> {
     let payload = std::str::from_utf8(runtime)
         .map_err(|_| invalid("generated runtime configuration is not valid UTF-8"))?;
@@ -831,8 +1294,21 @@ pub(super) fn push_runtime(ctx: &Context, settings: &Settings, runtime: &[u8]) -
         "PUT",
         "/configs?force=true",
         &body,
-        Duration::from_secs(15),
+        Duration::from_secs(30),
     )?;
+    Ok(())
+}
+
+/// Push a full runtime config via `PUT /configs?force=true` while snapshotting and restoring
+/// existing manual `Selector` picks that remain valid in the reloaded configuration.
+pub(super) fn push_runtime_preserving_picks(
+    ctx: &Context,
+    settings: &Settings,
+    runtime: &[u8],
+) -> Result<()> {
+    let picks = snapshot_selector_picks(ctx, settings);
+    push_runtime(ctx, settings, runtime)?;
+    restore_selector_picks(ctx, settings, &picks);
     Ok(())
 }
 
@@ -865,7 +1341,13 @@ pub fn reload(ctx: &Context) -> Result<()> {
     validate_with_mihomo(ctx, candidate.path())?;
     let payload = String::from_utf8(runtime.clone())
         .map_err(|_| invalid("generated runtime configuration is not valid UTF-8"))?;
+    let picks = if matches!(current_state, State::Running(_)) {
+        snapshot_selector_picks(ctx, &settings)
+    } else {
+        BTreeMap::new()
+    };
     storage::atomic_write(&ctx.paths.clash_runtime, &runtime, 0o600)?;
+    runtime_cache::invalidate(&ctx.paths.clash_runtime);
     // Send the validated YAML via `payload` rather than `path`: Mihomo rejects
     // `path` outside its `-d` resource directory unless `SAFE_PATHS` includes
     // `clash_data`, so `payload` works even for already-running Mihomo daemons.
@@ -876,7 +1358,7 @@ pub fn reload(ctx: &Context) -> Result<()> {
         "PUT",
         "/configs?force=true",
         &body,
-        Duration::from_secs(15),
+        Duration::from_secs(30),
     ) {
         let _ = match previous {
             Some(bytes) => storage::atomic_write(&ctx.paths.clash_runtime, &bytes, 0o600),
@@ -891,6 +1373,9 @@ pub fn reload(ctx: &Context) -> Result<()> {
             ));
         }
         return Err(error);
+    }
+    if !picks.is_empty() {
+        restore_selector_picks(ctx, &settings, &picks);
     }
     ctx.message(
         "notice.clash_reload",
@@ -1108,6 +1593,17 @@ fn non_zero_port(value: Option<&Json>) -> Option<u16> {
         .map(|p| p as u16)
 }
 
+fn parse_version_body(body: &[u8]) -> Result<String> {
+    let json: Json =
+        serde_json::from_slice(body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    Ok(json
+        .get("version")
+        .and_then(Json::as_str)
+        .unwrap_or("")
+        .to_owned())
+}
+
+#[cfg(test)]
 pub(crate) fn fetch_version(ctx: &Context, settings: &Settings) -> Result<String> {
     let body = request_with_timeout(
         ctx,
@@ -1117,26 +1613,12 @@ pub(crate) fn fetch_version(ctx: &Context, settings: &Settings) -> Result<String
         &[],
         Duration::from_secs(3),
     )?;
-    let json: Json =
-        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
-    Ok(json
-        .get("version")
-        .and_then(Json::as_str)
-        .unwrap_or("")
-        .to_owned())
+    parse_version_body(&body)
 }
 
-pub(crate) fn fetch_configs(ctx: &Context, settings: &Settings) -> Result<ControllerConfigs> {
-    let body = request_with_timeout(
-        ctx,
-        settings,
-        "GET",
-        "/configs",
-        &[],
-        Duration::from_secs(3),
-    )?;
+fn parse_configs_body(body: &[u8]) -> Result<ControllerConfigs> {
     let json: Json =
-        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+        serde_json::from_slice(body).map_err(|_| invalid("controller returned invalid JSON"))?;
     let tun = json.get("tun");
     Ok(ControllerConfigs {
         mode: json
@@ -1161,6 +1643,19 @@ pub(crate) fn fetch_configs(ctx: &Context, settings: &Settings) -> Result<Contro
             .unwrap_or("")
             .to_owned(),
     })
+}
+
+#[cfg(test)]
+pub(crate) fn fetch_configs(ctx: &Context, settings: &Settings) -> Result<ControllerConfigs> {
+    let body = request_with_timeout(
+        ctx,
+        settings,
+        "GET",
+        "/configs",
+        &[],
+        Duration::from_secs(3),
+    )?;
+    parse_configs_body(&body)
 }
 
 fn latest_history_delay(entry: &Json) -> (Option<u64>, bool) {
@@ -1199,14 +1694,9 @@ fn resolve_exit_chain(entries: &serde_json::Map<String, Json>, start_group: &str
     chain
 }
 
-/// Fetch all Mihomo policy groups and their member nodes in `GLOBAL` configuration order.
-pub(crate) fn fetch_groups(
-    ctx: &Context,
-    settings: &Settings,
-) -> Result<Vec<super::model::ProxyGroupItem>> {
+fn build_group_items(entries: serde_json::Map<String, Json>) -> Vec<super::model::ProxyGroupItem> {
     use super::model::{ProxyGroupItem, ProxyGroupKind, ProxyNodeItem};
 
-    let entries = proxy_map(ctx, settings)?;
     let order = entries
         .get("GLOBAL")
         .and_then(|global| global.get("all"))
@@ -1298,12 +1788,119 @@ pub(crate) fn fetch_groups(
             (None, None) => a.name.cmp(&b.name),
         },
     });
-    Ok(groups)
+    groups
+}
+
+/// Fetch all Mihomo policy groups and their member nodes in `GLOBAL` configuration order.
+#[cfg(test)]
+pub(crate) fn fetch_groups(
+    ctx: &Context,
+    settings: &Settings,
+) -> Result<Vec<super::model::ProxyGroupItem>> {
+    let entries = proxy_map(ctx, settings)?;
+    Ok(build_group_items(entries))
+}
+
+/// Policy controlling which existing Mihomo connections are closed after switching a proxy group node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CloseOnSwitchPolicy {
+    /// Leave all existing connections open after switching nodes.
+    Off,
+    /// Close only active connections whose proxy chain traverses the switched group (default).
+    #[default]
+    Group,
+    /// Close all active connections immediately on any node switch.
+    All,
+}
+
+impl CloseOnSwitchPolicy {
+    pub fn parse(raw: Option<&str>) -> Self {
+        match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("off" | "none" | "false") => Self::Off,
+            Some("all") => Self::All,
+            _ => Self::Group,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Group => "group",
+            Self::All => "all",
+        }
+    }
+
+    pub fn from_preferences(ctx: &Context) -> Self {
+        let pref = crate::config::Preferences::read(&ctx.paths.preferences, false).ok();
+        Self::parse(
+            pref.as_ref()
+                .and_then(|p| p.clash_close_conns_on_switch.as_deref()),
+        )
+    }
+}
+
+fn close_connections_for_group(ctx: &Context, settings: &Settings, group: &str) -> Result<usize> {
+    let raw = fetch_connections_raw(ctx, settings)?;
+    let mut closed = 0usize;
+    for conn in raw.connections {
+        if conn.chains.iter().any(|item| item == group)
+            && request_with_timeout(
+                ctx,
+                settings,
+                "DELETE",
+                &format!("/connections/{}", segment(&conn.id)),
+                &[],
+                Duration::from_secs(2),
+            )
+            .is_ok()
+        {
+            closed += 1;
+        }
+    }
+    Ok(closed)
+}
+
+fn apply_close_on_switch(
+    ctx: &Context,
+    settings: &Settings,
+    group: &str,
+    policy: CloseOnSwitchPolicy,
+) -> usize {
+    match policy {
+        CloseOnSwitchPolicy::Off => 0,
+        CloseOnSwitchPolicy::Group => {
+            close_connections_for_group(ctx, settings, group).unwrap_or(0)
+        }
+        CloseOnSwitchPolicy::All => usize::from(
+            request_with_timeout(
+                ctx,
+                settings,
+                "DELETE",
+                "/connections",
+                &[],
+                Duration::from_secs(3),
+            )
+            .is_ok(),
+        ),
+    }
 }
 
 /// Switch node on a `Selector`, `URLTest`, or `Fallback` group (supports temporary pinning on
-/// automatic groups in modern Mihomo).
+/// automatic groups in modern Mihomo) without automatically closing connections.
+#[cfg(test)]
 pub(crate) fn select_proxy_live(ctx: &Context, group: &str, node: &str) -> Result<()> {
+    let _ = select_proxy_live_with_policy(ctx, group, node, CloseOnSwitchPolicy::Off)?;
+    Ok(())
+}
+
+/// Switch node on a `Selector`, `URLTest`, or `Fallback` group and close stale connections
+/// according to [`CloseOnSwitchPolicy`] when the active selection actually changes.
+pub(crate) fn select_proxy_live_with_policy(
+    ctx: &Context,
+    group: &str,
+    node: &str,
+    policy: CloseOnSwitchPolicy,
+) -> Result<usize> {
     if group.is_empty() || node.is_empty() || group.len() > 4096 || node.len() > 4096 {
         return Err(Error::new(
             "error.input",
@@ -1332,6 +1929,7 @@ pub(crate) fn select_proxy_live(ctx: &Context, group: &str, node: &str) -> Resul
             "node does not belong to the selected controller group",
         ));
     }
+    let prev_now = entry.get("now").and_then(Json::as_str);
     let body = serde_json::to_vec(&serde_json::json!({ "name": node }))?;
     request(
         ctx,
@@ -1340,11 +1938,28 @@ pub(crate) fn select_proxy_live(ctx: &Context, group: &str, node: &str) -> Resul
         &format!("/proxies/{}", segment(group)),
         &body,
     )?;
-    Ok(())
+    let closed = if prev_now != Some(node) {
+        apply_close_on_switch(ctx, &settings, group, policy)
+    } else {
+        0
+    };
+    Ok(closed)
 }
 
 /// Clear temporary pinned node on a `URLTest` or `Fallback` group via `DELETE /proxies/{group}`.
+#[cfg(test)]
 pub(crate) fn unfix_group_live(ctx: &Context, group: &str) -> Result<()> {
+    let _ = unfix_group_live_with_policy(ctx, group, CloseOnSwitchPolicy::Off)?;
+    Ok(())
+}
+
+/// Clear temporary pinned node on a `URLTest` or `Fallback` group and close stale connections
+/// according to [`CloseOnSwitchPolicy`].
+pub(crate) fn unfix_group_live_with_policy(
+    ctx: &Context,
+    group: &str,
+    policy: CloseOnSwitchPolicy,
+) -> Result<usize> {
     if group.is_empty() || group.len() > 4096 {
         return Err(Error::new("error.input", "invalid policy group name"));
     }
@@ -1356,7 +1971,7 @@ pub(crate) fn unfix_group_live(ctx: &Context, group: &str) -> Result<()> {
         &format!("/proxies/{}", segment(group)),
         &[],
     )?;
-    Ok(())
+    Ok(apply_close_on_switch(ctx, &settings, group, policy))
 }
 
 /// Batch latency test for a policy group via `GET /group/{name}/delay`.
@@ -1457,8 +2072,6 @@ pub(crate) fn delay_node_ms(
 
 /// Fetch active connections snapshot from `GET /connections`.
 pub(crate) fn fetch_connections_raw(ctx: &Context, settings: &Settings) -> Result<RawConnections> {
-    use super::model::ConnectionItem;
-
     let body = request_with_timeout(
         ctx,
         settings,
@@ -1467,8 +2080,14 @@ pub(crate) fn fetch_connections_raw(ctx: &Context, settings: &Settings) -> Resul
         &[],
         Duration::from_secs(3),
     )?;
+    parse_connections_body(&body)
+}
+
+fn parse_connections_body(body: &[u8]) -> Result<RawConnections> {
+    use super::model::ConnectionItem;
+
     let json: Json =
-        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+        serde_json::from_slice(body).map_err(|_| invalid("controller returned invalid JSON"))?;
     let upload_total = json.get("uploadTotal").and_then(Json::as_u64).unwrap_or(0);
     let download_total = json
         .get("downloadTotal")
@@ -1624,13 +2243,130 @@ pub(crate) fn close_all_connections(ctx: &Context) -> Result<()> {
     Ok(())
 }
 
+/// Flush Mihomo's Fake-IP pool via `POST /cache/fakeip/flush`.
+pub(crate) fn flush_fakeip_cache(ctx: &Context) -> Result<()> {
+    let settings = settings(ctx)?;
+    request(ctx, &settings, "POST", "/cache/fakeip/flush", &[])?;
+    Ok(())
+}
+
+/// Flush Mihomo's DNS cache via `POST /cache/dns/flush`.
+/// Returns `Ok(false)` when an older Mihomo core does not expose `/cache/dns/flush` (HTTP 404).
+pub(crate) fn flush_dns_cache(ctx: &Context) -> Result<bool> {
+    let settings = settings(ctx)?;
+    match request(ctx, &settings, "POST", "/cache/dns/flush", &[]) {
+        Ok(_) => Ok(true),
+        Err(err) if err.detail.contains("HTTP 404") => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+/// Flush both Fake-IP and DNS caches on the running Mihomo controller.
+pub fn flush_caches(ctx: &Context) -> Result<()> {
+    ctx.check()?;
+    flush_fakeip_cache(ctx)?;
+    let dns_flushed = flush_dns_cache(ctx)?;
+    let detail = if dns_flushed {
+        "Fake-IP and DNS caches flushed"
+    } else {
+        "Fake-IP cache flushed (DNS cache endpoint not supported by this Mihomo version)"
+    };
+    ctx.message("notice.clash_cache", detail);
+    Ok(())
+}
+
+const VALID_DNS_RECORD_TYPES: &[&str] = &["A", "AAAA", "CNAME", "TXT", "MX", "NS", "HTTPS"];
+
+pub(crate) fn validate_dns_domain(value: &str) -> Result<String> {
+    let domain = value.trim().trim_end_matches('.');
+    if domain.is_empty()
+        || domain.len() > 253
+        || !domain
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        || domain
+            .split('.')
+            .any(|label| label.is_empty() || label.len() > 63)
+    {
+        return Err(Error::new(
+            "error.input",
+            "DNS domain must be a valid hostname (1-253 ASCII label characters)",
+        ));
+    }
+    Ok(domain.to_owned())
+}
+
+pub(crate) fn validate_dns_record_type(value: &str) -> Result<String> {
+    let upper = if value.trim().is_empty() {
+        "A".to_owned()
+    } else {
+        value.trim().to_ascii_uppercase()
+    };
+    if !VALID_DNS_RECORD_TYPES.contains(&upper.as_str()) {
+        return Err(Error::new(
+            "error.input",
+            "DNS record type must be A, AAAA, CNAME, TXT, MX, NS or HTTPS",
+        ));
+    }
+    Ok(upper)
+}
+
+/// Query Mihomo's built-in DNS resolver via `GET /dns/query?name=...&type=...`.
+pub fn query_dns(ctx: &Context, domain: &str, record_type: &str) -> Result<()> {
+    ctx.check()?;
+    let name = validate_dns_domain(domain)?;
+    let qtype = validate_dns_record_type(record_type)?;
+    let settings = settings(ctx)?;
+    let path = format!(
+        "/dns/query?name={}&type={}",
+        segment(&name),
+        segment(&qtype)
+    );
+    let body = request_with_timeout(ctx, &settings, "GET", &path, &[], Duration::from_secs(8))?;
+    let json: Json =
+        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+    let status_code = json.get("Status").and_then(Json::as_u64).unwrap_or(0);
+    let answers = json
+        .get("Answer")
+        .and_then(Json::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let data = item.get("data").and_then(Json::as_str)?;
+                    let ttl = item.get("TTL").and_then(Json::as_u64);
+                    match ttl {
+                        Some(t) => Some(format!("{data} (TTL {t}s)")),
+                        None => Some(data.to_owned()),
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let detail = if answers.is_empty() {
+        format!("{name} [{qtype}] status={status_code}; no answers")
+    } else {
+        format!(
+            "{name} [{qtype}] status={status_code}\n  {}",
+            answers.join("\n  ")
+        )
+    };
+    ctx.message("notice.clash_dns_query", redacted(&settings, &detail));
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) fn fetch_rules(
     ctx: &Context,
     settings: &Settings,
 ) -> Result<Vec<super::model::RuleItem>> {
     let body = request_with_timeout(ctx, settings, "GET", "/rules", &[], Duration::from_secs(5))?;
+    parse_rules_body(&body)
+}
+
+fn parse_rules_body(body: &[u8]) -> Result<Vec<super::model::RuleItem>> {
     let json: Json =
-        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+        serde_json::from_slice(body).map_err(|_| invalid("controller returned invalid JSON"))?;
     let Some(list) = json.get("rules").and_then(Json::as_array) else {
         return Ok(Vec::new());
     };
@@ -1661,27 +2397,35 @@ pub(crate) fn fetch_rules(
     Ok(rules)
 }
 
+fn json_u64_lenient(value: Option<&Json>) -> Option<u64> {
+    match value? {
+        Json::Number(n) => n.as_u64().or_else(|| {
+            n.as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0 && *v <= u64::MAX as f64)
+                .map(|v| v as u64)
+        }),
+        Json::String(s) => {
+            let s = s.trim();
+            s.parse::<u64>().ok().or_else(|| {
+                s.parse::<f64>()
+                    .ok()
+                    .filter(|v| v.is_finite() && *v >= 0.0 && *v <= u64::MAX as f64)
+                    .map(|v| v as u64)
+            })
+        }
+        _ => None,
+    }
+}
+
 fn parse_provider_userinfo(value: Option<&Json>) -> Option<super::model::SubscriptionUserinfo> {
     let map = value?.as_object()?;
-    let upload = map
-        .get("Upload")
-        .or_else(|| map.get("upload"))
-        .and_then(Json::as_u64)
-        .unwrap_or(0);
-    let download = map
-        .get("Download")
-        .or_else(|| map.get("download"))
-        .and_then(Json::as_u64)
-        .unwrap_or(0);
-    let total = map
-        .get("Total")
-        .or_else(|| map.get("total"))
-        .and_then(Json::as_u64)
-        .unwrap_or(0);
-    let expire = map
-        .get("Expire")
-        .or_else(|| map.get("expire"))
-        .and_then(Json::as_u64)
+    let upload = json_u64_lenient(map.get("Upload").or_else(|| map.get("upload"))).unwrap_or(0);
+    let download =
+        json_u64_lenient(map.get("Download").or_else(|| map.get("download"))).unwrap_or(0);
+    let total = json_u64_lenient(map.get("Total").or_else(|| map.get("total"))).unwrap_or(0);
+    let expire = json_u64_lenient(map.get("Expire").or_else(|| map.get("expire")))
+        .filter(|&e| e > 0)
+        .map(|e| if e >= 10_000_000_000 { e / 1000 } else { e })
         .filter(|&e| e > 0);
     if total > 0 || upload > 0 || download > 0 || expire.is_some() {
         Some(super::model::SubscriptionUserinfo {
@@ -1695,6 +2439,7 @@ fn parse_provider_userinfo(value: Option<&Json>) -> Option<super::model::Subscri
     }
 }
 
+#[cfg(test)]
 pub(crate) fn fetch_proxy_providers(
     ctx: &Context,
     settings: &Settings,
@@ -1707,8 +2452,12 @@ pub(crate) fn fetch_proxy_providers(
         &[],
         Duration::from_secs(4),
     )?;
+    parse_proxy_providers_body(&body)
+}
+
+fn parse_proxy_providers_body(body: &[u8]) -> Result<Vec<super::model::ProxyProviderItem>> {
     let json: Json =
-        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+        serde_json::from_slice(body).map_err(|_| invalid("controller returned invalid JSON"))?;
     let Some(map) = json.get("providers").and_then(Json::as_object) else {
         return Ok(Vec::new());
     };
@@ -1731,7 +2480,10 @@ pub(crate) fn fetch_proxy_providers(
             .and_then(Json::as_str)
             .unwrap_or("")
             .to_owned();
-        let userinfo = parse_provider_userinfo(val.get("subscriptionInfo"));
+        let userinfo = parse_provider_userinfo(
+            val.get("subscriptionInfo")
+                .or_else(|| val.get("subscription-info")),
+        );
         items.push(super::model::ProxyProviderItem {
             name: name.clone(),
             vehicle_type: vehicle,
@@ -1770,6 +2522,7 @@ pub(crate) fn healthcheck_proxy_provider(ctx: &Context, name: &str) -> Result<()
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn fetch_rule_providers(
     ctx: &Context,
     settings: &Settings,
@@ -1782,8 +2535,12 @@ pub(crate) fn fetch_rule_providers(
         &[],
         Duration::from_secs(4),
     )?;
+    parse_rule_providers_body(&body)
+}
+
+fn parse_rule_providers_body(body: &[u8]) -> Result<Vec<super::model::RuleProviderItem>> {
     let json: Json =
-        serde_json::from_slice(&body).map_err(|_| invalid("controller returned invalid JSON"))?;
+        serde_json::from_slice(body).map_err(|_| invalid("controller returned invalid JSON"))?;
     let Some(map) = json.get("providers").and_then(Json::as_object) else {
         return Ok(Vec::new());
     };
@@ -2638,6 +3395,7 @@ mod tests {
         let settings = effective_settings(&ctx).unwrap().unwrap();
         assert!(settings.bind_loopback);
         assert_eq!(settings.bind_address, first);
+        assert!(settings.has_secret());
 
         // Calling again keeps the already-configured address unchanged.
         let second = enable_loopback_and_apply(&ctx).unwrap();
@@ -2718,5 +3476,200 @@ mod tests {
 
         let _ = fs::remove_file(&fail_sentinel);
         let _ = stop(&ctx);
+    }
+
+    #[test]
+    fn close_on_switch_policy_closes_only_group_connections_or_all_or_none() {
+        let proxies_body = serde_json::json!({
+            "proxies": {
+                "Proxy": { "type": "Selector", "all": ["JP-01", "HK-01"], "now": "JP-01" },
+                "JP-01": { "type": "Vmess" },
+                "HK-01": { "type": "Vmess" }
+            }
+        })
+        .to_string();
+        let conns_body = serde_json::json!({
+            "uploadTotal": 0,
+            "downloadTotal": 0,
+            "connections": [
+                { "id": "c-proxy", "chains": ["JP-01", "Proxy"], "metadata": { "host": "example.com" } },
+                { "id": "c-direct", "chains": ["DIRECT"], "metadata": { "host": "example.org" } }
+            ]
+        })
+        .to_string();
+        let no_content = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec();
+
+        // Group policy: GET /proxies -> PUT /proxies/Proxy -> GET /connections -> DELETE /connections/c-proxy
+        let (address, worker) = serve(vec![
+            response(&proxies_body),
+            no_content.clone(),
+            response(&conns_body),
+            no_content.clone(),
+            // All policy: GET /proxies -> PUT /proxies/Proxy -> DELETE /connections
+            response(&proxies_body),
+            no_content.clone(),
+            no_content,
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("external-controller: {address}\nsecret: switch-secret\n"),
+        )
+        .unwrap();
+
+        let closed =
+            select_proxy_live_with_policy(&ctx, "Proxy", "HK-01", CloseOnSwitchPolicy::Group)
+                .unwrap();
+        assert_eq!(closed, 1);
+
+        let closed_all =
+            select_proxy_live_with_policy(&ctx, "Proxy", "HK-01", CloseOnSwitchPolicy::All)
+                .unwrap();
+        assert_eq!(closed_all, 1);
+
+        let reqs = worker.join().unwrap();
+        let req_str = |idx: usize| String::from_utf8(reqs[idx].clone()).unwrap();
+        assert!(req_str(2).starts_with("GET /connections HTTP/1.1\r\n"));
+        assert!(req_str(3).starts_with("DELETE /connections/c-proxy HTTP/1.1\r\n"));
+        assert!(req_str(6).starts_with("DELETE /connections HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn push_runtime_preserving_picks_restores_selector_choices() {
+        let before = serde_json::json!({
+            "proxies": {
+                "Proxy": { "type": "Selector", "all": ["JP-01", "HK-01"], "now": "HK-01" },
+                "Auto": { "type": "URLTest", "all": ["JP-01", "HK-01"], "now": "JP-01" }
+            }
+        })
+        .to_string();
+        let after = serde_json::json!({
+            "proxies": {
+                "Proxy": { "type": "Selector", "all": ["JP-01", "HK-01"], "now": "JP-01" }
+            }
+        })
+        .to_string();
+        let no_content = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec();
+        let (address, worker) = serve(vec![
+            response(&before),
+            no_content.clone(),
+            response(&after),
+            no_content,
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("external-controller: {address}\nsecret: pick-secret\n"),
+        )
+        .unwrap();
+        let s = settings(&ctx).unwrap();
+        push_runtime_preserving_picks(&ctx, &s, b"mode: rule\n").unwrap();
+        let reqs = worker.join().unwrap();
+        assert!(
+            String::from_utf8(reqs[1].clone())
+                .unwrap()
+                .starts_with("PUT /configs?force=true HTTP/1.1\r\n")
+        );
+        let restore = String::from_utf8(reqs[3].clone()).unwrap();
+        assert!(restore.starts_with("PUT /proxies/Proxy HTTP/1.1\r\n"));
+        assert!(restore.contains("HK-01"));
+    }
+
+    #[test]
+    fn cache_flush_and_dns_query_and_patch_configs_work() {
+        let no_content = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec();
+        let not_found = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec();
+        let dns_body = serde_json::json!({
+            "Status": 0,
+            "Answer": [{ "name": "example.com.", "type": 1, "TTL": 120, "data": "192.0.2.1" }]
+        })
+        .to_string();
+        let (address, worker) = serve(vec![
+            no_content.clone(),
+            not_found,
+            response(&dns_body),
+            no_content,
+        ]);
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(
+            &ctx.paths.clash_config,
+            format!("external-controller: {address}\nsecret: ops-secret\n"),
+        )
+        .unwrap();
+
+        flush_caches(&ctx).unwrap();
+        query_dns(&ctx, "example.com", "A").unwrap();
+        let s = settings(&ctx).unwrap();
+        patch_configs(&ctx, &s, &serde_json::json!({ "log-level": "warning" })).unwrap();
+
+        assert!(validate_dns_domain("bad domain!").is_err());
+        assert!(validate_dns_record_type("ANY").is_err());
+
+        let reqs = worker.join().unwrap();
+        let req_str = |idx: usize| String::from_utf8(reqs[idx].clone()).unwrap();
+        assert!(req_str(0).starts_with("POST /cache/fakeip/flush HTTP/1.1\r\n"));
+        assert!(req_str(1).starts_with("POST /cache/dns/flush HTTP/1.1\r\n"));
+        assert!(req_str(2).starts_with("GET /dns/query?name=example%2Ecom&type=A HTTP/1.1\r\n"));
+        assert!(req_str(3).starts_with("PATCH /configs HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn keep_alive_client_reuses_single_tcp_connection_and_reconnects_on_eof() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            // Connection 1 handles two back-to-back Keep-Alive requests (Content-Length + chunked).
+            let (mut s1, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 2048];
+            let n1 = s1.read(&mut buf).unwrap();
+            assert!(String::from_utf8_lossy(&buf[..n1]).contains("Connection: keep-alive"));
+            let b1 = r#"{"version":"v1.19.35"}"#;
+            let r1 = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{b1}",
+                b1.len()
+            );
+            s1.write_all(r1.as_bytes()).unwrap();
+
+            let n2 = s1.read(&mut buf).unwrap();
+            assert!(String::from_utf8_lossy(&buf[..n2]).starts_with("GET /configs HTTP/1.1\r\n"));
+            let b2 = r#"{"mode":"rule"}"#;
+            let r2 = format!(
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n{:x}\r\n{b2}\r\n0\r\n\r\n",
+                b2.len()
+            );
+            s1.write_all(r2.as_bytes()).unwrap();
+            // Now abruptly close connection 1 so the 3rd request triggers transparent reconnect.
+            drop(s1);
+
+            let (mut s2, _) = listener.accept().unwrap();
+            let n3 = s2.read(&mut buf).unwrap();
+            assert!(String::from_utf8_lossy(&buf[..n3]).starts_with("GET /version HTTP/1.1\r\n"));
+            let b3 = r#"{"version":"v1.19.36"}"#;
+            let r3 = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b3}",
+                b3.len()
+            );
+            s2.write_all(r3.as_bytes()).unwrap();
+        });
+
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        let s = from_config(
+            &serde_yaml::from_str(&format!("external-controller: {addr}\nsecret: ka-secret\n"))
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        let mut client = KeepAliveClient::new(&s);
+        assert_eq!(client.fetch_version(&ctx).unwrap(), "v1.19.35");
+        assert_eq!(client.fetch_configs(&ctx).unwrap().mode, "rule");
+        assert_eq!(client.fetch_version(&ctx).unwrap(), "v1.19.36");
+        server.join().unwrap();
     }
 }

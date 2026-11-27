@@ -3,11 +3,12 @@
 //! - GroupPicker (quick policy group jumper)
 //! - Providers (Proxy Providers + Rule Providers update & healthcheck)
 //! - OutboundIp (FlClash-style outbound IP, quality level/type/flags, network ownership & hide-IP)
+//! - ServiceStatus (FlClash-style 13-service availability/unlock/region/IP/latency checker & manager)
 //! - Confirm (delete subscription / close all connections)
 
 use super::{draw_card_title, draw_pill_chip, fill_rect_bg, surface_bg};
 use crate::{
-    ops::clash::model::{IpQualityLevel, format_bytes_compact},
+    ops::clash::model::{IpQualityLevel, ServiceTarget, format_bytes_compact},
     theme::{Level, Role},
     tui::{
         clash::{
@@ -563,6 +564,359 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, modal_alpha
                 draw_pill_chip(buf, btn, &lbl, cl.hide_ip, hov, theme, bg);
             }
             if let Some(btn) = geom.outbound_close_btn {
+                let lbl = format!(" [Esc] {} ", i.text("key.close"));
+                let hov = app.hover.is_some_and(|p| btn.contains(p));
+                draw_pill_chip(buf, btn, &lbl, false, hov, theme, bg);
+            }
+        }
+        ClashModal::ServiceStatus { cursor, manage } => {
+            let targets = if *manage {
+                cl.ordered_services()
+            } else {
+                cl.enabled_services()
+            };
+            let enabled_list = cl.enabled_services();
+            let clamped_cur = if targets.is_empty() {
+                0
+            } else {
+                (*cursor).min(targets.len() - 1)
+            };
+            let any_probing = cl.any_service_probing();
+            let (title, right_meta) = if *manage {
+                (
+                    i.text("clash.service.manage_title"),
+                    format!("{}/{}", enabled_list.len(), ServiceTarget::ALL.len()),
+                )
+            } else {
+                let checked = enabled_list
+                    .iter()
+                    .filter_map(|t| cl.service_entry(*t).and_then(|e| e.result.as_ref()))
+                    .count();
+                let ok = enabled_list
+                    .iter()
+                    .filter_map(|t| cl.service_entry(*t).and_then(|e| e.result.as_ref()))
+                    .filter(|r| r.status.is_available())
+                    .count();
+                let meta = if any_probing {
+                    format!("{} {}", app.spin(), i.text("clash.service.checking"))
+                } else if checked > 0 {
+                    format!("{ok}/{checked}")
+                } else {
+                    i.text("clash.service.modal_hint").to_owned()
+                };
+                (i.text("clash.service.title"), meta)
+            };
+            draw_card_title(buf, geom.box_rect, title, &right_meta, theme, Role::Surface);
+
+            let bar = tokens::glyph(theme, Glyph::ActiveBar);
+            let dot_on = tokens::glyph(theme, Glyph::DotOn);
+            let dot_off = tokens::glyph(theme, Glyph::DotOff);
+            let sep = tokens::glyph(theme, Glyph::Separator);
+
+            for &(rect, idx) in &geom.item_rows {
+                let Some(&target) = targets.get(idx) else {
+                    continue;
+                };
+                let is_cur = idx == clamped_cur;
+                let is_hov = app.hover.is_some_and(|p| rect.contains(p));
+                let rbg = if is_cur {
+                    tokens::color(theme, Role::Selection)
+                } else if is_hov {
+                    tokens::color(theme, Role::SurfaceAlt)
+                } else {
+                    bg
+                };
+                fill_rect_bg(buf, rect, rbg);
+                if is_cur {
+                    buf.set_stringn(
+                        rect.x,
+                        rect.y,
+                        bar,
+                        1,
+                        tokens::fg(theme, Role::Accent).bg(rbg),
+                    );
+                }
+
+                if *manage {
+                    let is_on = enabled_list.contains(&target);
+                    let checkbox = if is_on { "[x]" } else { "[ ]" };
+                    let cb_style = if is_on {
+                        tokens::fg(theme, Role::Success).bg(rbg)
+                    } else {
+                        tokens::text(theme, Level::Tertiary).bg(rbg)
+                    };
+                    buf.set_stringn(rect.x + 2, rect.y, checkbox, 3, cb_style);
+
+                    let pinned = enabled_list.iter().take(4).any(|&t| t == target);
+                    let right_tag = if pinned {
+                        format!("[{}]", i.text("clash.service.pinned"))
+                    } else if !is_on {
+                        i.text("clash.service.disabled_tag").to_owned()
+                    } else {
+                        String::new()
+                    };
+                    let rw = right_tag.width();
+                    let name_budget = (rect.width as usize).saturating_sub(rw + 7);
+                    let name_style = tokens::text(
+                        theme,
+                        if is_on {
+                            Level::Primary
+                        } else {
+                            Level::Tertiary
+                        },
+                    )
+                    .bg(rbg)
+                    .add_modifier(if is_cur {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    });
+                    buf.set_stringn(
+                        rect.x + 6,
+                        rect.y,
+                        clip_ascii_safe(target.label(), name_budget, ascii),
+                        name_budget,
+                        name_style,
+                    );
+                    if !right_tag.is_empty() && rw + 7 <= rect.width as usize {
+                        let tag_style = if pinned {
+                            tokens::fg(theme, Role::Accent).bg(rbg)
+                        } else {
+                            tokens::text(theme, Level::Tertiary).bg(rbg)
+                        };
+                        tokens::put_right(
+                            buf,
+                            rect,
+                            &clip_ascii_safe(&right_tag, rw, ascii),
+                            tag_style,
+                        );
+                    }
+                } else {
+                    let entry = cl.service_entry(target);
+                    let probing = entry.is_some_and(|e| e.probing);
+                    let result = entry.and_then(|e| e.result.as_ref());
+
+                    let (glyph_str, glyph_style) = if probing {
+                        (
+                            app.spin().to_owned(),
+                            tokens::fg(theme, Role::Accent).bg(rbg),
+                        )
+                    } else if let Some(res) = result {
+                        let role = if res.status.is_available() {
+                            Role::Success
+                        } else if res.status.is_warning() {
+                            Role::Warning
+                        } else {
+                            Role::Danger
+                        };
+                        (dot_on.to_owned(), tokens::fg(theme, role).bg(rbg))
+                    } else {
+                        (
+                            dot_off.to_owned(),
+                            tokens::text(theme, Level::Tertiary).bg(rbg),
+                        )
+                    };
+                    buf.set_stringn(rect.x + 2, rect.y, &glyph_str, 1, glyph_style);
+
+                    let (right_text, right_style) = if probing {
+                        (
+                            i.text("clash.service.checking").to_owned(),
+                            tokens::fg(theme, Role::Accent).bg(rbg),
+                        )
+                    } else if let Some(res) = result {
+                        if res.status.is_available()
+                            && let Some(ms) = res.delay_ms
+                        {
+                            let st = if ms < 400 {
+                                tokens::fg(theme, Role::Success).bg(rbg)
+                            } else {
+                                tokens::text(theme, Level::Primary).bg(rbg)
+                            };
+                            (format!("{ms} ms"), st)
+                        } else {
+                            let role = if res.status.is_available() {
+                                Role::Success
+                            } else if res.status.is_warning() {
+                                Role::Warning
+                            } else {
+                                Role::Danger
+                            };
+                            (
+                                i.text(res.status.label_key()).to_owned(),
+                                tokens::fg(theme, role).bg(rbg),
+                            )
+                        }
+                    } else {
+                        (
+                            i.text("clash.service.pending").to_owned(),
+                            tokens::text(theme, Level::Tertiary).bg(rbg),
+                        )
+                    };
+
+                    let rw = right_text.width().min(rect.width as usize / 2);
+                    let name_col = if rect.width >= 48 {
+                        13usize
+                    } else if rect.width >= 36 {
+                        12usize
+                    } else {
+                        (rect.width as usize).saturating_sub(rw + 5).min(12)
+                    };
+                    let name_style =
+                        tokens::text(theme, Level::Primary)
+                            .bg(rbg)
+                            .add_modifier(if is_cur {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            });
+                    buf.set_stringn(
+                        rect.x + 4,
+                        rect.y,
+                        clip_ascii_safe(target.label(), name_col, ascii),
+                        name_col,
+                        name_style,
+                    );
+
+                    let mid_x = rect.x + 4 + name_col as u16 + 1;
+                    let mid_budget =
+                        (rect.right() as usize).saturating_sub(mid_x as usize + rw + 1);
+                    if mid_budget >= 6 {
+                        let (mid_text, mid_level) = if let Some(res) = result {
+                            match (
+                                res.region.as_deref(),
+                                res.ip.as_deref(),
+                                res.exit_node.as_deref(),
+                            ) {
+                                (Some(reg), Some(ip), _) => {
+                                    (format!("[{reg}] {}", cl.displayed_ip(ip)), Level::Secondary)
+                                }
+                                (Some(reg), None, Some(node)) => {
+                                    (format!("[{reg}] {node}"), Level::Secondary)
+                                }
+                                (Some(reg), None, None) => (format!("[{reg}]"), Level::Secondary),
+                                (None, Some(ip), _) => {
+                                    (cl.displayed_ip(ip).to_owned(), Level::Secondary)
+                                }
+                                (None, None, Some(node)) => (node.to_owned(), Level::Secondary),
+                                (None, None, None) => ("-".to_owned(), Level::Tertiary),
+                            }
+                        } else {
+                            ("-".to_owned(), Level::Tertiary)
+                        };
+                        buf.set_stringn(
+                            mid_x,
+                            rect.y,
+                            clip_ascii_safe(&mid_text, mid_budget, ascii),
+                            mid_budget,
+                            tokens::text(theme, mid_level).bg(rbg),
+                        );
+                    }
+
+                    if rw > 0 {
+                        tokens::put_right(
+                            buf,
+                            rect,
+                            &clip_ascii_safe(&right_text, rw, ascii),
+                            right_style,
+                        );
+                    }
+                }
+            }
+
+            if let Some(sy) = geom.service_summary_y {
+                let sw = geom.inner.width as usize;
+                let summary_line = if *manage {
+                    i.text("clash.service.manage_hint").to_owned()
+                } else if let Some(&focused) = targets.get(clamped_cur) {
+                    if let Some(res) = cl.service_entry(focused).and_then(|e| e.result.as_ref()) {
+                        let mut parts = vec![
+                            focused.label().to_owned(),
+                            i.text(res.status.label_key()).to_owned(),
+                        ];
+                        if let Some(ms) = res.delay_ms
+                            && res.status.is_available()
+                        {
+                            parts.push(format!("{ms} ms"));
+                        }
+                        if let Some(reg) = &res.region {
+                            parts.push(format!("[{reg}]"));
+                        }
+                        if let Some(ip) = &res.ip {
+                            parts.push(cl.displayed_ip(ip).to_owned());
+                        } else if let Some(node) = &res.exit_node {
+                            parts.push(node.clone());
+                        }
+                        parts.join(&format!(" {sep} "))
+                    } else {
+                        format!(
+                            "{} {sep} {} {sep} {}",
+                            focused.label(),
+                            focused.primary_host(),
+                            i.text("clash.service.pending")
+                        )
+                    }
+                } else {
+                    String::new()
+                };
+                if !summary_line.is_empty() {
+                    buf.set_stringn(
+                        geom.inner.x,
+                        sy,
+                        clip_ascii_safe(&summary_line, sw, ascii),
+                        sw,
+                        tokens::text(theme, Level::Tertiary).bg(bg),
+                    );
+                }
+            }
+
+            if targets.len() > geom.item_rows.len() && geom.box_rect.width >= 20 {
+                let ind = format!(" {}/{} ", clamped_cur + 1, targets.len());
+                tokens::put_right(
+                    buf,
+                    Rect::new(
+                        geom.box_rect.x + 2,
+                        geom.box_rect.bottom().saturating_sub(1),
+                        geom.box_rect.width.saturating_sub(4),
+                        1,
+                    ),
+                    &ind,
+                    tokens::text(theme, Level::Tertiary).bg(bg),
+                );
+            }
+
+            if let Some(btn) = geom.service_check_btn {
+                let lbl = if *manage {
+                    format!(" [Space] {} ", i.text("clash.service.toggle"))
+                } else {
+                    format!(" [Enter] {} ", i.text("clash.service.check_one"))
+                };
+                let hov = app.hover.is_some_and(|p| btn.contains(p));
+                draw_pill_chip(buf, btn, &lbl, false, hov, theme, bg);
+            }
+            if let Some(btn) = geom.service_check_all_btn {
+                let lbl = if *manage {
+                    format!(" [r] {} ", i.text("clash.service.reset"))
+                } else {
+                    format!(" [a] {} ", i.text("clash.service.check_all"))
+                };
+                let hov = app.hover.is_some_and(|p| btn.contains(p));
+                draw_pill_chip(buf, btn, &lbl, !*manage && any_probing, hov, theme, bg);
+            }
+            if let Some(btn) = geom.service_manage_btn {
+                let lbl = if *manage {
+                    format!(" [m] {} ", i.text("clash.service.back"))
+                } else {
+                    format!(" [m] {} ", i.text("clash.service.manage"))
+                };
+                let hov = app.hover.is_some_and(|p| btn.contains(p));
+                draw_pill_chip(buf, btn, &lbl, *manage, hov, theme, bg);
+            }
+            if let Some(btn) = geom.service_copy_ip_btn {
+                let lbl = format!(" [y] {} ", i.text("clash.outbound.copy_ip"));
+                let hov = app.hover.is_some_and(|p| btn.contains(p));
+                draw_pill_chip(buf, btn, &lbl, false, hov, theme, bg);
+            }
+            if let Some(btn) = geom.service_close_btn {
                 let lbl = format!(" [Esc] {} ", i.text("key.close"));
                 let hov = app.hover.is_some_and(|p| btn.contains(p));
                 draw_pill_chip(buf, btn, &lbl, false, hov, theme, bg);

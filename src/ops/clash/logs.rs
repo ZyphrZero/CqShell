@@ -1,9 +1,91 @@
 use super::*;
-use std::io::{Seek, SeekFrom};
+use regex::Regex;
+use std::{
+    collections::{BTreeMap, HashMap, VecDeque},
+    io::{Seek, SeekFrom},
+    sync::{Arc, Mutex, OnceLock},
+};
 
 const WINDOW: u64 = 1024 * 1024;
+const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
+const LIVE_ROTATE_BYTES: u64 = 2 * MAX_LOG_BYTES;
+const LIVE_KEEP_TAIL_BYTES: usize = 256 * 1024;
+const MAX_CACHED_AUTOMATA: usize = 16;
+
+fn rotated_log_path(ctx: &Context) -> PathBuf {
+    let mut name = ctx.paths.clash_log.as_os_str().to_os_string();
+    name.push(".1");
+    PathBuf::from(name)
+}
+
+fn rotate_on_open_with_limit(ctx: &Context, max_bytes: u64) -> Result<bool> {
+    storage::check_path(&ctx.paths.clash_log, true)?;
+    let meta = match fs::symlink_metadata(&ctx.paths.clash_log) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    if !meta.is_file() || meta.len() <= max_bytes {
+        return Ok(false);
+    }
+    let backup = rotated_log_path(ctx);
+    storage::check_path(&backup, true)?;
+    let _ = storage::remove_file(&backup);
+    fs::rename(&ctx.paths.clash_log, &backup)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&backup, fs::Permissions::from_mode(0o600));
+    }
+    Ok(true)
+}
+
+/// Safely rotate a live `O_APPEND` Mihomo log file if it grows beyond `2 * MAX_LOG_BYTES`.
+/// Preserves the trailing 256 KiB in `mihomo.log.1` (`0600`) and truncates the active file
+/// in place so a running Mihomo daemon keeps appending seamlessly from offset 0.
+pub(crate) fn rotate_if_oversized(ctx: &Context) -> Result<bool> {
+    rotate_if_oversized_with_limit(ctx, LIVE_ROTATE_BYTES, LIVE_KEEP_TAIL_BYTES)
+}
+
+fn rotate_if_oversized_with_limit(
+    ctx: &Context,
+    max_bytes: u64,
+    keep_tail_bytes: usize,
+) -> Result<bool> {
+    storage::check_path(&ctx.paths.clash_log, true)?;
+    let meta = match fs::symlink_metadata(&ctx.paths.clash_log) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    if !meta.is_file() || meta.len() <= max_bytes {
+        return Ok(false);
+    }
+    let backup = rotated_log_path(ctx);
+    storage::check_path(&backup, true)?;
+    let mut reader = fs::File::open(&ctx.paths.clash_log)?;
+    let start = meta.len().saturating_sub(keep_tail_bytes as u64);
+    reader.seek(SeekFrom::Start(start))?;
+    let mut tail_bytes = Vec::new();
+    reader
+        .take(keep_tail_bytes as u64)
+        .read_to_end(&mut tail_bytes)?;
+    storage::atomic_write(&backup, &tail_bytes, 0o600)?;
+
+    let mut opts = OpenOptions::new();
+    opts.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let active = opts.open(&ctx.paths.clash_log)?;
+    active.set_len(0)?;
+    Ok(true)
+}
 
 pub(super) fn open_private_log(ctx: &Context) -> Result<fs::File> {
+    let _ = rotate_on_open_with_limit(ctx, MAX_LOG_BYTES)?;
     storage::check_path(&ctx.paths.clash_log, true)?;
     let mut options = OpenOptions::new();
     options.create(true).append(true);
@@ -19,6 +101,241 @@ pub(super) fn open_private_log(ctx: &Context) -> Result<fs::File> {
     }
     #[cfg(not(unix))]
     Ok(options.open(&ctx.paths.clash_log)?)
+}
+
+/// Linear-time multi-pattern matcher (Aho-Corasick trie + dictionary suffix links) with
+/// leftmost-longest non-overlapping single-pass replacement, replacing dynamic `Regex::new`
+/// alternation so 1,000+ node subscriptions never hit regex compilation limits.
+#[derive(Debug)]
+struct AcNode {
+    edges: Vec<(u8, u32)>,
+    fail: u32,
+    depth: usize,
+    match_len: usize,
+    out_link: u32,
+}
+
+impl AcNode {
+    fn new(depth: usize) -> Self {
+        Self {
+            edges: Vec::new(),
+            fail: 0,
+            depth,
+            match_len: 0,
+            out_link: 0,
+        }
+    }
+
+    fn get_edge(&self, byte: u8) -> Option<u32> {
+        self.edges
+            .binary_search_by_key(&byte, |&(b, _)| b)
+            .ok()
+            .map(|idx| self.edges[idx].1)
+    }
+
+    fn insert_edge(&mut self, byte: u8, target: u32) {
+        match self.edges.binary_search_by_key(&byte, |&(b, _)| b) {
+            Ok(idx) => self.edges[idx].1 = target,
+            Err(idx) => self.edges.insert(idx, (byte, target)),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SecretAutomaton {
+    nodes: Vec<AcNode>,
+}
+
+impl SecretAutomaton {
+    fn build(patterns: &[String]) -> Self {
+        let mut nodes = vec![AcNode::new(0)];
+        for pat in patterns {
+            let bytes = pat.as_bytes();
+            if bytes.is_empty() {
+                continue;
+            }
+            let mut cur = 0usize;
+            for (depth_idx, &b) in bytes.iter().enumerate() {
+                let next = if let Some(existing) = nodes[cur].get_edge(b) {
+                    existing as usize
+                } else {
+                    let id = nodes.len() as u32;
+                    nodes.push(AcNode::new(depth_idx + 1));
+                    nodes[cur].insert_edge(b, id);
+                    id as usize
+                };
+                cur = next;
+            }
+            if bytes.len() > nodes[cur].match_len {
+                nodes[cur].match_len = bytes.len();
+            }
+        }
+
+        // BFS to build failure and dictionary-suffix links.
+        let mut queue = VecDeque::new();
+        for &(_, child) in &nodes[0].edges {
+            queue.push_back(child);
+        }
+        while let Some(u) = queue.pop_front() {
+            let edges = nodes[u as usize].edges.clone();
+            for (byte, v) in edges {
+                let mut f = nodes[u as usize].fail;
+                while f != 0 && nodes[f as usize].get_edge(byte).is_none() {
+                    f = nodes[f as usize].fail;
+                }
+                let next_fail = nodes[f as usize].get_edge(byte).unwrap_or(0);
+                let out_link = if nodes[next_fail as usize].match_len > 0 {
+                    next_fail
+                } else {
+                    nodes[next_fail as usize].out_link
+                };
+                nodes[v as usize].fail = next_fail;
+                nodes[v as usize].out_link = out_link;
+                queue.push_back(v);
+            }
+        }
+
+        Self { nodes }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.nodes.len() <= 1
+    }
+
+    fn step(&self, mut state: u32, byte: u8) -> u32 {
+        loop {
+            if let Some(next) = self.nodes[state as usize].get_edge(byte) {
+                return next;
+            }
+            if state == 0 {
+                return 0;
+            }
+            state = self.nodes[state as usize].fail;
+        }
+    }
+
+    /// Replace all non-overlapping occurrences using leftmost-longest semantics in a single pass.
+    fn replace_all(&self, text: &str, replacement: &str) -> String {
+        if self.is_empty() || text.is_empty() {
+            return text.to_owned();
+        }
+        let bytes = text.as_bytes();
+        let mut out = String::with_capacity(text.len());
+        let mut cursor = 0usize;
+        // Pending candidate matches keyed by start byte -> longest observed end byte.
+        let mut pending: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut state = 0u32;
+
+        let flush_before = |limit: usize,
+                            cursor: &mut usize,
+                            pending: &mut BTreeMap<usize, usize>,
+                            out: &mut String| {
+            while let Some((&start, &end)) = pending.first_key_value() {
+                if start >= limit {
+                    break;
+                }
+                pending.pop_first();
+                if start < *cursor {
+                    continue;
+                }
+                out.push_str(&text[*cursor..start]);
+                out.push_str(replacement);
+                *cursor = end;
+            }
+        };
+
+        for (idx, &b) in bytes.iter().enumerate() {
+            state = self.step(state, b);
+            let pos = idx + 1;
+
+            let mut u = if self.nodes[state as usize].match_len > 0 {
+                state
+            } else {
+                self.nodes[state as usize].out_link
+            };
+            while u != 0 {
+                let len = self.nodes[u as usize].match_len;
+                let start = pos - len;
+                if start >= cursor {
+                    let entry = pending.entry(start).or_insert(pos);
+                    if pos > *entry {
+                        *entry = pos;
+                    }
+                }
+                u = self.nodes[u as usize].out_link;
+            }
+
+            // No future match can start earlier than `pos - depth[state]`.
+            let s_min = pos - self.nodes[state as usize].depth;
+            flush_before(s_min, &mut cursor, &mut pending, &mut out);
+        }
+
+        flush_before(usize::MAX, &mut cursor, &mut pending, &mut out);
+        out.push_str(&text[cursor..]);
+        out
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    mtime_secs: u64,
+    mtime_nanos: u32,
+    ino: u64,
+}
+
+fn file_stamp(path: &Path) -> Result<Option<FileStamp>> {
+    storage::check_path(path, true)?;
+    let meta = match fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let (mtime_secs, mtime_nanos) = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| (d.as_secs(), d.subsec_nanos()))
+        .unwrap_or((0, 0));
+    #[cfg(unix)]
+    let ino = {
+        use std::os::unix::fs::MetadataExt;
+        meta.ino()
+    };
+    #[cfg(not(unix))]
+    let ino = 0u64;
+    Ok(Some(FileStamp {
+        len: meta.len(),
+        mtime_secs,
+        mtime_nanos,
+        ino,
+    }))
+}
+
+type AutomatonCacheKey = [PathBuf; 4];
+type AutomatonCacheEntry = ([Option<FileStamp>; 4], Arc<SecretAutomaton>);
+
+fn automaton_cache() -> &'static Mutex<HashMap<AutomatonCacheKey, AutomatonCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<AutomatonCacheKey, AutomatonCacheEntry>>> =
+        OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn fields_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?im)((?:authorization|secret|password|passwd|token|uuid|psk|auth)[\"']?\s*[:=]\s*)[^\r\n]+"#,
+        )
+        .expect("constant credential regex")
+    })
+}
+
+fn urls_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?i)(?:https?|socks4a?|socks5h?)://[^\s\"'<>]+"#).expect("constant URL regex")
+    })
 }
 
 fn collect_sensitive(value: &Value, sensitive: bool, secrets: &mut Vec<String>) {
@@ -64,15 +381,28 @@ fn collect_sensitive(value: &Value, sensitive: bool, secrets: &mut Vec<String>) 
     }
 }
 
-/// Never fall back to raw logs if configuration cannot be read for redaction.
-pub(super) fn redact(ctx: &Context, text: &str) -> Result<String> {
+fn load_secret_automaton(ctx: &Context) -> Result<Arc<SecretAutomaton>> {
+    let paths: AutomatonCacheKey = [
+        ctx.paths.clash_runtime.clone(),
+        ctx.paths.clash_mixin.clone(),
+        ctx.paths.clash_config.clone(),
+        ctx.paths.clash_profiles.clone(),
+    ];
+    let stamps: [Option<FileStamp>; 4] = [
+        file_stamp(&paths[0])?,
+        file_stamp(&paths[1])?,
+        file_stamp(&paths[2])?,
+        file_stamp(&paths[3])?,
+    ];
+    if let Ok(guard) = automaton_cache().lock()
+        && let Some((cached_stamps, automaton)) = guard.get(&paths)
+        && *cached_stamps == stamps
+    {
+        return Ok(Arc::clone(automaton));
+    }
+
     let mut secrets = Vec::new();
-    for path in [
-        &ctx.paths.clash_runtime,
-        &ctx.paths.clash_mixin,
-        &ctx.paths.clash_config,
-        &ctx.paths.clash_profiles,
-    ] {
+    for path in &paths {
         storage::check_path(path, true)?;
         let file = match fs::File::open(path) {
             Ok(file) => file,
@@ -106,27 +436,26 @@ pub(super) fn redact(ctx: &Context, text: &str) -> Result<String> {
     secrets
         .sort_unstable_by(|left, right| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
     secrets.dedup();
-    let mut output = text.to_owned();
-    if !secrets.is_empty() {
-        let pattern = secrets
-            .iter()
-            .map(|secret| regex::escape(secret))
-            .collect::<Vec<_>>()
-            .join("|");
-        output = regex::Regex::new(&pattern)
-            .map_err(|_| Error::new("error.data", "credentials too large for safe log redaction"))?
-            .replace_all(text, "[redacted]")
-            .into_owned();
+    let automaton = Arc::new(SecretAutomaton::build(&secrets));
+
+    if let Ok(mut guard) = automaton_cache().lock() {
+        if guard.len() >= MAX_CACHED_AUTOMATA && !guard.contains_key(&paths) {
+            guard.clear();
+        }
+        guard.insert(paths, (stamps, Arc::clone(&automaton)));
     }
-    let fields = regex::Regex::new(
-        r#"(?im)((?:authorization|secret|password|passwd|token|uuid|psk|auth)[\"']?\s*[:=]\s*)[^\r\n]+"#,
-    )
-    .expect("constant credential regex");
-    output = fields.replace_all(&output, "${1}[redacted]").into_owned();
+    Ok(automaton)
+}
+
+/// Never fall back to raw logs if configuration cannot be read for redaction.
+pub(crate) fn redact(ctx: &Context, text: &str) -> Result<String> {
+    let automaton = load_secret_automaton(ctx)?;
+    let mut output = automaton.replace_all(text, "[redacted]");
+    output = fields_regex()
+        .replace_all(&output, "${1}[redacted]")
+        .into_owned();
     // Credentials and subscription query strings can also appear in old logs.
-    let urls = regex::Regex::new(r#"(?i)(?:https?|socks4a?|socks5h?)://[^\s\"'<>]+"#)
-        .expect("constant URL regex");
-    output = urls
+    output = urls_regex()
         .replace_all(
             &output,
             |caps: &regex::Captures<'_>| match url::Url::parse(&caps[0]) {
@@ -165,6 +494,7 @@ pub(super) fn startup_tail(ctx: &Context) -> Result<String> {
 pub(crate) fn read_redacted_lines(ctx: &Context, max_lines: usize) -> Result<Vec<String>> {
     let max_lines = max_lines.clamp(1, 2000);
     ctx.check()?;
+    let _ = rotate_if_oversized(ctx);
     storage::check_path(&ctx.paths.clash_log, true)?;
     let mut file = match fs::File::open(&ctx.paths.clash_log) {
         Ok(file) => file,
@@ -380,6 +710,74 @@ mod tests {
             redact(&ctx, "quoted\"value quoted\\\"value quoted\\\\ quoted").unwrap(),
             "[redacted] [redacted] [redacted] [redacted]"
         );
+    }
+
+    #[test]
+    fn secret_automaton_handles_overlapping_suffix_matches_leftmost_longest() {
+        let auto = SecretAutomaton::build(&[
+            "012".into(),
+            "1234".into(),
+            "34".into(),
+            "abc".into(),
+            "a".into(),
+        ]);
+        // `012` wins leftmost, leaving `34` intact and matched next.
+        assert_eq!(auto.replace_all("01234", "X"), "XX");
+        // `abc` beats shorter `a` at index 0.
+        assert_eq!(auto.replace_all("abcd", "X"), "Xd");
+    }
+
+    #[test]
+    fn large_subscription_with_1200_nodes_redacts_linearly_without_regex_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        let mut yaml_buf = String::from("proxies:\n");
+        for i in 0..1200usize {
+            yaml_buf.push_str(&format!(
+                "  - name: node-{i}\n    type: vless\n    server: 192.0.2.{}\n    port: 443\n    uuid: 00000000-0000-4000-8000-{i:012}\n",
+                (i % 250) + 1
+            ));
+        }
+        fs::write(&ctx.paths.clash_config, &yaml_buf).unwrap();
+        let sample = "connect ok uuid-leak 00000000-0000-4000-8000-000000000000 and 00000000-0000-4000-8000-000000001199 done";
+        let redacted = redact(&ctx, sample).unwrap();
+        assert!(!redacted.contains("000000000000"));
+        assert!(!redacted.contains("000000001199"));
+        assert_eq!(
+            redacted,
+            "connect ok uuid-leak [redacted] and [redacted] done"
+        );
+        // Second call hits fingerprint cache with identical output.
+        assert_eq!(redact(&ctx, sample).unwrap(), redacted);
+    }
+
+    #[test]
+    fn oversized_log_rotates_on_open_and_live_with_private_permissions() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::write(&ctx.paths.clash_log, "a".repeat(2048)).unwrap();
+        assert!(rotate_on_open_with_limit(&ctx, 1024).unwrap());
+        let backup = rotated_log_path(&ctx);
+        assert!(backup.is_file());
+        assert_eq!(fs::metadata(&backup).unwrap().len(), 2048);
+        assert!(!ctx.paths.clash_log.exists());
+        #[cfg(unix)]
+        assert_eq!(storage::mode(&backup).unwrap(), 0o600);
+
+        // Live rotation preserves tail in `.1` and truncates active log in place.
+        fs::write(
+            &ctx.paths.clash_log,
+            format!("{}TAIL-MARKER\n", "x".repeat(4000)),
+        )
+        .unwrap();
+        assert!(rotate_if_oversized_with_limit(&ctx, 1024, 64).unwrap());
+        assert_eq!(fs::metadata(&ctx.paths.clash_log).unwrap().len(), 0);
+        let kept = fs::read_to_string(&backup).unwrap();
+        assert!(kept.ends_with("TAIL-MARKER\n"));
+        #[cfg(unix)]
+        assert_eq!(storage::mode(&backup).unwrap(), 0o600);
     }
 
     #[test]

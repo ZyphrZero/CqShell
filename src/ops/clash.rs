@@ -37,10 +37,15 @@ pub mod model;
 pub mod monitor;
 pub mod outbound_ip;
 pub mod panel;
+pub(crate) mod runtime_cache;
 pub mod service;
+pub mod service_check;
 pub mod settings;
+mod share_link;
 pub mod socks;
 pub mod tun;
+pub(crate) mod ws;
+pub(crate) mod yaml_prep;
 
 #[cfg(test)]
 mod regression;
@@ -92,7 +97,7 @@ struct Profile {
 }
 
 #[derive(Debug, Clone)]
-struct ProxyConfig {
+pub(in crate::ops::clash) struct ProxyConfig {
     host: String,
     http_port: Option<u16>,
     socks_port: Option<u16>,
@@ -189,6 +194,7 @@ fn start_inner(ctx: &Context, report: bool) -> Result<()> {
     validate_config(ctx, candidate.path(), true)?;
     validate_with_mihomo(ctx, candidate.path())?;
     storage::atomic_write(&ctx.paths.clash_runtime, &runtime_bytes, 0o600)?;
+    runtime_cache::invalidate(&ctx.paths.clash_runtime);
     let runtime = path_string(&ctx.paths.clash_runtime)?;
     let safe_paths = mihomo_safe_paths(ctx)?;
     let log = open_private_log(ctx)?;
@@ -236,8 +242,37 @@ fn start_inner(ctx: &Context, report: bool) -> Result<()> {
         let _ = storage::remove_file(&ctx.paths.clash_pid_start);
         return Err(error);
     }
-    thread::sleep(Duration::from_millis(100));
-    if let Err(cancelled) = ctx.check() {
+    let ready_ctrl = yaml(&runtime_bytes)
+        .ok()
+        .and_then(|parsed| controller::from_config(&parsed).ok().flatten());
+    let wait_budget = if ready_ctrl.is_some() {
+        Duration::from_millis(1500)
+    } else {
+        Duration::from_millis(300)
+    };
+    let wait_deadline = std::time::Instant::now() + wait_budget;
+    let mut cancelled_err = None;
+    let mut early_exited = false;
+    loop {
+        if let Err(cancelled) = ctx.check() {
+            cancelled_err = Some(cancelled);
+            break;
+        }
+        if child.try_wait()?.is_some() {
+            early_exited = true;
+            break;
+        }
+        if let Some(ctrl) = ready_ctrl.as_ref()
+            && controller::probe_listening(ctrl)
+        {
+            break;
+        }
+        if std::time::Instant::now() >= wait_deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    if let Some(cancelled) = cancelled_err {
         let cleanup = (|| {
             signal(pid, false)?;
             let deadline = std::time::Instant::now() + STOP_WAIT;
@@ -260,8 +295,12 @@ fn start_inner(ctx: &Context, report: bool) -> Result<()> {
         cleanup?;
         return Err(cancelled);
     }
-    if !pid_matches(ctx, pid) {
-        let exited = child.try_wait();
+    if early_exited || !pid_matches(ctx, pid) {
+        let exited = if early_exited {
+            Ok(Some(()))
+        } else {
+            child.try_wait().map(|opt| opt.map(|_| ()))
+        };
         reap_child(ctx, child);
         if exited?.is_none() {
             return Err(unknown_process());
@@ -311,10 +350,15 @@ fn reap_child(ctx: &Context, mut child: std::process::Child) {
 }
 
 pub fn stop(ctx: &Context) -> Result<()> {
-    stop_inner(ctx, true)
+    stop_inner(ctx, true, false)
 }
 
-fn stop_inner(ctx: &Context, report: bool) -> Result<()> {
+/// Stop Mihomo with optional `SIGKILL` escalation if the process ignores `SIGTERM` after 5s.
+pub fn stop_with_force(ctx: &Context, force: bool) -> Result<()> {
+    stop_inner(ctx, true, force)
+}
+
+fn stop_inner(ctx: &Context, report: bool, force: bool) -> Result<()> {
     if service::stop_managed(ctx)? {
         return Ok(());
     }
@@ -349,6 +393,22 @@ fn stop_inner(ctx: &Context, report: bool) -> Result<()> {
         }
         thread::sleep(Duration::from_millis(100));
     }
+    if force && matches!(process_state(ctx, pid), State::Running(_)) {
+        // Re-verified PID identity immediately before SIGKILL so PID reuse can never kill another process.
+        signal(pid, true)?;
+        let kill_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < kill_deadline {
+            if matches!(process_state(ctx, pid), State::Stopped) {
+                storage::remove_file(&ctx.paths.clash_pid)?;
+                storage::remove_file(&ctx.paths.clash_pid_start)?;
+                if report {
+                    ctx.message("notice.clash_stopped", format!("PID {pid} (SIGKILL)"));
+                }
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
     if matches!(process_state(ctx, pid), State::Unknown) {
         return Err(unknown_process());
     }
@@ -363,7 +423,7 @@ pub(super) fn restart_running(ctx: &Context) -> Result<()> {
     if service::restart_managed(ctx)? {
         return Ok(());
     }
-    stop_inner(ctx, false)?;
+    stop_inner(ctx, false, false)?;
     start_inner(ctx, false)
 }
 
@@ -428,30 +488,71 @@ fn proxy_env_script(config: &ProxyConfig, shell: &str) -> Result<String> {
     Ok(script)
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn parse_x86_64_mihomo_arches(cpuinfo: &str) -> Vec<&'static str> {
+    let mut flags = std::collections::HashSet::new();
+    for line in cpuinfo.lines() {
+        let Some((lhs, rhs)) = line.split_once(':') else {
+            continue;
+        };
+        if lhs.trim() == "flags" {
+            for flag in rhs.split_whitespace() {
+                flags.insert(flag);
+            }
+            break;
+        }
+    }
+    let has_v3 = ["avx2", "bmi1", "bmi2", "fma", "movbe"]
+        .iter()
+        .all(|f| flags.contains(f));
+    let has_v2 = ["sse4_2", "popcnt", "cx16"]
+        .iter()
+        .all(|f| flags.contains(f));
+    if has_v3 {
+        vec!["amd64-v3", "amd64-v2", "amd64-v1"]
+    } else if has_v2 {
+        vec!["amd64-v2", "amd64-v1"]
+    } else {
+        vec!["amd64-v1"]
+    }
+}
+
+fn candidate_mihomo_arches() -> Result<Vec<&'static str>> {
+    match std::env::consts::ARCH {
+        "x86_64" => {
+            #[cfg(target_os = "linux")]
+            {
+                if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
+                    return Ok(parse_x86_64_mihomo_arches(&cpuinfo));
+                }
+            }
+            Ok(vec!["amd64-v1"])
+        }
+        "aarch64" => Ok(vec!["arm64"]),
+        "arm" => Ok(vec!["armv7"]),
+        "x86" => Ok(vec!["386"]),
+        value => Err(Error::new("error.platform", value)),
+    }
+}
+
 pub fn install(ctx: &Context, requested: &str) -> Result<()> {
     ctx.check()?;
     ctx.require(&["curl"])?;
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "amd64-v1",
-        "aarch64" => "arm64",
-        "arm" => "armv7",
-        "x86" => "386",
-        value => return Err(Error::new("error.platform", value)),
-    };
+    let arches = candidate_mihomo_arches()?;
     ensure_layout(ctx)?;
-    let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
-    recover_interrupted_files(ctx)?;
-    if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
-        return Err(Error::new(
-            "error.clash_state",
-            "stop Mihomo before replacing its executable",
-        ));
+    {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        recover_interrupted_files(ctx)?;
+        if matches!(state(ctx)?, State::Unknown) {
+            return Err(unknown_process());
+        }
     }
     let requested = if requested.is_empty() {
         None
     } else {
         Some(validate_version(requested)?)
     };
+    // Download and verify while Mihomo is still running so upgrading over a proxy never deadlocks.
     let release = match requested.as_deref() {
         None => release_metadata(ctx, "latest")?,
         Some(tag) => release_metadata(ctx, tag)?,
@@ -460,18 +561,28 @@ pub fn install(ctx: &Context, requested: &str) -> Result<()> {
     if requested.is_some_and(|expected| expected != version) {
         return Err(Error::new("error.release", "Mihomo version mismatch"));
     }
-    let name = format!("mihomo-linux-{arch}-{version}.gz");
-    let url = format!("https://github.com/MetaCubeX/mihomo/releases/download/{version}/{name}");
     let assets = release["assets"]
         .as_array()
         .ok_or_else(|| Error::new("error.release", "assets"))?;
-    let mut matched = assets.iter().filter(|asset| asset["name"] == name);
-    let asset = matched
-        .next()
-        .ok_or_else(|| Error::new("error.release", &name))?;
-    if matched.next().is_some() || asset["browser_download_url"] != url {
-        return Err(Error::new("error.release", &name));
+    let mut selected = None;
+    for &arch in &arches {
+        let name = format!("mihomo-linux-{arch}-{version}.gz");
+        let url = format!("https://github.com/MetaCubeX/mihomo/releases/download/{version}/{name}");
+        let mut matched = assets.iter().filter(|asset| asset["name"] == name);
+        if let Some(asset) = matched.next() {
+            if matched.next().is_some() || asset["browser_download_url"] != url {
+                return Err(Error::new("error.release", &name));
+            }
+            selected = Some((arch, name, url, asset));
+            break;
+        }
     }
+    let (arch, name, url, asset) = selected.ok_or_else(|| {
+        Error::new(
+            "error.release",
+            format!("mihomo-linux-{}-{version}.gz", arches[0]),
+        )
+    })?;
     let digest = asset["digest"]
         .as_str()
         .and_then(|value| value.strip_prefix("sha256:"))
@@ -492,7 +603,7 @@ pub fn install(ctx: &Context, requested: &str) -> Result<()> {
 
     let work = tempfile::tempdir_in(&ctx.paths.clash_data)?;
     let archive = work.path().join("mihomo.gz");
-    download_release_asset(ctx, &url, &archive, size)?;
+    download_release_asset_with_fallback(ctx, &url, &archive, size)?;
     let bytes = fs::read(&archive)?;
     if bytes.len() as u64 != size || sha256_hex(&bytes) != digest {
         return Err(Error::new("error.digest", name));
@@ -516,18 +627,75 @@ pub fn install(ctx: &Context, requested: &str) -> Result<()> {
             format!("unexpected Mihomo version: {banner}"),
         ));
     }
-    storage::atomic_write(&ctx.paths.clash_binary, &binary, 0o755)?;
-    let record = InstallRecord {
-        version: version.clone(),
-        asset_digest: digest,
-        binary_digest: sha256_hex(&binary),
+
+    let was_running = match state(ctx)? {
+        State::Running(_) => true,
+        State::Unknown => return Err(unknown_process()),
+        State::Stopped | State::NotInstalled => false,
     };
-    storage::atomic_write(
-        &install_record_path(ctx),
-        &serde_json::to_vec(&record)?,
-        0o600,
-    )?;
-    ctx.message("notice.clash_installed", format!("{version} ({arch})"));
+    if was_running && !service::stop_managed(ctx)? {
+        stop_inner(ctx, false, false)?;
+    }
+
+    let (prev_binary, prev_record) = {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        recover_interrupted_files(ctx)?;
+        if matches!(state(ctx)?, State::Running(_) | State::Unknown) {
+            return Err(Error::new(
+                "error.clash_state",
+                "Mihomo is still running; stop it before replacing its executable",
+            ));
+        }
+        let prev_binary = read_optional_file(&ctx.paths.clash_binary)?;
+        let prev_record = read_optional_file(&install_record_path(ctx))?;
+        storage::atomic_write(&ctx.paths.clash_binary, &binary, 0o755)?;
+        let record = InstallRecord {
+            version: version.clone(),
+            asset_digest: digest,
+            binary_digest: sha256_hex(&binary),
+        };
+        storage::atomic_write(
+            &install_record_path(ctx),
+            &serde_json::to_vec(&record)?,
+            0o600,
+        )?;
+        (prev_binary, prev_record)
+    };
+
+    if was_running && let Err(err) = start_silently(ctx) {
+        let recovery = ctx.recovery();
+        if let Ok(_lock) = Lock::acquire(&recovery.paths.clash_lock) {
+            if let Some(old_bin) = prev_binary {
+                let _ = storage::atomic_write(&recovery.paths.clash_binary, &old_bin, 0o755);
+            }
+            match prev_record {
+                Some(old_rec) => {
+                    let _ = storage::atomic_write(&install_record_path(&recovery), &old_rec, 0o600);
+                }
+                None => {
+                    let _ = storage::remove_file(&install_record_path(&recovery));
+                }
+            }
+        }
+        let _ = start_silently(&recovery);
+        return Err(Error::new(
+            err.key,
+            format!(
+                "upgraded Mihomo failed to restart; previous binary restored ({})",
+                err.detail
+            ),
+        ));
+    }
+
+    let suffix = if was_running {
+        "; restarted running Mihomo"
+    } else {
+        ""
+    };
+    ctx.message(
+        "notice.clash_installed",
+        format!("{version} ({arch}){suffix}"),
+    );
     Ok(())
 }
 
@@ -583,7 +751,7 @@ fn release_metadata(ctx: &Context, version: &str) -> Result<serde_json::Value> {
     } else {
         format!("https://api.github.com/repos/MetaCubeX/mihomo/releases/tags/{version}")
     };
-    let release: serde_json::Value = ctx.with_github_url(&url, |effective| {
+    let direct: Result<serde_json::Value> = ctx.with_github_url(&url, |effective| {
         let body = ctx.output(
             "curl",
             &[
@@ -602,11 +770,59 @@ fn release_metadata(ctx: &Context, version: &str) -> Result<serde_json::Value> {
             ],
         )?;
         Ok(serde_json::from_str(&body)?)
-    })?;
+    });
+    let release = match direct {
+        Ok(value) => value,
+        Err(direct_err) => {
+            if matches!(state(ctx), Ok(State::Running(_))) {
+                let tmp = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+                if download_via_local_proxy_opts(
+                    ctx,
+                    &url,
+                    tmp.path(),
+                    None,
+                    30,
+                    None,
+                    Some(2 * 1024 * 1024),
+                )
+                .is_ok()
+                {
+                    let bytes = fs::read(tmp.path())?;
+                    serde_json::from_slice(&bytes)?
+                } else {
+                    return Err(direct_err);
+                }
+            } else {
+                return Err(direct_err);
+            }
+        }
+    };
     if release["draft"] == true || release["prerelease"] == true {
         return Err(Error::new("error.release", "draft or prerelease"));
     }
     Ok(release)
+}
+
+fn download_release_asset_with_fallback(
+    ctx: &Context,
+    url: &str,
+    target: &Path,
+    size: u64,
+) -> Result<()> {
+    match download_release_asset(ctx, url, target, size) {
+        Ok(()) => Ok(()),
+        Err(direct_err) => {
+            if matches!(state(ctx), Ok(State::Running(_)))
+                && download_via_local_proxy_opts(ctx, url, target, None, 900, None, Some(size))
+                    .is_ok()
+                && fs::metadata(target).is_ok_and(|m| m.len() == size)
+            {
+                Ok(())
+            } else {
+                Err(direct_err)
+            }
+        }
+    }
 }
 
 fn validate_version(value: &str) -> Result<String> {
@@ -720,15 +936,14 @@ pub fn subscription_add(ctx: &Context, name: &str, url: &str, use_after_add: boo
     }
     let temporary = tempfile::NamedTempFile::new_in(&profiles_dir)?;
     let userinfo = download_subscription(ctx, url, temporary.path())?;
-    validate_config(ctx, temporary.path(), false)?;
-    validate_with_mihomo(ctx, temporary.path())?;
     let bytes = fs::read(temporary.path())?;
+    validate_subscription_candidate(ctx, &bytes, Some(name))?;
     let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
     recover_interrupted_files(ctx)?;
     let mut profiles = read_profiles(ctx)?;
     validate_new_profile(&profiles, name, url)?;
     if use_after_add {
-        validate_subscription_runtime(ctx, &bytes)?;
+        validate_subscription_runtime(ctx, &bytes, Some(name))?;
     }
     let file_name = unused_profile_file_name(&profiles_dir, &profiles, name)?;
     profiles.profiles.push(Profile {
@@ -803,27 +1018,35 @@ pub fn subscription_import(
         recover_interrupted_files(ctx)?;
         validate_new_profile(&read_profiles(ctx)?, name, url)?;
     }
-    let temporary = tempfile::NamedTempFile::new_in(&profiles_dir)?;
-    fs::write(temporary.path(), &bytes)?;
+    let mut bytes = bytes;
     if serde_yaml::from_slice::<Value>(&bytes).is_ok_and(|value| !value.is_mapping()) {
-        return Err(Error::new("error.subscription_format", ""));
+        if let Some(converted) = share_link::try_convert_to_clash_yaml(&bytes) {
+            bytes = converted;
+        } else {
+            return Err(Error::new("error.subscription_format", ""));
+        }
     }
-    validate_config(ctx, temporary.path(), false)?;
-    validate_with_mihomo(ctx, temporary.path())?;
+    validate_subscription_candidate(ctx, &bytes, Some(name))?;
     let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
     recover_interrupted_files(ctx)?;
     let mut profiles = read_profiles(ctx)?;
     validate_new_profile(&profiles, name, url)?;
     if use_after_add {
-        validate_subscription_runtime(ctx, &bytes)?;
+        validate_subscription_runtime(ctx, &bytes, Some(name))?;
     }
     let file_name = unused_profile_file_name(&profiles_dir, &profiles, name)?;
+    let userinfo = if url.is_empty() {
+        None
+    } else {
+        // Best-effort quota header probe when an update URL is recorded; never fail local import offline.
+        fetch_subscription_userinfo_only(ctx, url).ok().flatten()
+    };
     profiles.profiles.push(Profile {
         name: name.into(),
         url: url.into(),
         path: file_name.clone(),
         updated: now_string(),
-        userinfo: None,
+        userinfo,
         extra: BTreeMap::new(),
     });
     if use_after_add {
@@ -896,9 +1119,8 @@ pub fn subscription_update(ctx: &Context, name: &str) -> Result<()> {
     let profiles_dir = ctx.paths.clash_data.join("profiles");
     let temporary = tempfile::NamedTempFile::new_in(&profiles_dir)?;
     let userinfo = download_subscription(ctx, &profile.url, temporary.path())?;
-    validate_config(ctx, temporary.path(), false)?;
-    validate_with_mihomo(ctx, temporary.path())?;
     let bytes = fs::read(temporary.path())?;
+    validate_subscription_candidate(ctx, &bytes, Some(name))?;
     let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
     recover_interrupted_files(ctx)?;
     let mut profiles = read_profiles(ctx)?;
@@ -926,7 +1148,7 @@ pub fn subscription_update(ctx: &Context, name: &str) -> Result<()> {
         ),
     ];
     if profiles.current.as_deref() == Some(name) {
-        validate_subscription_runtime(ctx, &bytes)?;
+        validate_subscription_runtime(ctx, &bytes, Some(name))?;
         updates.push((
             ctx.paths.clash_config.clone(),
             Some(storage::Saved::new(&bytes, 0o600)),
@@ -1065,11 +1287,11 @@ fn read_mixin(ctx: &Context) -> Result<Value> {
 
 fn runtime_with_mixin(ctx: &Context, mixin: Value) -> Result<Vec<u8>> {
     storage::check_path(&ctx.paths.clash_config, true)?;
+    let current_profile = read_profiles(ctx).ok().and_then(|p| p.current);
     let base = if ctx.paths.clash_config.is_file() {
         yaml(&fs::read(&ctx.paths.clash_config)?)?
     } else {
-        if read_profiles(ctx)?
-            .current
+        if current_profile
             .as_deref()
             .is_some_and(|name| !name.is_empty())
         {
@@ -1086,21 +1308,215 @@ fn runtime_with_mixin(ctx: &Context, mixin: Value) -> Result<Vec<u8>> {
         );
         Value::Mapping(direct)
     };
-    render_runtime(base, mixin)
+    let providers_root = ctx.paths.clash_resources.join("providers");
+    render_runtime_for(
+        base,
+        mixin,
+        current_profile.as_deref(),
+        Some(&providers_root),
+    )
 }
 
-fn render_runtime(base: Value, mixin: Value) -> Result<Vec<u8>> {
-    let runtime = merge_config(base, mixin)?;
+fn render_runtime_for(
+    base: Value,
+    mixin: Value,
+    profile_key: Option<&str>,
+    providers_root: Option<&Path>,
+) -> Result<Vec<u8>> {
+    let mut runtime = merge_config(base, mixin.clone())?;
+    yaml_prep::sanitize_runtime(&mut runtime, &mixin, profile_key, providers_root)?;
     controller::from_config(&runtime)?;
     socks::validate_runtime(&runtime)?;
     let text = serde_yaml::to_string(&runtime).map_err(|e| Error::new("error.data", e))?;
     Ok(text.into_bytes())
 }
 
-/// Subscription panels choose the response format by User-Agent: without a Clash
-/// identifier many return a Base64 share-link list instead of a configuration. This
-/// identifies as the Mihomo (Clash Meta) client so the provider serves its native config.
-const SUBSCRIPTION_AGENT: &str = "clash.meta";
+/// Subscription panels choose the response format and attach `subscription-userinfo` by
+/// User-Agent: without a Clash identifier many return a Base64 share-link list or omit quota
+/// headers. Including `clash-verge`, `Clash.Meta`, and `clash.meta` aligns with FlClash / Clash
+/// Verge / Mihomo while remaining compatible with both case-sensitive and lowercase panel checks.
+const SUBSCRIPTION_AGENT: &str = "clash-verge/v2.4.2 Clash.Meta (clash.meta)";
+const MAX_SUBSCRIPTION_HEADER_BYTES: u64 = 256 * 1024;
+
+fn curl_config_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Fallback HTTPS fetch through the local running Mihomo proxy using `curl -K -` so proxy
+/// credentials and subscription URLs never appear in argv, logs, or UI output.
+fn download_via_local_proxy(
+    ctx: &Context,
+    url: &str,
+    target: &Path,
+    headers_target: &Path,
+    seconds: u32,
+) -> Result<()> {
+    download_via_local_proxy_opts(
+        ctx,
+        url,
+        target,
+        Some(headers_target),
+        seconds,
+        Some(SUBSCRIPTION_AGENT),
+        None,
+    )
+}
+
+fn download_via_local_proxy_opts(
+    ctx: &Context,
+    url: &str,
+    target: &Path,
+    headers_target: Option<&Path>,
+    seconds: u32,
+    user_agent: Option<&str>,
+    max_filesize: Option<u64>,
+) -> Result<()> {
+    if !matches!(state(ctx), Ok(State::Running(_))) {
+        return Err(Error::new("error.command", "Mihomo is not running"));
+    }
+    let outbound_ip::ProbeTransport::Proxy(proxy_url) = outbound_ip::resolve_transport(ctx)? else {
+        return Err(Error::new(
+            "error.command",
+            "Mihomo has no configured local proxy port",
+        ));
+    };
+    let seconds_str = seconds.to_string();
+    let max_size_str = max_filesize.map(|n| n.to_string());
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-q",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "-fsSL",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        &seconds_str,
+    ]);
+    if let Some(ref limit) = max_size_str {
+        cmd.args(["--max-filesize", limit]);
+    }
+    cmd.args(["-K", "-"])
+        .envs(&ctx.environment)
+        .env("LC_ALL", "C")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+
+    let mut child = crate::runtime::retry_executable_busy(ctx, || cmd.spawn())
+        .map_err(|e| Error::new("error.command", format!("curl: {e}")))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let mut cfg = format!("proxy = \"{}\"\n", curl_config_escape(&proxy_url));
+        if let Some(ua) = user_agent {
+            cfg.push_str(&format!("user-agent = \"{}\"\n", curl_config_escape(ua)));
+        }
+        if let Some(hdr) = headers_target {
+            cfg.push_str(&format!(
+                "dump-header = \"{}\"\n",
+                curl_config_escape(&path_string(hdr)?)
+            ));
+        }
+        cfg.push_str(&format!(
+            "output = \"{}\"\nurl = \"{}\"\n",
+            curl_config_escape(&path_string(target)?),
+            curl_config_escape(url),
+        ));
+        let _ = stdin.write_all(cfg.as_bytes());
+    }
+
+    let mut sleep_ms = 10u64;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if ctx.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            outbound_ip::kill_child(&mut child);
+            return Err(Error::new("error.cancelled", "curl"));
+        }
+        thread::sleep(Duration::from_millis(sleep_ms));
+        sleep_ms = (sleep_ms * 2).min(50);
+    };
+    if !status.success() {
+        return Err(Error::new("error.command", format!("curl: {status}")));
+    }
+    Ok(())
+}
+
+/// Some subscription servers send a gzip or zlib body without a `Content-Encoding` header.
+/// Decompresses up to `MAX_SUBSCRIPTION_BYTES` safely, returning the original bytes on mismatch.
+fn decompress_unlabeled_subscription(bytes: Vec<u8>) -> Result<Vec<u8>> {
+    if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+        let mut out = Vec::new();
+        let mut decoder = flate2::read::GzDecoder::new(bytes.as_slice());
+        if decoder
+            .by_ref()
+            .take(MAX_SUBSCRIPTION_BYTES + 1)
+            .read_to_end(&mut out)
+            .is_ok()
+        {
+            if out.len() as u64 > MAX_SUBSCRIPTION_BYTES {
+                return Err(Error::new(
+                    "error.data",
+                    "decompressed subscription exceeds 16 MiB limit",
+                ));
+            }
+            if !out.is_empty() {
+                return Ok(out);
+            }
+        }
+    } else if bytes.len() >= 2
+        && bytes[0] == 0x78
+        && (((u16::from(bytes[0]) << 8) | u16::from(bytes[1])) % 31 == 0)
+    {
+        let mut out = Vec::new();
+        let mut decoder = flate2::read::ZlibDecoder::new(bytes.as_slice());
+        if decoder
+            .by_ref()
+            .take(MAX_SUBSCRIPTION_BYTES + 1)
+            .read_to_end(&mut out)
+            .is_ok()
+        {
+            if out.len() as u64 > MAX_SUBSCRIPTION_BYTES {
+                return Err(Error::new(
+                    "error.data",
+                    "decompressed subscription exceeds 16 MiB limit",
+                ));
+            }
+            if !out.is_empty() {
+                return Ok(out);
+            }
+        }
+    }
+    Ok(bytes)
+}
+
+fn read_userinfo_from_headers_file(path: &Path) -> Option<model::SubscriptionUserinfo> {
+    let mut header_bytes = Vec::new();
+    if let Ok(file) = fs::File::open(path) {
+        let _ = file
+            .take(MAX_SUBSCRIPTION_HEADER_BYTES)
+            .read_to_end(&mut header_bytes);
+    }
+    let raw_headers = String::from_utf8_lossy(&header_bytes);
+    model::SubscriptionUserinfo::extract_from_http_headers(&raw_headers)
+}
 
 /// Download a subscription and reject non-Clash formats with an actionable message
 /// instead of a YAML type error. Captures safe numeric `subscription-userinfo` metadata
@@ -1115,25 +1531,126 @@ fn download_subscription(
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let headers_file = tempfile::NamedTempFile::new_in(parent)?;
-    ctx.download_as_with_headers(
+    if let Err(direct_err) = ctx.download_as_with_headers(
         url,
         target,
         headers_file.path(),
         30,
         Some(SUBSCRIPTION_AGENT),
-    )?;
+    ) && (download_via_local_proxy(ctx, url, target, headers_file.path(), 30).is_err()
+        || fs::metadata(target).map(|m| m.len()).unwrap_or(0) == 0)
+    {
+        return Err(direct_err);
+    }
+    let raw_bytes = fs::read(target)?;
+    let decoded = decompress_unlabeled_subscription(raw_bytes)?;
+    if decoded.len() as u64 > MAX_SUBSCRIPTION_BYTES {
+        return Err(Error::new(
+            "error.data",
+            "subscription exceeds 16 MiB size limit",
+        ));
+    }
+    if decoded.len() != fs::metadata(target)?.len() as usize {
+        fs::write(target, &decoded)?;
+    }
     // A share-link list is valid YAML but parses as a plain string, not a map.
-    if serde_yaml::from_slice::<Value>(&fs::read(target)?).is_ok_and(|value| !value.is_mapping()) {
-        return Err(Error::new("error.subscription_format", ""));
+    // Convert supported Base64/raw share links into Mihomo YAML; reject unrecognized payloads.
+    if serde_yaml::from_slice::<Value>(&decoded).is_ok_and(|value| !value.is_mapping()) {
+        if let Some(converted) = share_link::try_convert_to_clash_yaml(&decoded) {
+            fs::write(target, &converted)?;
+        } else {
+            return Err(Error::new("error.subscription_format", ""));
+        }
     }
-    let mut header_bytes = Vec::new();
-    if let Ok(file) = fs::File::open(headers_file.path()) {
-        let _ = file.take(64 * 1024).read_to_end(&mut header_bytes);
+    Ok(read_userinfo_from_headers_file(headers_file.path()))
+}
+
+/// Fetch only the `subscription-userinfo` HTTP header for a remote URL without writing or
+/// modifying any subscription YAML file.
+fn fetch_subscription_userinfo_only(
+    ctx: &Context,
+    url: &str,
+) -> Result<Option<model::SubscriptionUserinfo>> {
+    validate_subscription_url(url)?;
+    ctx.require(&["curl"])?;
+    ensure_layout(ctx)?;
+    let headers_file = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+    let null_sink = Path::new(if cfg!(windows) { "NUL" } else { "/dev/null" });
+    let headers_path = path_string(headers_file.path())?;
+    let null_path = path_string(null_sink)?;
+    let direct = {
+        let args = [
+            "-q",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "-fsSL",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "15",
+            "--user-agent",
+            SUBSCRIPTION_AGENT,
+            "--dump-header",
+            headers_path.as_str(),
+            "--output",
+            null_path.as_str(),
+            url,
+        ];
+        ctx.run("curl", &args)
+    };
+    if let Err(direct_err) = direct
+        && download_via_local_proxy(ctx, url, null_sink, headers_file.path(), 15).is_err()
+    {
+        return Err(direct_err);
     }
-    let raw_headers = String::from_utf8_lossy(&header_bytes);
-    Ok(model::SubscriptionUserinfo::extract_from_http_headers(
-        &raw_headers,
-    ))
+    Ok(read_userinfo_from_headers_file(headers_file.path()))
+}
+
+/// Refresh only the persisted `subscription-userinfo` metadata of a remote profile without
+/// overwriting its YAML configuration or reloading Mihomo. Used to backfill legacy/imported
+/// profiles seamlessly when the Mihomo workspace opens.
+pub(crate) fn refresh_profile_userinfo(
+    ctx: &Context,
+    name: &str,
+) -> Result<Option<model::SubscriptionUserinfo>> {
+    validate_profile_name(name)?;
+    let profile_url = {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        recover_interrupted_files(ctx)?;
+        read_profiles(ctx)?
+            .profiles
+            .into_iter()
+            .find(|p| p.name == name)
+            .map(|p| p.url)
+            .unwrap_or_default()
+    };
+    if profile_url.is_empty() {
+        return Ok(None);
+    }
+    let userinfo = fetch_subscription_userinfo_only(ctx, &profile_url)?;
+    if let Some(info) = userinfo {
+        let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
+        recover_interrupted_files(ctx)?;
+        let mut profiles = read_profiles(ctx)?;
+        if let Some(slot) = profiles
+            .profiles
+            .iter_mut()
+            .find(|p| p.name == name && p.url == profile_url)
+            && slot.userinfo != Some(info)
+        {
+            slot.userinfo = Some(info);
+            commit_files(
+                ctx,
+                &[(
+                    ctx.paths.clash_profiles.clone(),
+                    Some(storage::Saved::new(&profiles_bytes(&profiles)?, 0o600)),
+                )],
+            )?;
+        }
+    }
+    Ok(userinfo)
 }
 
 /// Read local subscription metadata summaries for the Mihomo TUI (never exposes full URLs/tokens).
@@ -1235,7 +1752,13 @@ pub(crate) fn subscription_use_and_reload(ctx: &Context, name: &str) -> Result<b
     };
 
     let settings = controller::settings(ctx)?;
-    let runtime = render_runtime(yaml(&bytes)?, read_mixin(ctx)?)?;
+    let providers_root = ctx.paths.clash_resources.join("providers");
+    let runtime = render_runtime_for(
+        yaml(&bytes)?,
+        read_mixin(ctx)?,
+        Some(name),
+        Some(&providers_root),
+    )?;
     tun::validate_reload(ctx, &runtime, Some(pid))?;
     let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
     fs::write(candidate.path(), &runtime)?;
@@ -1454,8 +1977,39 @@ pub(crate) fn read_local_runtime_summary(
     (avail, summary)
 }
 
-fn validate_subscription_runtime(ctx: &Context, bytes: &[u8]) -> Result<()> {
-    let runtime = render_runtime(yaml(bytes)?, read_mixin(ctx)?)?;
+fn validate_subscription_candidate(
+    ctx: &Context,
+    bytes: &[u8],
+    profile_key: Option<&str>,
+) -> Result<()> {
+    let mut parsed = yaml(bytes)?;
+    validate_config_value(&parsed, false)?;
+    let empty_mixin = Value::Mapping(serde_yaml::Mapping::new());
+    let providers_root = ctx.paths.clash_resources.join("providers");
+    yaml_prep::sanitize_runtime(
+        &mut parsed,
+        &empty_mixin,
+        profile_key,
+        Some(&providers_root),
+    )?;
+    let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
+    let serialized = serde_yaml::to_string(&parsed).map_err(|e| Error::new("error.data", e))?;
+    fs::write(candidate.path(), serialized)?;
+    validate_with_mihomo(ctx, candidate.path())
+}
+
+fn validate_subscription_runtime(
+    ctx: &Context,
+    bytes: &[u8],
+    profile_key: Option<&str>,
+) -> Result<()> {
+    let providers_root = ctx.paths.clash_resources.join("providers");
+    let runtime = render_runtime_for(
+        yaml(bytes)?,
+        read_mixin(ctx)?,
+        profile_key,
+        Some(&providers_root),
+    )?;
     let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
     fs::write(candidate.path(), runtime)?;
     validate_config(ctx, candidate.path(), true)?;
@@ -1473,6 +2027,7 @@ pub(super) enum MixinApplyMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MixinApplied {
     SavedWhileStopped,
+    Patched,
     HotReloaded,
     Restarted,
 }
@@ -1481,6 +2036,7 @@ impl MixinApplied {
     pub(super) fn suffix(self) -> &'static str {
         match self {
             Self::SavedWhileStopped => "saved; start Mihomo to apply",
+            Self::Patched => "saved and live-patched into running Mihomo",
             Self::HotReloaded => "saved and hot-reloaded into running Mihomo",
             Self::Restarted => "saved and applied (Mihomo restarted)",
         }
@@ -1494,6 +2050,23 @@ pub(super) fn edit_mixin_and_apply(
     mode: MixinApplyMode,
     edit: impl FnOnce(&mut serde_yaml::Mapping) -> Result<()>,
 ) -> Result<MixinApplied> {
+    commit_mixin_and_apply(ctx, mode, false, &[], |map, _| {
+        edit(map)?;
+        Ok(None)
+    })
+}
+
+/// Variant of [`edit_mixin_and_apply`] allowing the edit closure to attach additional
+/// private files (such as `proxy.auth`) and an optional `PATCH /configs` payload for
+/// zero-rebuild live updates before falling back to `PUT /configs?force=true`.
+pub(super) fn edit_mixin_with_patch_and_extras(
+    ctx: &Context,
+    mode: MixinApplyMode,
+    edit: impl FnOnce(
+        &mut serde_yaml::Mapping,
+        &mut Vec<(PathBuf, Option<storage::Saved>)>,
+    ) -> Result<Option<serde_json::Value>>,
+) -> Result<MixinApplied> {
     commit_mixin_and_apply(ctx, mode, false, &[], edit)
 }
 
@@ -1504,7 +2077,7 @@ pub(super) fn reset_mixin_and_apply(
     mode: MixinApplyMode,
     extra_updates: &[(PathBuf, Option<storage::Saved>)],
 ) -> Result<MixinApplied> {
-    commit_mixin_and_apply(ctx, mode, true, extra_updates, |_| Ok(()))
+    commit_mixin_and_apply(ctx, mode, true, extra_updates, |_, _| Ok(None))
 }
 
 fn persist_running_mode(ctx: &Context, mode: &str) -> Result<()> {
@@ -1550,10 +2123,13 @@ fn commit_mixin_and_apply(
     mode: MixinApplyMode,
     clear_mixin: bool,
     extra_updates: &[(PathBuf, Option<storage::Saved>)],
-    edit: impl FnOnce(&mut serde_yaml::Mapping) -> Result<()>,
+    edit: impl FnOnce(
+        &mut serde_yaml::Mapping,
+        &mut Vec<(PathBuf, Option<storage::Saved>)>,
+    ) -> Result<Option<serde_json::Value>>,
 ) -> Result<MixinApplied> {
     ctx.check()?;
-    let (was_running, prev_ctrl, runtime, rollback_files) = {
+    let (was_running, prev_ctrl, live_patch, runtime, rollback_files) = {
         let _lock = Lock::acquire(&ctx.paths.clash_lock)?;
         recover_interrupted_files(ctx)?;
         let was_running = match state(ctx)? {
@@ -1574,7 +2150,27 @@ fn commit_mixin_and_apply(
             None
         };
 
-        let mut rollback = Vec::with_capacity(2 + extra_updates.len());
+        let mut dynamic_extras: Vec<(PathBuf, Option<storage::Saved>)> = Vec::new();
+        let mut live_patch = None;
+        let mixin = if clear_mixin {
+            Value::Mapping(Default::default())
+        } else {
+            let mut value = if ctx.paths.clash_mixin.is_file() {
+                yaml(&fs::read(&ctx.paths.clash_mixin)?)?
+            } else {
+                Value::Mapping(Default::default())
+            };
+            let map = value
+                .as_mapping_mut()
+                .ok_or_else(|| Error::new("error.data", "Mixin root must be a map"))?;
+            live_patch = edit(map, &mut dynamic_extras)?;
+            value
+        };
+        for (path, _) in &dynamic_extras {
+            storage::check_path(path, true)?;
+        }
+
+        let mut rollback = Vec::with_capacity(2 + extra_updates.len() + dynamic_extras.len());
         if was_running {
             rollback.push((
                 ctx.paths.clash_mixin.clone(),
@@ -1584,26 +2180,10 @@ fn commit_mixin_and_apply(
                 ctx.paths.clash_runtime.clone(),
                 storage::Saved::capture(&ctx.paths.clash_runtime)?,
             ));
-            for (path, _) in extra_updates {
+            for (path, _) in extra_updates.iter().chain(dynamic_extras.iter()) {
                 rollback.push((path.clone(), storage::Saved::capture(path)?));
             }
         }
-
-        let mixin = if clear_mixin {
-            Value::Mapping(Default::default())
-        } else {
-            let mut value = if ctx.paths.clash_mixin.is_file() {
-                serde_yaml::from_slice::<Value>(&fs::read(&ctx.paths.clash_mixin)?)
-                    .map_err(|_| Error::new("error.data", "invalid Mixin YAML"))?
-            } else {
-                Value::Mapping(Default::default())
-            };
-            let map = value
-                .as_mapping_mut()
-                .ok_or_else(|| Error::new("error.data", "Mixin root must be a map"))?;
-            edit(map)?;
-            value
-        };
 
         let runtime = runtime_with_mixin(ctx, mixin.clone())?;
         let candidate = tempfile::NamedTempFile::new_in(&ctx.paths.clash_data)?;
@@ -1631,7 +2211,7 @@ fn commit_mixin_and_apply(
             }
         }
 
-        let mut updates = Vec::with_capacity(2 + extra_updates.len());
+        let mut updates = Vec::with_capacity(2 + extra_updates.len() + dynamic_extras.len());
         if clear_mixin {
             updates.push((ctx.paths.clash_mixin.clone(), None));
         } else {
@@ -1642,12 +2222,13 @@ fn commit_mixin_and_apply(
             ));
         }
         updates.extend(extra_updates.iter().cloned());
+        updates.extend(dynamic_extras);
         updates.push((
             ctx.paths.clash_runtime.clone(),
             Some(storage::Saved::new(&runtime, 0o600)),
         ));
         commit_files(ctx, &updates)?;
-        (was_running, prev_ctrl, runtime, rollback)
+        (was_running, prev_ctrl, live_patch, runtime, rollback)
     };
 
     if !was_running {
@@ -1656,9 +2237,15 @@ fn commit_mixin_and_apply(
 
     if mode == MixinApplyMode::HotReloadOrRestart
         && let Some(ctrl) = prev_ctrl
-        && controller::push_runtime(ctx, &ctrl, &runtime).is_ok()
     {
-        return Ok(MixinApplied::HotReloaded);
+        if let Some(patch) = live_patch
+            && controller::patch_configs(ctx, &ctrl, &patch).is_ok()
+        {
+            return Ok(MixinApplied::Patched);
+        }
+        if controller::push_runtime_preserving_picks(ctx, &ctrl, &runtime).is_ok() {
+            return Ok(MixinApplied::HotReloaded);
+        }
     }
 
     let apply_result = (|| -> Result<()> {
@@ -1863,6 +2450,10 @@ fn optional_sequence(map: &serde_yaml::Mapping, key: &str) -> Result<Option<Vec<
 
 fn validate_config(_ctx: &Context, path: &Path, allow_direct: bool) -> Result<()> {
     let value = yaml(&fs::read(path)?)?;
+    validate_config_value(&value, allow_direct)
+}
+
+fn validate_config_value(value: &Value, allow_direct: bool) -> Result<()> {
     let map = value
         .as_mapping()
         .ok_or_else(|| Error::new("error.data", "Clash configuration root must be a map"))?;
@@ -1921,9 +2512,8 @@ fn activate_profile(ctx: &Context, profiles: &mut ProfilesFile, name: &str) -> R
     let source = resolve_profile_path(ctx, &profile.path)?;
     let bytes = fs::read(&source)
         .map_err(|e| Error::new("error.data", format!("{}: {e}", source.display())))?;
-    validate_config(ctx, &source, false)?;
-    validate_with_mihomo(ctx, &source)?;
-    validate_subscription_runtime(ctx, &bytes)?;
+    validate_subscription_candidate(ctx, &bytes, Some(name))?;
+    validate_subscription_runtime(ctx, &bytes, Some(name))?;
     profiles.current = Some(name.into());
     Ok(bytes)
 }
@@ -1947,8 +2537,7 @@ fn validate_with_mihomo(ctx: &Context, path: &Path) -> Result<()> {
 }
 
 fn yaml(bytes: &[u8]) -> Result<Value> {
-    serde_yaml::from_slice(bytes)
-        .map_err(|_| Error::new("error.data", "invalid Mihomo configuration YAML"))
+    yaml_prep::parse_yaml_safe(bytes)
 }
 
 fn resolve_profile_path(ctx: &Context, relative: &str) -> Result<PathBuf> {
@@ -1969,7 +2558,11 @@ fn resolve_profile_path(ctx: &Context, relative: &str) -> Result<PathBuf> {
 
 fn commit_files(ctx: &Context, updates: &[(PathBuf, Option<storage::Saved>)]) -> Result<()> {
     let pending = ctx.paths.clash_data.join("pending.json");
-    storage::write_transaction(updates, &pending, || ctx.check())
+    let res = storage::write_transaction(updates, &pending, || ctx.check());
+    for (path, _) in updates {
+        runtime_cache::invalidate(path);
+    }
+    res
 }
 
 fn recover_interrupted_files(ctx: &Context) -> Result<()> {
@@ -2000,6 +2593,7 @@ fn recover_interrupted_files(ctx: &Context) -> Result<()> {
             && path != &ctx.paths.clash_config
             && path != &ctx.paths.clash_runtime
             && path != &socks::auth_path(ctx)
+            && path != &settings::proxy_auth_path(ctx)
             && !profile_file
         {
             return Err(Error::new("error.pending", path.display()));
@@ -2135,16 +2729,9 @@ fn proxy_url(scheme: &str, config: &ProxyConfig, port: u16) -> Result<String> {
     Ok(url.to_string())
 }
 
-fn proxy_config(ctx: &Context) -> Result<ProxyConfig> {
-    let path = if ctx.paths.clash_runtime.is_file() {
-        &ctx.paths.clash_runtime
-    } else {
-        &ctx.paths.clash_config
-    };
-    let value = yaml(&fs::read(path)?)?;
-    let map = value
-        .as_mapping()
-        .ok_or_else(|| Error::new("error.data", "Clash config root must be a map"))?;
+pub(in crate::ops::clash) fn parse_proxy_config_from_map(
+    map: &serde_yaml::Mapping,
+) -> Result<ProxyConfig> {
     let mixed = scalar_port(map.get(Value::String("mixed-port".into())))?;
     let http = scalar_port(map.get(Value::String("port".into())))?.or(mixed);
     let socks = scalar_port(map.get(Value::String("socks-port".into())))?.or(mixed);
@@ -2174,6 +2761,19 @@ fn proxy_config(ctx: &Context) -> Result<ProxyConfig> {
         username: auth.map(|(user, _)| user.into()),
         password: auth.map(|(_, password)| password.into()),
     })
+}
+
+fn proxy_config(ctx: &Context) -> Result<ProxyConfig> {
+    let path = if ctx.paths.clash_runtime.is_file() {
+        &ctx.paths.clash_runtime
+    } else {
+        &ctx.paths.clash_config
+    };
+    let cached = runtime_cache::load_file(path)?;
+    cached
+        .proxy
+        .clone()
+        .ok_or_else(|| Error::new("error.data", "invalid proxy port configuration"))
 }
 
 fn proxy_address(ctx: &Context, socks: bool) -> Option<String> {
@@ -2345,11 +2945,18 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 printf '%s\n' "$agent" >> "$CQS_TEST_AGENT_LOG"
-if [ "$agent" = clash.meta ] && [ -z "$CQS_TEST_LINKS_ONLY" ]; then
-  printf 'proxies:\n  - name: one\n    type: socks5\n    server: 127.0.0.1\n    port: 1\n' > "$out"
-else
-  printf 'dm1lc3M6Ly9leGFtcGxl\n' > "$out"
-fi
+case "$agent" in
+  *clash-verge*Clash.Meta*clash.meta*)
+    if [ -z "$CQS_TEST_LINKS_ONLY" ]; then
+      printf 'proxies:\n  - name: one\n    type: socks5\n    server: 127.0.0.1\n    port: 1\n' > "$out"
+    else
+      printf 'dm1lc3M6Ly9leGFtcGxl\n' > "$out"
+    fi
+    ;;
+  *)
+    printf 'dm1lc3M6Ly9leGFtcGxl\n' > "$out"
+    ;;
+esac
 "#,
         )
         .unwrap();
@@ -2368,7 +2975,7 @@ fi
         ctx.download(url, &target, 5).unwrap();
         assert_eq!(
             fs::read_to_string(&log).unwrap(),
-            "clash.meta\nnone\n",
+            format!("{SUBSCRIPTION_AGENT}\nnone\n"),
             "only subscription downloads change the User-Agent"
         );
 
@@ -2895,5 +3502,141 @@ printf 'mode: rule\nproxies:\n  - name: hk-1\n    type: direct\n' > "$out"
         assert_eq!(res.failures.len(), 1);
         assert_eq!(res.failures[0].0, "remote-fail");
         assert!(!res.reloaded);
+    }
+
+    #[test]
+    fn unlabeled_gzip_and_zlib_subscriptions_decompress_and_plain_passes_through() {
+        use flate2::{Compression, write::GzEncoder, write::ZlibEncoder};
+        use std::io::Write;
+
+        let plain = b"mode: rule\nproxies:\n  - name: hk-1\n    type: direct\n";
+        assert_eq!(
+            decompress_unlabeled_subscription(plain.to_vec()).unwrap(),
+            plain
+        );
+
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(plain).unwrap();
+        let gz_bytes = gz.finish().unwrap();
+        assert_eq!(decompress_unlabeled_subscription(gz_bytes).unwrap(), plain);
+
+        let mut zl = ZlibEncoder::new(Vec::new(), Compression::default());
+        zl.write_all(plain).unwrap();
+        let zl_bytes = zl.finish().unwrap();
+        assert_eq!(decompress_unlabeled_subscription(zl_bytes).unwrap(), plain);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refresh_profile_userinfo_backfills_only_metadata_without_touching_yaml() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut ctx = crate::tests::context(temp.path());
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let curl = bin.join("curl");
+        fs::write(
+            &curl,
+            r#"#!/bin/sh
+hdr=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dump-header) shift; hdr=$1 ;;
+  esac
+  shift
+done
+if [ -n "$hdr" ]; then
+  printf 'HTTP/1.1 200 OK\r\nSubscription-Userinfo: upload=300; download=700; total=2000; expire=1795046400\r\n\r\n' > "$hdr"
+fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::var("PATH").unwrap_or_default();
+        ctx.environment
+            .insert("PATH".into(), format!("{}:{path}", bin.display()));
+
+        ensure_layout(&ctx).unwrap();
+        let profile_file = profile_file_name("legacy-sub");
+        let profile_path = ctx.paths.clash_data.join("profiles").join(&profile_file);
+        fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
+        let yaml_bytes = b"mode: rule\n# immutable-sentinel\nproxies: []\n";
+        fs::write(&profile_path, yaml_bytes).unwrap();
+        fs::write(&ctx.paths.clash_config, yaml_bytes).unwrap();
+        let profiles = ProfilesFile {
+            current: Some("legacy-sub".into()),
+            profiles: vec![Profile {
+                name: "legacy-sub".into(),
+                url: "https://sub.example.net/feed?token=demo".into(),
+                path: profile_file,
+                updated: "1795000000".into(),
+                userinfo: None,
+                extra: BTreeMap::new(),
+            }],
+            extra: BTreeMap::new(),
+        };
+        fs::write(
+            &ctx.paths.clash_profiles,
+            profiles_bytes(&profiles).unwrap(),
+        )
+        .unwrap();
+
+        let info = refresh_profile_userinfo(&ctx, "legacy-sub")
+            .unwrap()
+            .expect("backfilled userinfo");
+        assert_eq!(info.upload, 300);
+        assert_eq!(info.download, 700);
+        assert_eq!(info.total, 2000);
+        assert_eq!(info.expire, Some(1_795_046_400));
+
+        // YAML files remain byte-identical; only profiles.yaml carries the backfilled metadata.
+        assert_eq!(fs::read(&profile_path).unwrap(), yaml_bytes);
+        assert_eq!(fs::read(&ctx.paths.clash_config).unwrap(), yaml_bytes);
+        let persisted = read_profiles(&ctx).unwrap();
+        assert_eq!(persisted.profiles[0].userinfo, Some(info));
+    }
+
+    #[test]
+    fn x86_64_cpuinfo_selects_highest_supported_mihomo_microarch_with_fallback() {
+        assert_eq!(
+            parse_x86_64_mihomo_arches(
+                "flags\t\t: fpu sse4_2 popcnt cx16 avx2 bmi1 bmi2 fma movbe\n"
+            ),
+            vec!["amd64-v3", "amd64-v2", "amd64-v1"]
+        );
+        assert_eq!(
+            parse_x86_64_mihomo_arches("flags\t\t: fpu sse4_2 popcnt cx16 avx\n"),
+            vec!["amd64-v2", "amd64-v1"]
+        );
+        assert_eq!(
+            parse_x86_64_mihomo_arches("flags\t\t: fpu sse2\n"),
+            vec!["amd64-v1"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subscription_import_preprocesses_short_id_before_mihomo_validation() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = crate::tests::context(temp.path());
+        ensure_layout(&ctx).unwrap();
+        fs::create_dir_all(ctx.paths.clash_binary.parent().unwrap()).unwrap();
+        // Fake Mihomo validator that rejects unquoted `short-id: 00` or `external-controller-unix`.
+        let validator = "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"-f\" ]; then cfg=\"$2\"; shift 2; continue; fi\n  shift\ndone\ngrep -q \"short-id: '00'\" \"$cfg\" || exit 1\nif grep -q 'external-controller-unix' \"$cfg\"; then exit 1; fi\nexit 0\n";
+        fs::write(&ctx.paths.clash_binary, validator).unwrap();
+        fs::set_permissions(&ctx.paths.clash_binary, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let source = temp.path().join("raw-sub.yaml");
+        fs::write(
+            &source,
+            "external-controller-unix: /tmp/untrusted.sock\nproxies:\n  - name: Reality-00\n    type: vless\n    server: 198.51.100.10\n    port: 443\n    reality-opts:\n      short-id: 00\nrules:\n  - MATCH,DIRECT\n",
+        )
+        .unwrap();
+
+        subscription_import(&ctx, "reality-sub", &source, "", true).unwrap();
+        assert!(ctx.paths.clash_config.is_file());
     }
 }

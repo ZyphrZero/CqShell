@@ -158,24 +158,20 @@ fn tun_enabled_in_runtime(ctx: &Context) -> bool {
     } else {
         &ctx.paths.clash_config
     };
-    let Ok(bytes) = std::fs::read(path) else {
-        return false;
-    };
-    let Ok(yaml) = serde_yaml::from_slice::<serde_yaml::Value>(&bytes) else {
-        return false;
-    };
-    yaml.get("tun")
-        .and_then(|t| t.get("enable"))
-        .and_then(serde_yaml::Value::as_bool)
+    super::runtime_cache::load_file(path)
+        .map(|cached| cached.tun_enabled)
         .unwrap_or(false)
 }
 
-fn is_cancelled(ctx: &Context, local_cancel: &AtomicBool) -> bool {
-    local_cancel.load(Ordering::SeqCst) || ctx.cancel.load(Ordering::SeqCst)
+fn is_cancelled(ctx: &Context, parent_cancel: &AtomicBool, race_cancel: &AtomicBool) -> bool {
+    parent_cancel.load(Ordering::SeqCst)
+        || race_cancel.load(Ordering::SeqCst)
+        || ctx.cancel.load(Ordering::SeqCst)
 }
 
 /// Execute a bounded `curl` request, passing proxy and URL via stdin (`-K -`) so proxy credentials
 /// never appear in command-line arguments or logs.
+#[allow(clippy::too_many_arguments)]
 fn curl_fetch_http(
     ctx: &Context,
     transport: &ProbeTransport,
@@ -183,9 +179,10 @@ fn curl_fetch_http(
     allow_http: bool,
     connect_timeout: &str,
     max_time: &str,
-    local_cancel: &AtomicBool,
+    parent_cancel: &AtomicBool,
+    race_cancel: &AtomicBool,
 ) -> std::result::Result<String, HttpFetchError> {
-    if is_cancelled(ctx, local_cancel) {
+    if is_cancelled(ctx, parent_cancel, race_cancel) {
         return Err(HttpFetchError::Cancelled);
     }
 
@@ -266,7 +263,7 @@ fn curl_fetch_http(
                 return Err(HttpFetchError::Failed);
             }
         }
-        if is_cancelled(ctx, local_cancel) {
+        if is_cancelled(ctx, parent_cancel, race_cancel) {
             kill_child(&mut child);
             let _ = reader.join();
             return Err(HttpFetchError::Cancelled);
@@ -296,111 +293,7 @@ fn curl_fetch_http(
     }
 }
 
-fn curl_probe_latency_ms(
-    ctx: &Context,
-    transport: &ProbeTransport,
-    target_url: &str,
-    local_cancel: &AtomicBool,
-) -> Option<u64> {
-    if is_cancelled(ctx, local_cancel) {
-        return None;
-    }
-    let mut cmd = Command::new("curl");
-    let null_sink = if cfg!(windows) { "NUL" } else { "/dev/null" };
-    cmd.args([
-        "-q",
-        "--proto",
-        "=https",
-        "--proto-redir",
-        "=https",
-        "-fsSL",
-        "--connect-timeout",
-        "5",
-        "--max-time",
-        "7",
-        "-o",
-        null_sink,
-        "-w",
-        "%{time_total}",
-        "-K",
-        "-",
-    ])
-    .envs(&ctx.environment)
-    .env("LC_ALL", "C")
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null());
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-
-    let mut child = crate::runtime::retry_executable_busy(ctx, || cmd.spawn()).ok()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let mut cfg = String::new();
-        if let ProbeTransport::Proxy(proxy_url) = transport {
-            cfg.push_str(&format!(
-                "proxy = \"{}\"\n",
-                proxy_url.replace('\\', "\\\\").replace('"', "\\\"")
-            ));
-        } else {
-            cfg.push_str("noproxy = \"*\"\n");
-        }
-        cfg.push_str(&format!(
-            "url = \"{}\"\n",
-            target_url.replace('\\', "\\\\").replace('"', "\\\"")
-        ));
-        let _ = stdin.write_all(cfg.as_bytes());
-    }
-    let out_pipe = child.stdout.take();
-    let reader = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(out) = out_pipe {
-            let _ = out.take(128).read_to_end(&mut buf);
-        }
-        buf
-    });
-    let mut sleep_ms = 5u64;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(_) => {
-                kill_child(&mut child);
-                let _ = reader.join();
-                return None;
-            }
-        }
-        if is_cancelled(ctx, local_cancel) {
-            kill_child(&mut child);
-            let _ = reader.join();
-            return None;
-        }
-        thread::sleep(Duration::from_millis(sleep_ms));
-        sleep_ms = (sleep_ms * 2).min(25);
-    };
-    let stdout = reader.join().unwrap_or_default();
-    if !status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&stdout)
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .map(|secs| (secs * 1000.0).round() as u64)
-}
-
-fn kill_child(child: &mut std::process::Child) {
+pub(crate) fn kill_child(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         let pid = child.id() as libc::pid_t;
@@ -422,19 +315,24 @@ pub(crate) fn lookup_outbound_ip(
 ) -> Result<OutboundIpInfo> {
     let ctx_base = ctx.clone();
     let transport = transport.clone();
-    lookup_outbound_ip_with(IP_HEDGE_DELAY, cancel, move |source, wave_cancel| {
-        let body = curl_fetch_http(
-            &ctx_base,
-            &transport,
-            source.url(),
-            false,
-            IP_CONNECT_TIMEOUT_SECS,
-            IP_MAX_TIME_SECS,
-            &wave_cancel,
-        )
-        .map_err(|_| ())?;
-        parse_outbound_ip(source, &body).ok_or(())
-    })
+    lookup_outbound_ip_with(
+        IP_HEDGE_DELAY,
+        cancel,
+        move |source, parent_cancel, race_cancel| {
+            let body = curl_fetch_http(
+                &ctx_base,
+                &transport,
+                source.url(),
+                false,
+                IP_CONNECT_TIMEOUT_SECS,
+                IP_MAX_TIME_SECS,
+                parent_cancel,
+                race_cancel,
+            )
+            .map_err(|_| ())?;
+            parse_outbound_ip(source, &body).ok_or(())
+        },
+    )
 }
 
 fn lookup_outbound_ip_with<F>(
@@ -443,7 +341,7 @@ fn lookup_outbound_ip_with<F>(
     fetch: F,
 ) -> Result<OutboundIpInfo>
 where
-    F: Fn(OutboundIpSource, Arc<AtomicBool>) -> std::result::Result<OutboundIpInfo, ()>
+    F: Fn(OutboundIpSource, &AtomicBool, &AtomicBool) -> std::result::Result<OutboundIpInfo, ()>
         + Send
         + Sync
         + 'static,
@@ -466,11 +364,10 @@ where
                 let rc = race_cancel.clone();
                 let pc = parent_cancel.clone();
                 thread::spawn(move || {
-                    let effective = CombinedCancel::new(pc, rc);
-                    let res = if effective.is_cancelled() {
+                    let res = if pc.load(Ordering::SeqCst) || rc.load(Ordering::SeqCst) {
                         Err(())
                     } else {
-                        fetch(source, effective.flag.clone())
+                        fetch(source, &pc, &rc)
                     };
                     let _ = tx.send(res);
                 });
@@ -559,7 +456,7 @@ pub(crate) fn lookup_ip_quality(
         &canonical_ip,
         QUALITY_HEDGE_DELAY,
         cancel,
-        move |source, target_ip, wave_cancel| {
+        move |source, target_ip, parent_cancel, race_cancel| {
             let url = quality_url(source, target_ip);
             // ip-api.com serves HTTPS only on its paid plan; all other sources require HTTPS.
             let allow_http = source == IpQualitySource::IpApiCom;
@@ -570,7 +467,8 @@ pub(crate) fn lookup_ip_quality(
                 allow_http,
                 QUALITY_CONNECT_TIMEOUT_SECS,
                 QUALITY_MAX_TIME_SECS,
-                &wave_cancel,
+                parent_cancel,
+                race_cancel,
             )
             .map_err(|err| match err {
                 HttpFetchError::Timeout => IpQualitySourceStatus::Timeout,
@@ -594,7 +492,8 @@ where
     F: Fn(
             IpQualitySource,
             &str,
-            Arc<AtomicBool>,
+            &AtomicBool,
+            &AtomicBool,
         ) -> std::result::Result<QualityAnswer, IpQualitySourceStatus>
         + Send
         + Sync
@@ -627,11 +526,10 @@ where
             let rc = race_cancel.clone();
             let pc = parent_cancel.clone();
             thread::spawn(move || {
-                let effective = CombinedCancel::new(pc, rc);
-                let res = if effective.is_cancelled() {
+                let res = if pc.load(Ordering::SeqCst) || rc.load(Ordering::SeqCst) {
                     Err(IpQualitySourceStatus::Failed)
                 } else {
-                    fetch(source, &ip, effective.flag.clone())
+                    fetch(source, &ip, &pc, &rc)
                 };
                 let _ = tx.send((source, res));
             });
@@ -709,78 +607,6 @@ where
     }
     failures.sort_by_key(|f| f.source);
     Err(failures)
-}
-
-/// Stage 3: Concurrent Google & GitHub reachability latency probe through Mihomo.
-pub(crate) fn probe_connectivity(
-    ctx: &Context,
-    transport: &ProbeTransport,
-    cancel: &Arc<AtomicBool>,
-) -> (Option<u64>, Option<u64>) {
-    let ctx_g = ctx.clone();
-    let tr_g = transport.clone();
-    let cancel_g = cancel.clone();
-    let google = thread::spawn(move || {
-        curl_probe_latency_ms(
-            &ctx_g,
-            &tr_g,
-            "https://www.gstatic.com/generate_204",
-            &cancel_g,
-        )
-    });
-
-    let github = curl_probe_latency_ms(
-        ctx,
-        transport,
-        "https://github.com/robots.txt",
-        cancel.as_ref(),
-    );
-    (google.join().ok().flatten(), github)
-}
-
-/// Forwarder that mirrors either a parent cancel flag or a per-race cancel flag into a single
-/// `AtomicBool` polled by `curl_fetch_http`.
-struct CombinedCancel {
-    flag: Arc<AtomicBool>,
-    stop: Arc<AtomicBool>,
-    handle: Option<thread::JoinHandle<()>>,
-}
-
-impl CombinedCancel {
-    fn new(parent: Arc<AtomicBool>, race: Arc<AtomicBool>) -> Self {
-        let initial = parent.load(Ordering::SeqCst) || race.load(Ordering::SeqCst);
-        let flag = Arc::new(AtomicBool::new(initial));
-        let stop = Arc::new(AtomicBool::new(false));
-        let handle = if initial {
-            None
-        } else {
-            let f = flag.clone();
-            let s = stop.clone();
-            Some(thread::spawn(move || {
-                while !s.load(Ordering::Relaxed) {
-                    if parent.load(Ordering::SeqCst) || race.load(Ordering::SeqCst) {
-                        f.store(true, Ordering::SeqCst);
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-            }))
-        };
-        Self { flag, stop, handle }
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
-    }
-}
-
-impl Drop for CombinedCancel {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
 }
 
 // ── Outbound IP parsers (Stage 1) ───────────────────────────────────────────────────────────────
@@ -1404,7 +1230,7 @@ mod tests {
             "203.0.113.50",
             Duration::from_millis(20),
             &cancel,
-            |source, ip, _cancel| match source {
+            |source, ip, _pc, _rc| match source {
                 IpQualitySource::IpApiCom => Ok(QualityAnswer {
                     quality: IpQuality {
                         ip: ip.to_owned(),
@@ -1445,7 +1271,7 @@ mod tests {
             "203.0.113.50",
             Duration::from_millis(10),
             &cancel,
-            |source, ip, _cancel| match source {
+            |source, ip, _pc, _rc| match source {
                 IpQualitySource::IpQuery => Ok(QualityAnswer {
                     quality: IpQuality {
                         ip: ip.to_owned(),
@@ -1472,7 +1298,7 @@ mod tests {
             "203.0.113.50",
             Duration::from_millis(10),
             &cancel,
-            |source, _ip, _cancel| match source {
+            |source, _ip, _pc, _rc| match source {
                 IpQualitySource::IdentMe => Err(IpQualitySourceStatus::IpMismatch),
                 IpQualitySource::IpApiCom => Err(IpQualitySourceStatus::Timeout),
                 IpQualitySource::ProxyCheck => Err(IpQualitySourceStatus::RateLimited),
@@ -1492,7 +1318,7 @@ mod tests {
     #[test]
     fn hedged_outbound_ip_returns_first_valid_source() {
         let cancel = Arc::new(AtomicBool::new(false));
-        let info = lookup_outbound_ip_with(Duration::from_millis(20), &cancel, |source, _| {
+        let info = lookup_outbound_ip_with(Duration::from_millis(20), &cancel, |source, _, _| {
             if source == OutboundIpSource::IpInfoIo {
                 Ok(OutboundIpInfo {
                     ip: "203.0.113.106".into(),

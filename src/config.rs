@@ -39,6 +39,15 @@ pub struct Preferences {
     /// Mask the Mihomo outbound IP address in the Mihomo TUI workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clash_hide_ip: Option<bool>,
+    /// Preferred order of Mihomo service check targets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clash_service_order: Vec<String>,
+    /// Disabled Mihomo service check target IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clash_disabled_services: Vec<String>,
+    /// Policy for closing stale connections when switching a Mihomo proxy group node (`group`/`all`/`off`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clash_close_conns_on_switch: Option<String>,
 }
 
 impl Preferences {
@@ -204,34 +213,59 @@ mod tests {
             .prop_map(String::from),
         );
         let clash_hide_ip = prop::option::of(any::<bool>());
+        let clash_service_order = prop_oneof![
+            Just(Vec::new()),
+            Just(vec!["google".into(), "chatgpt".into(), "claude".into()]),
+        ];
+        let clash_disabled_services = prop_oneof![
+            Just(Vec::new()),
+            Just(vec!["tiktok".into(), "bilibili".into()]),
+        ];
+        let clash_close_conns_on_switch = prop::option::of(
+            prop_oneof![Just("group"), Just("all"), Just("off")].prop_map(String::from),
+        );
         (
-            language,
-            locale_dir,
-            category_order,
-            theme,
-            style,
-            detect_background,
-            transparent_bg,
-            reduced_motion,
-            sidebar_collapsed,
-            github_proxy_enabled,
-            github_proxy,
-            clash_hide_ip,
+            (
+                language,
+                locale_dir,
+                category_order,
+                theme,
+                style,
+                detect_background,
+                transparent_bg,
+            ),
+            (
+                reduced_motion,
+                sidebar_collapsed,
+                github_proxy_enabled,
+                github_proxy,
+                clash_hide_ip,
+                clash_service_order,
+                clash_disabled_services,
+                clash_close_conns_on_switch,
+            ),
         )
             .prop_map(
                 |(
-                    language,
-                    locale_dir,
-                    category_order,
-                    theme,
-                    style,
-                    detect_background,
-                    transparent_bg,
-                    reduced_motion,
-                    sidebar_collapsed,
-                    github_proxy_enabled,
-                    github_proxy,
-                    clash_hide_ip,
+                    (
+                        language,
+                        locale_dir,
+                        category_order,
+                        theme,
+                        style,
+                        detect_background,
+                        transparent_bg,
+                    ),
+                    (
+                        reduced_motion,
+                        sidebar_collapsed,
+                        github_proxy_enabled,
+                        github_proxy,
+                        clash_hide_ip,
+                        clash_service_order,
+                        clash_disabled_services,
+                        clash_close_conns_on_switch,
+                    ),
                 )| Preferences {
                     language,
                     locale_dir,
@@ -245,6 +279,9 @@ mod tests {
                     github_proxy_enabled,
                     github_proxy,
                     clash_hide_ip,
+                    clash_service_order,
+                    clash_disabled_services,
+                    clash_close_conns_on_switch,
                 },
             )
     }
@@ -302,6 +339,9 @@ mod tests {
                 github_proxy_enabled: None,
                 github_proxy: None,
                 clash_hide_ip: None,
+                clash_service_order: Vec::new(),
+                clash_disabled_services: Vec::new(),
+                clash_close_conns_on_switch: None,
             }
         );
     }

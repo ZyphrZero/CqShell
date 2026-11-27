@@ -3,7 +3,7 @@
 
 use super::{
     MixinApplied, MixinApplyMode, State, build_runtime_config, edit_mixin_and_apply, state,
-    unknown_process,
+    unknown_process, yaml_prep,
 };
 use crate::{
     error::{Error, Result},
@@ -11,7 +11,7 @@ use crate::{
     storage,
 };
 use serde_yaml::{Mapping, Value};
-use std::{fs, path::Path};
+use std::{collections::BTreeMap, fs, path::Path};
 
 #[derive(Debug, PartialEq, Eq)]
 struct Settings {
@@ -19,6 +19,8 @@ struct Settings {
     device: String,
     stack: String,
     auto_route: bool,
+    auto_detect_interface: bool,
+    strict_route: bool,
     dns_hijack: bool,
 }
 
@@ -36,6 +38,8 @@ fn settings(value: &Value) -> Result<Settings> {
             device: "cqs-tun".into(),
             stack: "mixed".into(),
             auto_route: true,
+            auto_detect_interface: true,
+            strict_route: false,
             dns_hijack: false,
         });
     };
@@ -77,6 +81,8 @@ fn settings(value: &Value) -> Result<Settings> {
         device: string("device", "Meta")?,
         stack: string("stack", "mixed")?,
         auto_route: boolean("auto-route", true)?,
+        auto_detect_interface: boolean("auto-detect-interface", false)?,
+        strict_route: boolean("strict-route", false)?,
         dns_hijack,
     };
     validate_options(&settings.stack, &settings.device)?;
@@ -231,6 +237,73 @@ fn map_mut<'a>(map: &'a mut Mapping, name: &str) -> Result<&'a mut Mapping> {
         .ok_or_else(|| Error::new("error.data", format!("{name} must be a map")))
 }
 
+fn merge_route_excludes(tun: &mut Mapping, cidrs: &[&str], ssh_cidr: Option<&str>) {
+    let mut items = tun
+        .get(key("route-exclude-address"))
+        .and_then(Value::as_sequence)
+        .cloned()
+        .unwrap_or_default();
+    for &cidr in cidrs {
+        let val = key(cidr);
+        if !items.contains(&val) {
+            items.push(val);
+        }
+    }
+    if let Some(ssh) = ssh_cidr {
+        let val = key(ssh);
+        if !items.contains(&val) {
+            items.push(val);
+        }
+    }
+    tun.insert(key("route-exclude-address"), Value::Sequence(items));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_tun_mixin_options(
+    mixin: &mut Mapping,
+    env: &BTreeMap<String, String>,
+    enabled: bool,
+    stack: &str,
+    device: &str,
+    auto_route: bool,
+    dns_hijack: bool,
+    strict_route: bool,
+    bypass_private: bool,
+) -> Result<()> {
+    let has_explicit_iface = mixin
+        .get(key("interface-name"))
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty());
+    let tun = map_mut(mixin, "tun")?;
+    tun.insert(key("enable"), Value::Bool(enabled));
+    if enabled {
+        tun.insert(key("device"), key(device));
+        tun.insert(key("stack"), key(stack));
+        tun.insert(key("auto-route"), Value::Bool(auto_route));
+        tun.insert(key("strict-route"), Value::Bool(strict_route));
+        if !has_explicit_iface {
+            tun.insert(key("auto-detect-interface"), Value::Bool(true));
+        }
+        tun.insert(
+            key("dns-hijack"),
+            Value::Sequence(if dns_hijack {
+                vec![key("any:53")]
+            } else {
+                vec![]
+            }),
+        );
+        if bypass_private {
+            let ssh_cidr = yaml_prep::current_ssh_client_cidr(env);
+            merge_route_excludes(tun, yaml_prep::PRIVATE_ROUTE_CIDRS, ssh_cidr.as_deref());
+        }
+        if dns_hijack {
+            map_mut(mixin, "dns")?.insert(key("enable"), Value::Bool(true));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn configure(
     ctx: &Context,
     enabled: bool,
@@ -238,6 +311,8 @@ pub fn configure(
     device: &str,
     auto_route: bool,
     dns_hijack: bool,
+    strict_route: bool,
+    bypass_private: bool,
 ) -> Result<()> {
     validate_options(stack, device)?;
     if enabled {
@@ -249,25 +324,17 @@ pub fn configure(
         require_native_inner(ctx, device, running_pid)?;
     }
     let applied = edit_mixin_and_apply(ctx, MixinApplyMode::RestartIfRunning, |mixin| {
-        let tun = map_mut(mixin, "tun")?;
-        tun.insert(key("enable"), Value::Bool(enabled));
-        if enabled {
-            tun.insert(key("device"), key(device));
-            tun.insert(key("stack"), key(stack));
-            tun.insert(key("auto-route"), Value::Bool(auto_route));
-            tun.insert(
-                key("dns-hijack"),
-                Value::Sequence(if dns_hijack {
-                    vec![key("any:53")]
-                } else {
-                    vec![]
-                }),
-            );
-            if dns_hijack {
-                map_mut(mixin, "dns")?.insert(key("enable"), Value::Bool(true));
-            }
-        }
-        Ok(())
+        apply_tun_mixin_options(
+            mixin,
+            &ctx.environment,
+            enabled,
+            stack,
+            device,
+            auto_route,
+            dns_hijack,
+            strict_route,
+            bypass_private,
+        )
     })?;
     ctx.message(
         "notice.clash_tun",
@@ -276,13 +343,17 @@ pub fn configure(
                 MixinApplied::SavedWhileStopped => {
                     "enabled in configuration; start Mihomo as root to activate"
                 }
-                MixinApplied::HotReloaded => "enabled and hot-reloaded into running Mihomo",
+                MixinApplied::Patched | MixinApplied::HotReloaded => {
+                    "enabled and hot-reloaded into running Mihomo"
+                }
                 MixinApplied::Restarted => "enabled and applied (Mihomo restarted)",
             }
         } else {
             match applied {
                 MixinApplied::SavedWhileStopped => "disabled in configuration",
-                MixinApplied::HotReloaded => "disabled and hot-reloaded into running Mihomo",
+                MixinApplied::Patched | MixinApplied::HotReloaded => {
+                    "disabled and hot-reloaded into running Mihomo"
+                }
                 MixinApplied::Restarted => "disabled and applied (Mihomo restarted)",
             }
         },
@@ -313,13 +384,17 @@ pub(super) fn set_enabled(ctx: &Context, enabled: bool) -> Result<()> {
                 MixinApplied::SavedWhileStopped => {
                     "enabled in configuration; start Mihomo as root to activate"
                 }
-                MixinApplied::HotReloaded => "enabled and hot-reloaded into running Mihomo",
+                MixinApplied::Patched | MixinApplied::HotReloaded => {
+                    "enabled and hot-reloaded into running Mihomo"
+                }
                 MixinApplied::Restarted => "enabled and applied (Mihomo restarted)",
             }
         } else {
             match applied {
                 MixinApplied::SavedWhileStopped => "disabled in configuration",
-                MixinApplied::HotReloaded => "disabled and hot-reloaded into running Mihomo",
+                MixinApplied::Patched | MixinApplied::HotReloaded => {
+                    "disabled and hot-reloaded into running Mihomo"
+                }
                 MixinApplied::Restarted => "disabled and applied (Mihomo restarted)",
             }
         },
@@ -403,7 +478,19 @@ pub fn status(ctx: &Context) -> Result<()> {
         },
         _ => "no managed process",
     };
-    ctx.message("notice.clash_tun", format!("configured={}; device={}; stack={}; auto-route={}; dns-hijack={}; link={link}; {ownership}", settings.enabled, settings.device, settings.stack, settings.auto_route, settings.dns_hijack));
+    ctx.message(
+        "notice.clash_tun",
+        format!(
+            "configured={}; device={}; stack={}; auto-route={}; auto-detect-interface={}; strict-route={}; dns-hijack={}; link={link}; {ownership}",
+            settings.enabled,
+            settings.device,
+            settings.stack,
+            settings.auto_route,
+            settings.auto_detect_interface,
+            settings.strict_route,
+            settings.dns_hijack
+        ),
+    );
     Ok(())
 }
 
@@ -505,7 +592,7 @@ mod tests {
         fs::write(&ctx.paths.clash_config, base).unwrap();
         fs::write(&ctx.paths.clash_mixin, b"tun: {enable: true, device: previous, stack: gvisor}\ndns: {enable: true}\ncustom: keep\n").unwrap();
 
-        configure(&ctx, false, "mixed", "cqs-tun", true, true).unwrap();
+        configure(&ctx, false, "mixed", "cqs-tun", true, true, false, true).unwrap();
 
         let mixin: Value =
             serde_yaml::from_slice(&fs::read(&ctx.paths.clash_mixin).unwrap()).unwrap();
@@ -522,6 +609,37 @@ mod tests {
     }
 
     #[test]
+    fn tun_mixin_options_inject_auto_detect_private_and_ssh_bypass() {
+        let mut mixin = Mapping::new();
+        let mut tun = Mapping::new();
+        tun.insert(
+            key("route-exclude-address"),
+            Value::Sequence(vec![key("198.51.100.0/24")]),
+        );
+        mixin.insert(key("tun"), Value::Mapping(tun));
+        let mut env = BTreeMap::new();
+        env.insert(
+            "SSH_CONNECTION".into(),
+            "203.0.113.42 54321 198.51.100.2 22".into(),
+        );
+        apply_tun_mixin_options(
+            &mut mixin, &env, true, "mixed", "cqs-tun", true, true, false, true,
+        )
+        .unwrap();
+        let tun_map = mixin[&key("tun")].as_mapping().unwrap();
+        assert_eq!(tun_map[&key("auto-detect-interface")], true);
+        assert_eq!(tun_map[&key("strict-route")], false);
+        let excludes = tun_map[&key("route-exclude-address")]
+            .as_sequence()
+            .unwrap();
+        assert!(excludes.contains(&key("198.51.100.0/24")));
+        assert!(excludes.contains(&key("10.0.0.0/8")));
+        assert!(excludes.contains(&key("192.168.0.0/16")));
+        assert!(excludes.contains(&key("203.0.113.42/32")));
+        assert_eq!(mixin[&key("dns")]["enable"], true);
+    }
+
+    #[test]
     fn cancelled_disable_preserves_existing_configuration() {
         let temp = tempfile::tempdir().unwrap();
         let ctx = crate::tests::context(temp.path());
@@ -529,7 +647,7 @@ mod tests {
         let original = b"tun: {enable: true}\n";
         fs::write(&ctx.paths.clash_mixin, original).unwrap();
         ctx.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
-        assert!(configure(&ctx, false, "mixed", "cqs-tun", true, true).is_err());
+        assert!(configure(&ctx, false, "mixed", "cqs-tun", true, true, false, true).is_err());
         assert_eq!(fs::read(&ctx.paths.clash_mixin).unwrap(), original);
         assert!(!ctx.paths.clash_runtime.exists());
     }

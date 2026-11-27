@@ -408,7 +408,17 @@
     "interactive": false,
     "label": "停止 Mihomo",
     "mutates": true,
-    "parameters": [],
+    "parameters": [
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "stop_force",
+        "required": true
+      }
+    ],
     "root": false,
     "unavailable_reason": null
   },
@@ -905,6 +915,34 @@
         "default": "info",
         "name": "log_level",
         "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "tcp_concurrent",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "unified_delay",
+        "required": true
+      },
+      {
+        "choices": [
+          "strict",
+          "always",
+          "off"
+        ],
+        "default": "strict",
+        "name": "find_process_mode",
+        "required": true
       }
     ],
     "root": false,
@@ -944,7 +982,8 @@
       {
         "choices": [
           "china",
-          "global"
+          "global",
+          "keep"
         ],
         "default": "china",
         "name": "dns_preset",
@@ -960,6 +999,51 @@
         "required": true
       }
     ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "直接通过运行中的 Mihomo 内置 DNS 引擎（GET /dns/query）解析域名，快速验证 Fake-IP 或上游返回结果。",
+    "group": "clash",
+    "id": "clash.dns.query",
+    "interactive": false,
+    "label": "在线 DNS 解析诊断",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "example.com",
+        "name": "dns_domain",
+        "required": true
+      },
+      {
+        "choices": [
+          "A",
+          "AAAA",
+          "CNAME",
+          "TXT",
+          "MX",
+          "NS",
+          "HTTPS"
+        ],
+        "default": "A",
+        "name": "dns_record_type",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "通过控制器即时清空 Mihomo 内存中的 Fake-IP 池与 DNS 解析缓存，无需重启核心进程。",
+    "group": "clash",
+    "id": "clash.cache.flush",
+    "interactive": false,
+    "label": "清理 Fake-IP 与 DNS 缓存",
+    "mutates": true,
+    "parameters": [],
     "root": false,
     "unavailable_reason": null
   },
@@ -1170,6 +1254,24 @@
         ],
         "default": "on",
         "name": "dns_hijack",
+        "required": true
+      },
+      {
+        "choices": [
+          "off",
+          "on"
+        ],
+        "default": "off",
+        "name": "tun_strict_route",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "tun_bypass_private",
         "required": true
       }
     ],

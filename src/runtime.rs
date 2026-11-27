@@ -552,6 +552,7 @@ impl Context {
             validate_https_url(effective)?;
             let seconds = seconds.to_string();
             let mut args = vec![
+                "-q",
                 "--proto",
                 "=https",
                 "--proto-redir",

@@ -112,12 +112,19 @@ impl SubscriptionUserinfo {
         let mut expire = None;
         let mut seen = false;
 
-        for part in raw.split(';') {
+        let trimmed = raw.trim().trim_matches(|c| matches!(c, '"' | '\''));
+        let parts: Vec<&str> = if trimmed.contains(';') || trimmed.contains(',') {
+            trimmed.split([';', ',']).collect()
+        } else {
+            trimmed.split_whitespace().collect()
+        };
+
+        for part in parts {
             let Some((key, value)) = part.split_once('=') else {
                 continue;
             };
             let key = key.trim().to_ascii_lowercase();
-            let val_str = value.trim();
+            let val_str = value.trim().trim_matches(|c| matches!(c, '"' | '\''));
             // Some providers emit scientific or decimal strings (e.g. `12345.0`); truncate safely.
             let parsed = val_str.parse::<u64>().ok().or_else(|| {
                 val_str
@@ -144,7 +151,15 @@ impl SubscriptionUserinfo {
                 }
                 "expire" => {
                     if num > 0 {
-                        expire = Some(num);
+                        // Normalize 13-digit millisecond timestamps some panels emit.
+                        let secs = if num >= 10_000_000_000 {
+                            num / 1000
+                        } else {
+                            num
+                        };
+                        if secs > 0 {
+                            expire = Some(secs);
+                        }
                     }
                     seen = true;
                 }
@@ -165,25 +180,37 @@ impl SubscriptionUserinfo {
     }
 
     /// Extract the last `subscription-userinfo` header value from a raw HTTP header dump
-    /// (which may contain multiple redirect blocks).
+    /// (which may contain multiple redirect blocks), falling back to `x-subscription-userinfo`
+    /// or `profile-userinfo` when the canonical header is absent.
     pub fn extract_from_http_headers(raw_headers: &str) -> Option<Self> {
-        let mut last = None;
+        let mut primary = None;
+        let mut fallback = None;
         for line in raw_headers.lines() {
             let line = line.trim_end_matches('\r');
             let Some((name, value)) = line.split_once(':') else {
                 continue;
             };
-            if name.trim().eq_ignore_ascii_case("subscription-userinfo")
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("subscription-userinfo") {
+                if let Some(parsed) = Self::parse_header(value) {
+                    primary = Some(parsed);
+                }
+            } else if (name.eq_ignore_ascii_case("x-subscription-userinfo")
+                || name.eq_ignore_ascii_case("profile-userinfo"))
                 && let Some(parsed) = Self::parse_header(value)
             {
-                last = Some(parsed);
+                fallback = Some(parsed);
             }
         }
-        last
+        primary.or(fallback)
     }
 
     pub fn used(&self) -> u64 {
         self.upload.saturating_add(self.download)
+    }
+
+    pub fn remaining(&self) -> u64 {
+        self.total.saturating_sub(self.used())
     }
 
     pub fn ratio(&self) -> f64 {
@@ -197,6 +224,19 @@ impl SubscriptionUserinfo {
     pub fn expire_date(&self) -> Option<String> {
         self.expire.map(format_epoch_ymd)
     }
+
+    pub fn days_until_expire(&self, now_epoch_secs: u64) -> Option<u64> {
+        self.expire
+            .map(|exp| exp.saturating_sub(now_epoch_secs) / 86_400)
+    }
+}
+
+/// Origin of the subscription quota shown for the active Mihomo profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserinfoSource {
+    Profile,
+    Provider(String),
+    Providers(usize),
 }
 
 /// Local subscription profile summary (never exposes raw subscription URL tokens).
@@ -647,6 +687,201 @@ impl ExitProbeResult {
     }
 }
 
+/// Built-in service reachability and streaming/AI unlock probe targets (aligned with FlClash).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ServiceTarget {
+    Google,
+    GitHub,
+    YouTube,
+    ChatGpt,
+    Claude,
+    Gemini,
+    Netflix,
+    DisneyPlus,
+    PrimeVideo,
+    Spotify,
+    TikTok,
+    Discord,
+    Bilibili,
+}
+
+impl ServiceTarget {
+    pub const ALL: [Self; 13] = [
+        Self::Google,
+        Self::GitHub,
+        Self::YouTube,
+        Self::ChatGpt,
+        Self::Claude,
+        Self::Gemini,
+        Self::Netflix,
+        Self::DisneyPlus,
+        Self::PrimeVideo,
+        Self::Spotify,
+        Self::TikTok,
+        Self::Discord,
+        Self::Bilibili,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Google => "google",
+            Self::GitHub => "github",
+            Self::YouTube => "youtube",
+            Self::ChatGpt => "chatgpt",
+            Self::Claude => "claude",
+            Self::Gemini => "gemini",
+            Self::Netflix => "netflix",
+            Self::DisneyPlus => "disney-plus",
+            Self::PrimeVideo => "prime-video",
+            Self::Spotify => "spotify",
+            Self::TikTok => "tiktok",
+            Self::Discord => "discord",
+            Self::Bilibili => "bilibili",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Google => "Google",
+            Self::GitHub => "GitHub",
+            Self::YouTube => "YouTube",
+            Self::ChatGpt => "ChatGPT",
+            Self::Claude => "Claude",
+            Self::Gemini => "Gemini",
+            Self::Netflix => "Netflix",
+            Self::DisneyPlus => "Disney+",
+            Self::PrimeVideo => "Prime Video",
+            Self::Spotify => "Spotify",
+            Self::TikTok => "TikTok",
+            Self::Discord => "Discord",
+            Self::Bilibili => "Bilibili",
+        }
+    }
+
+    pub fn primary_host(self) -> &'static str {
+        match self {
+            Self::Google => "www.google.com",
+            Self::GitHub => "github.com",
+            Self::YouTube => "www.youtube.com",
+            Self::ChatGpt => "chat.openai.com",
+            Self::Claude => "claude.ai",
+            Self::Gemini => "gemini.google.com",
+            Self::Netflix => "www.netflix.com",
+            Self::DisneyPlus => "disney.api.edge.bamgrid.com",
+            Self::PrimeVideo => "www.primevideo.com",
+            Self::Spotify => "www.spotify.com",
+            Self::TikTok => "www.tiktok.com",
+            Self::Discord => "discord.com",
+            Self::Bilibili => "api.bilibili.com",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|t| t.id() == id)
+    }
+
+    /// Return all targets ordered by `saved_order`, appending any newly added targets in default order.
+    pub fn ordered(saved_order: &[String]) -> Vec<Self> {
+        let mut out = Vec::with_capacity(Self::ALL.len());
+        for id in saved_order {
+            if let Some(t) = Self::from_id(id)
+                && !out.contains(&t)
+            {
+                out.push(t);
+            }
+        }
+        for t in Self::ALL {
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        }
+        out
+    }
+
+    /// Return enabled targets in preferred order, falling back to all ordered targets if every item
+    /// was disabled so the dashboard always retains at least one target.
+    pub fn enabled(saved_order: &[String], disabled: &[String]) -> Vec<Self> {
+        let all = Self::ordered(saved_order);
+        let kept: Vec<Self> = all
+            .iter()
+            .copied()
+            .filter(|t| !disabled.iter().any(|d| d == t.id()))
+            .collect();
+        if kept.is_empty() { all } else { kept }
+    }
+}
+
+/// Service availability / regional unlock classification (aligned with FlClash).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ServiceProbeStatus {
+    Available,
+    Restricted,
+    DisallowedIsp,
+    Blocked,
+    UnsupportedRegion,
+    OriginalsOnly,
+    ComingSoon,
+    Unavailable,
+    Timeout,
+    Failed,
+}
+
+impl ServiceProbeStatus {
+    pub fn label_key(self) -> &'static str {
+        match self {
+            Self::Available => "clash.service.status_available",
+            Self::Restricted => "clash.service.status_restricted",
+            Self::DisallowedIsp => "clash.service.status_disallowed_isp",
+            Self::Blocked => "clash.service.status_blocked",
+            Self::UnsupportedRegion => "clash.service.status_unsupported_region",
+            Self::OriginalsOnly => "clash.service.status_originals_only",
+            Self::ComingSoon => "clash.service.status_coming_soon",
+            Self::Unavailable => "clash.service.status_unavailable",
+            Self::Timeout => "clash.service.status_timeout",
+            Self::Failed => "clash.service.status_failed",
+        }
+    }
+
+    pub fn is_available(self) -> bool {
+        matches!(self, Self::Available)
+    }
+
+    pub fn is_warning(self) -> bool {
+        matches!(
+            self,
+            Self::Restricted
+                | Self::DisallowedIsp
+                | Self::Blocked
+                | Self::UnsupportedRegion
+                | Self::OriginalsOnly
+                | Self::ComingSoon
+        )
+    }
+
+    pub fn is_error(self) -> bool {
+        matches!(self, Self::Unavailable | Self::Timeout | Self::Failed)
+    }
+}
+
+/// Result of checking a single service through Mihomo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceCheckItem {
+    pub target: ServiceTarget,
+    pub status: ServiceProbeStatus,
+    pub delay_ms: Option<u64>,
+    pub region: Option<String>,
+    pub ip: Option<String>,
+    pub exit_node: Option<String>,
+    pub checked_at: Instant,
+}
+
+/// Per-service live state tracked by the Mihomo TUI workspace.
+#[derive(Debug, Clone, Default)]
+pub struct ServiceEntryState {
+    pub probing: bool,
+    pub result: Option<ServiceCheckItem>,
+}
+
 /// Full immutable snapshot delivered by `ClashMonitor` to the TUI thread.
 #[derive(Debug, Clone, Default)]
 pub struct ClashSnapshot {
@@ -680,6 +915,38 @@ impl ClashSnapshot {
 
     pub fn active_profile(&self) -> Option<&ProfileSummary> {
         self.profiles.iter().find(|p| p.active)
+    }
+
+    /// Best available subscription quota for the active Mihomo session: prefers the active
+    /// profile's `subscription-userinfo` header and falls back to external `proxy-providers`
+    /// `subscriptionInfo` exposed by Mihomo's controller when the active profile has none.
+    pub fn effective_active_userinfo(&self) -> Option<(SubscriptionUserinfo, UserinfoSource)> {
+        if let Some(info) = self.active_profile().and_then(|p| p.userinfo) {
+            return Some((info, UserinfoSource::Profile));
+        }
+        let with_info: Vec<(&str, SubscriptionUserinfo)> = self
+            .proxy_providers
+            .iter()
+            .filter_map(|p| p.userinfo.map(|u| (p.name.as_str(), u)))
+            .collect();
+        match with_info.as_slice() {
+            [] => None,
+            [(name, info)] => Some((*info, UserinfoSource::Provider((*name).to_owned()))),
+            many => {
+                let mut agg = SubscriptionUserinfo::default();
+                let mut earliest_expire: Option<u64> = None;
+                for (_, u) in many {
+                    agg.upload = agg.upload.saturating_add(u.upload);
+                    agg.download = agg.download.saturating_add(u.download);
+                    agg.total = agg.total.saturating_add(u.total);
+                    if let Some(exp) = u.expire {
+                        earliest_expire = Some(earliest_expire.map_or(exp, |cur| cur.min(exp)));
+                    }
+                }
+                agg.expire = earliest_expire;
+                Some((agg, UserinfoSource::Providers(many.len())))
+            }
+        }
     }
 
     pub fn tcp_count(&self) -> usize {
@@ -955,6 +1222,135 @@ Subscription-Userinfo: upload=1073741824; download=2147483648; total=10737418240
         assert_eq!(info.used(), 3_221_225_472);
         assert!((info.ratio() - 0.3).abs() < 1e-6);
         assert_eq!(info.expire_date().as_deref(), Some("2026-11-19"));
+        assert_eq!(info.remaining(), 7_516_192_768);
+    }
+
+    #[test]
+    fn subscription_userinfo_handles_lenient_formats_ms_expire_and_fallback_headers() {
+        let info = SubscriptionUserinfo::parse_header(
+            "\"upload=1.5e3, download=2500.0, total=10000, expire=1795046400000\"",
+        )
+        .unwrap();
+        assert_eq!(info.upload, 1500);
+        assert_eq!(info.download, 2500);
+        assert_eq!(info.total, 10_000);
+        assert_eq!(info.used(), 4000);
+        assert_eq!(info.remaining(), 6000);
+        assert_eq!(info.expire, Some(1_795_046_400));
+        assert_eq!(info.days_until_expire(1_795_046_400 - 3 * 86_400), Some(3));
+
+        let no_exp =
+            SubscriptionUserinfo::parse_header("upload=100 download=200 total=1000 expire=")
+                .unwrap();
+        assert_eq!(no_exp.used(), 300);
+        assert_eq!(no_exp.expire, None);
+
+        let null_exp =
+            SubscriptionUserinfo::parse_header("upload=10; download=20; total=0; expire=null")
+                .unwrap();
+        assert_eq!(null_exp.used(), 30);
+        assert_eq!(null_exp.total, 0);
+        assert_eq!(null_exp.expire, None);
+
+        let fallback_headers =
+            "HTTP/1.1 200 OK\r\nX-Subscription-Userinfo: upload=50; download=70; total=500\r\n\r\n";
+        let extracted = SubscriptionUserinfo::extract_from_http_headers(fallback_headers).unwrap();
+        assert_eq!(extracted.used(), 120);
+        assert_eq!(extracted.total, 500);
+
+        // Canonical header takes precedence over fallback header even when fallback comes later.
+        let mixed = "HTTP/1.1 200 OK\r\nSubscription-Userinfo: upload=1; download=2; total=10\r\nProfile-Userinfo: upload=9; download=9; total=99\r\n\r\n";
+        let chosen = SubscriptionUserinfo::extract_from_http_headers(mixed).unwrap();
+        assert_eq!(chosen.total, 10);
+    }
+
+    #[test]
+    fn service_target_ordering_and_enabled_fallback_work() {
+        let custom = vec![
+            "claude".to_owned(),
+            "chatgpt".to_owned(),
+            "unknown".to_owned(),
+        ];
+        let ordered = ServiceTarget::ordered(&custom);
+        assert_eq!(ordered.len(), ServiceTarget::ALL.len());
+        assert_eq!(ordered[0], ServiceTarget::Claude);
+        assert_eq!(ordered[1], ServiceTarget::ChatGpt);
+        assert_eq!(ordered[2], ServiceTarget::Google);
+
+        let disabled = vec!["claude".to_owned(), "google".to_owned()];
+        let enabled = ServiceTarget::enabled(&custom, &disabled);
+        assert!(!enabled.contains(&ServiceTarget::Claude));
+        assert!(!enabled.contains(&ServiceTarget::Google));
+        assert_eq!(enabled[0], ServiceTarget::ChatGpt);
+
+        // Disabling every service safely falls back to the full ordered list.
+        let all_ids: Vec<String> = ServiceTarget::ALL
+            .iter()
+            .map(|t| t.id().to_owned())
+            .collect();
+        let fallback = ServiceTarget::enabled(&custom, &all_ids);
+        assert_eq!(fallback, ordered);
+    }
+
+    #[test]
+    fn effective_active_userinfo_prefers_profile_and_falls_back_to_providers() {
+        let mut snap = ClashSnapshot::default();
+        snap.profiles.push(ProfileSummary {
+            name: "main".into(),
+            host: "sub.example.net".into(),
+            is_local: false,
+            active: true,
+            updated: String::new(),
+            updated_epoch: None,
+            userinfo: None,
+            file_bytes: None,
+        });
+        assert!(snap.effective_active_userinfo().is_none());
+
+        snap.proxy_providers.push(ProxyProviderItem {
+            name: "NodePoolA".into(),
+            vehicle_type: "HTTP".into(),
+            node_count: 10,
+            updated_at: String::new(),
+            userinfo: Some(SubscriptionUserinfo {
+                upload: 100,
+                download: 200,
+                total: 1000,
+                expire: Some(1_800_000_000),
+            }),
+        });
+        let (info, src) = snap.effective_active_userinfo().unwrap();
+        assert_eq!(info.used(), 300);
+        assert_eq!(src, UserinfoSource::Provider("NodePoolA".into()));
+
+        snap.proxy_providers.push(ProxyProviderItem {
+            name: "NodePoolB".into(),
+            vehicle_type: "HTTP".into(),
+            node_count: 8,
+            updated_at: String::new(),
+            userinfo: Some(SubscriptionUserinfo {
+                upload: 50,
+                download: 150,
+                total: 500,
+                expire: Some(1_795_000_000),
+            }),
+        });
+        let (agg, src) = snap.effective_active_userinfo().unwrap();
+        assert_eq!(agg.used(), 500);
+        assert_eq!(agg.total, 1500);
+        assert_eq!(agg.expire, Some(1_795_000_000));
+        assert_eq!(src, UserinfoSource::Providers(2));
+
+        // Active profile's own header always wins over provider fallback.
+        snap.profiles[0].userinfo = Some(SubscriptionUserinfo {
+            upload: 10,
+            download: 20,
+            total: 100,
+            expire: None,
+        });
+        let (prof_info, src) = snap.effective_active_userinfo().unwrap();
+        assert_eq!(prof_info.total, 100);
+        assert_eq!(src, UserinfoSource::Profile);
     }
 
     #[test]

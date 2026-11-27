@@ -630,8 +630,8 @@ pub(in crate::tui) fn footer_pairs(app: &App) -> Vec<(&'static str, &str)> {
             if mobile {
                 vec![
                     ("v", i.text("clash.key.traffic_atlas")),
-                    ("g/t", i.text("clash.key.graph")),
                     ("m", i.text("clash.key.mode")),
+                    ("c", i.text("clash.key.services")),
                     ("i/N", i.text("clash.key.probe_exit")),
                     ("?", i.text("key.help")),
                 ]
@@ -639,9 +639,9 @@ pub(in crate::tui) fn footer_pairs(app: &App) -> Vec<(&'static str, &str)> {
                 vec![
                     (tab_key, i.text("clash.key.tabs")),
                     ("v", i.text("clash.key.traffic_atlas")),
-                    ("g/t/y", i.text("clash.key.graph")),
                     ("m", i.text("clash.key.mode")),
                     ("s/R", i.text("clash.key.stop_reload")),
+                    ("c", i.text("clash.key.services")),
                     ("i/N", i.text("clash.key.probe_exit")),
                     ("z", zoom_lbl),
                     ("?", i.text("key.help")),

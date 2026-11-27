@@ -5,13 +5,17 @@ use crate::{
         controller::DEFAULT_DELAY_URL,
         model::{
             ClashAvailability, ClashSnapshot, ClashTab, ConnectionItem, ExitProbeResult,
-            ProfileSummary, ProxyGroupItem, ProxyNodeItem, RuleItem,
+            ProfileSummary, ProxyGroupItem, ProxyNodeItem, RuleItem, ServiceEntryState,
+            ServiceTarget,
         },
         monitor::{ClashActionTag, ClashEvent},
     },
     tui::{input::InputBuffer, state::Tone},
 };
-use std::{cell::Cell, collections::BTreeSet};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 /// Visualization style for the real-time traffic waveform graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -253,6 +257,10 @@ pub(in crate::tui) enum ClashModal {
     OutboundIp {
         scroll: u16,
     },
+    ServiceStatus {
+        cursor: usize,
+        manage: bool,
+    },
     Confirm {
         title: String,
         message: String,
@@ -270,6 +278,7 @@ pub(in crate::tui) enum ToolEntry {
     ServiceStop,
     ServiceReload,
     OutboundIp,
+    ServiceStatus,
     SocksSecretCard,
     ViewLogs,
     CqsAction(&'static str),
@@ -299,6 +308,10 @@ impl ToolItem {
         Self {
             section: "core",
             entry: ToolEntry::OutboundIp,
+        },
+        Self {
+            section: "core",
+            entry: ToolEntry::ServiceStatus,
         },
         Self {
             section: "core",
@@ -333,6 +346,14 @@ impl ToolItem {
         Self {
             section: "settings",
             entry: ToolEntry::CqsAction("clash.dns.configure"),
+        },
+        Self {
+            section: "settings",
+            entry: ToolEntry::CqsAction("clash.dns.query"),
+        },
+        Self {
+            section: "settings",
+            entry: ToolEntry::CqsAction("clash.cache.flush"),
         },
         Self {
             section: "settings",
@@ -407,6 +428,12 @@ pub(in crate::tui) struct ClashState {
     pub exit_probe_generation: u64,
     pub hide_ip: bool,
     pub max_outbound_modal_scroll: Cell<u16>,
+    pub service_states: BTreeMap<ServiceTarget, ServiceEntryState>,
+    pub service_order: Vec<String>,
+    pub disabled_services: Vec<String>,
+    pub service_generation: u64,
+    pub userinfo_probing_profile: Option<String>,
+    pub userinfo_checked_profiles: BTreeSet<String>,
     pub traffic_mode: TrafficGraphMode,
     pub traffic_window: TrafficWindow,
     pub traffic_scale: TrafficScale,
@@ -480,6 +507,12 @@ impl Default for ClashState {
             exit_probe_generation: 0,
             hide_ip: false,
             max_outbound_modal_scroll: Cell::new(0),
+            service_states: BTreeMap::new(),
+            service_order: Vec::new(),
+            disabled_services: Vec::new(),
+            service_generation: 0,
+            userinfo_probing_profile: None,
+            userinfo_checked_profiles: BTreeSet::new(),
             traffic_mode: TrafficGraphMode::Mirror,
             traffic_window: TrafficWindow::Sec60,
             traffic_scale: TrafficScale::Linear,
@@ -558,6 +591,73 @@ impl ClashState {
         if self.hide_ip { "*****" } else { ip }
     }
 
+    pub fn ordered_services(&self) -> Vec<ServiceTarget> {
+        ServiceTarget::ordered(&self.service_order)
+    }
+
+    pub fn enabled_services(&self) -> Vec<ServiceTarget> {
+        ServiceTarget::enabled(&self.service_order, &self.disabled_services)
+    }
+
+    pub fn pinned_service_targets(&self, max_count: usize) -> Vec<ServiceTarget> {
+        self.enabled_services()
+            .into_iter()
+            .take(max_count.max(1))
+            .collect()
+    }
+
+    pub fn service_entry(&self, target: ServiceTarget) -> Option<&ServiceEntryState> {
+        self.service_states.get(&target)
+    }
+
+    pub fn any_service_probing(&self) -> bool {
+        self.service_states.values().any(|s| s.probing)
+    }
+
+    #[cfg(test)]
+    pub fn is_service_enabled(&self, target: ServiceTarget) -> bool {
+        self.enabled_services().contains(&target)
+    }
+
+    /// Toggle a service target in Manage view, refusing to disable the final remaining service.
+    pub fn toggle_service_enabled(&mut self, target: ServiceTarget) -> bool {
+        let enabled = self.enabled_services();
+        let currently_on = enabled.contains(&target);
+        if currently_on {
+            if enabled.len() <= 1 {
+                return false;
+            }
+            if !self.disabled_services.iter().any(|id| id == target.id()) {
+                self.disabled_services.push(target.id().to_owned());
+            }
+        } else {
+            self.disabled_services.retain(|id| id != target.id());
+        }
+        true
+    }
+
+    /// Reorder a service target up (`delta = -1`) or down (`delta = 1`) in `service_order`.
+    pub fn move_service_order(&mut self, index: usize, up: bool) -> Option<usize> {
+        let mut ordered = self.ordered_services();
+        let target_idx = if up {
+            index.checked_sub(1)?
+        } else {
+            let next = index + 1;
+            if next >= ordered.len() {
+                return None;
+            }
+            next
+        };
+        ordered.swap(index, target_idx);
+        self.service_order = ordered.into_iter().map(|t| t.id().to_owned()).collect();
+        Some(target_idx)
+    }
+
+    pub fn reset_service_prefs(&mut self) {
+        self.service_order.clear();
+        self.disabled_services.clear();
+    }
+
     pub fn is_animating(&self) -> bool {
         matches!(self.snapshot.availability, ClashAvailability::Loading)
             || self.exit_probing
@@ -565,6 +665,8 @@ impl ClashState {
                 .exit_probe
                 .as_ref()
                 .is_some_and(ExitProbeResult::is_quality_loading)
+            || self.any_service_probing()
+            || self.userinfo_probing_profile.is_some()
             || !self.testing_groups.is_empty()
             || !self.testing_nodes.is_empty()
             || !self.busy_profiles.is_empty()
@@ -932,6 +1034,7 @@ impl ClashState {
                     self.exit_probe = None;
                     self.exit_probing = false;
                     self.exit_probe_error = None;
+                    self.service_states.clear();
                 }
                 if let Some(name) = selected_group_name {
                     let groups = self.visible_groups();
@@ -940,6 +1043,22 @@ impl ClashState {
                     }
                 }
                 self.clamp_cursors();
+                None
+            }
+            ClashEvent::NodeDelayTick {
+                group: _,
+                node,
+                delay_ms,
+                ..
+            } => {
+                for g in &mut self.snapshot.groups {
+                    for m in &mut g.members {
+                        if m.name == node {
+                            m.delay_ms = delay_ms;
+                            m.tested = true;
+                        }
+                    }
+                }
                 None
             }
             ClashEvent::GroupDelayDone { group, result } => {
@@ -1183,6 +1302,101 @@ impl ClashState {
                 }
                 None
             }
+            ClashEvent::ServiceCheckStarted {
+                generation,
+                targets,
+            } => {
+                if generation < self.service_generation {
+                    return None;
+                }
+                if generation > self.service_generation {
+                    for entry in self.service_states.values_mut() {
+                        entry.probing = false;
+                    }
+                    self.service_generation = generation;
+                }
+                for target in targets {
+                    self.service_states.entry(target).or_default().probing = true;
+                }
+                None
+            }
+            ClashEvent::ServiceCheckItemDone { generation, item } => {
+                if generation < self.service_generation {
+                    return None;
+                }
+                self.service_generation = generation;
+                if let Some(probe) = &mut self.exit_probe {
+                    match item.target {
+                        ServiceTarget::Google => {
+                            probe.google_ms = item
+                                .status
+                                .is_available()
+                                .then_some(item.delay_ms)
+                                .flatten();
+                        }
+                        ServiceTarget::GitHub => {
+                            probe.github_ms = item
+                                .status
+                                .is_available()
+                                .then_some(item.delay_ms)
+                                .flatten();
+                        }
+                        _ => {}
+                    }
+                }
+                let entry = self.service_states.entry(item.target).or_default();
+                entry.probing = false;
+                entry.result = Some(item);
+                None
+            }
+            ClashEvent::ServiceCheckFinished { generation, manual } => {
+                if generation < self.service_generation {
+                    return None;
+                }
+                for entry in self.service_states.values_mut() {
+                    entry.probing = false;
+                }
+                if manual {
+                    let enabled = self.enabled_services();
+                    let checked: Vec<_> = enabled
+                        .iter()
+                        .filter_map(|t| self.service_states.get(t).and_then(|s| s.result.as_ref()))
+                        .collect();
+                    let ok = checked.iter().filter(|r| r.status.is_available()).count();
+                    let total = checked.len();
+                    if total > 0 {
+                        return Some((
+                            i18n.format(
+                                "clash.toast.services_checked",
+                                &[("ok", &ok.to_string()), ("total", &total.to_string())],
+                            ),
+                            if ok == total {
+                                Tone::Success
+                            } else {
+                                Tone::Warning
+                            },
+                        ));
+                    }
+                }
+                None
+            }
+            ClashEvent::ProfileUserinfoState {
+                name,
+                probing,
+                found,
+            } => {
+                if probing {
+                    self.userinfo_probing_profile = Some(name);
+                } else {
+                    if self.userinfo_probing_profile.as_deref() == Some(name.as_str()) {
+                        self.userinfo_probing_profile = None;
+                    }
+                    if found.is_some() {
+                        self.userinfo_checked_profiles.insert(name);
+                    }
+                }
+                None
+            }
             ClashEvent::LogsLoaded(result) => {
                 self.log_loading = false;
                 match result {
@@ -1196,6 +1410,16 @@ impl ClashState {
                         None
                     }
                 }
+            }
+            ClashEvent::LogStreamLine(line) => {
+                self.log_loading = false;
+                self.log_error = None;
+                self.logs.push(line);
+                if self.logs.len() > crate::ops::clash::model::MAX_CLASH_LOG_LINES {
+                    let excess = self.logs.len() - crate::ops::clash::model::MAX_CLASH_LOG_LINES;
+                    self.logs.drain(..excess);
+                }
+                None
             }
         }
     }
@@ -1230,6 +1454,7 @@ pub(in crate::tui) fn tool_entry_title(entry: ToolEntry, i18n: &crate::i18n::I18
         ToolEntry::ServiceStop => i18n.text("action.clash.stop").to_owned(),
         ToolEntry::ServiceReload => i18n.text("action.clash.reload").to_owned(),
         ToolEntry::OutboundIp => i18n.text("clash.outbound.title").to_owned(),
+        ToolEntry::ServiceStatus => i18n.text("clash.service.title").to_owned(),
         ToolEntry::SocksSecretCard => i18n.text("cmd.socks_secret").to_owned(),
         ToolEntry::ViewLogs => i18n.text("clash.tools.view_logs").to_owned(),
         ToolEntry::CqsAction(id) => i18n.text(&format!("action.{id}")).to_owned(),

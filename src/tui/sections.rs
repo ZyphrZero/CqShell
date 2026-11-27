@@ -82,6 +82,8 @@ const SECTIONS: &[(&str, &[Section])] = &[
                     "clash.settings.configure",
                     "clash.dns.status",
                     "clash.dns.configure",
+                    "clash.dns.query",
+                    "clash.cache.flush",
                     "clash.mixin.status",
                     "clash.mixin.reset",
                 ],

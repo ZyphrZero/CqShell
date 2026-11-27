@@ -2232,7 +2232,7 @@ fn render_clash_frame_text(app: &mut App, w: u16, h: u16) -> String {
 #[test]
 fn clash_workspace_renders_all_tabs_modals_states_and_pure_ascii_plain_mode() {
     use super::clash::{
-        fixture::{sample_probe, sample_snapshot},
+        fixture::{sample_probe, sample_service_states, sample_snapshot},
         state::{ClashConfirmAction, ClashModal},
     };
     use crate::ops::clash::model::{ClashAvailability, ClashTab};
@@ -2242,6 +2242,7 @@ fn clash_workspace_renders_all_tabs_modals_states_and_pure_ascii_plain_mode() {
         let (_temp, mut app) = test_app(locale);
         app.clash.snapshot = sample_snapshot();
         app.clash.exit_probe = Some(sample_probe());
+        app.clash.service_states = sample_service_states();
         app.clash.logs = vec![
             "time=\"2026-11-26T16:00:00Z\" level=info msg=\"Start Mihomo\"".into(),
             "time=\"2026-11-26T16:00:02Z\" level=warning msg=\"DNS fallback\"".into(),
@@ -2294,6 +2295,14 @@ fn clash_workspace_renders_all_tabs_modals_states_and_pure_ascii_plain_mode() {
                     cursor: 0,
                 },
                 ClashModal::OutboundIp { scroll: 0 },
+                ClashModal::ServiceStatus {
+                    cursor: 0,
+                    manage: false,
+                },
+                ClashModal::ServiceStatus {
+                    cursor: 0,
+                    manage: true,
+                },
                 ClashModal::Confirm {
                     title: "Confirm".into(),
                     message: "Remove profile?".into(),
@@ -2334,6 +2343,7 @@ fn clash_workspace_renders_all_tabs_modals_states_and_pure_ascii_plain_mode() {
     let (_temp, mut app) = test_app("en-US");
     app.clash.snapshot = sample_snapshot();
     app.clash.exit_probe = Some(sample_probe());
+    app.clash.service_states = sample_service_states();
     app.clash.logs = vec!["level=info msg=\"plain ascii check\"".into()];
     app.preview_theme("plain", Background::Detected((0, 0, 0)))
         .unwrap();
@@ -2400,6 +2410,14 @@ fn clash_workspace_renders_all_tabs_modals_states_and_pure_ascii_plain_mode() {
                 cursor: 0,
             },
             ClashModal::OutboundIp { scroll: 0 },
+            ClashModal::ServiceStatus {
+                cursor: 0,
+                manage: false,
+            },
+            ClashModal::ServiceStatus {
+                cursor: 0,
+                manage: true,
+            },
             ClashModal::Confirm {
                 title: "Confirm".into(),
                 message: "Close all active connections?".into(),
@@ -3500,6 +3518,281 @@ fn clash_controller_unconfigured_one_click_enable_custom_form_and_pure_ascii_wor
             assert!(
                 text.is_ascii(),
                 "non-ASCII in plain ControllerUnconfigured (busy={busy}) at {w}x{h}:\n{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn clash_service_status_modal_management_and_profile_usage_fallback_work() {
+    use super::clash::{
+        fixture::{sample_probe, sample_service_states, sample_snapshot},
+        layout::{ClashBodyGeom, ClashModalGeometry},
+        state::ClashModal,
+    };
+    use crate::{
+        config::Preferences,
+        ops::clash::{
+            model::{
+                ClashTab, ServiceCheckItem, ServiceProbeStatus, ServiceTarget, SubscriptionUserinfo,
+            },
+            monitor::{ClashEvent, ClashMonitorCmd},
+        },
+    };
+    use std::time::Instant;
+
+    let (_temp, mut app) = test_app("zh-CN");
+    app.clash.snapshot = sample_snapshot();
+    app.clash.exit_probe = Some(sample_probe());
+    app.open_clash(ClashTab::Overview, false, false);
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+
+    // 1. Progressive ServiceCheck events + stale generation guard + exit_probe latency sync
+    app.clash.apply_event(
+        ClashEvent::ServiceCheckStarted {
+            generation: 2,
+            targets: vec![ServiceTarget::Google, ServiceTarget::GitHub],
+        },
+        &app.ctx.i18n,
+    );
+    assert!(app.clash.any_service_probing());
+    assert!(app.clash.is_animating());
+
+    // Stale generation=1 item must be ignored
+    app.clash.apply_event(
+        ClashEvent::ServiceCheckItemDone {
+            generation: 1,
+            item: ServiceCheckItem {
+                target: ServiceTarget::Google,
+                status: ServiceProbeStatus::Failed,
+                delay_ms: None,
+                region: None,
+                ip: None,
+                exit_node: None,
+                checked_at: Instant::now(),
+            },
+        },
+        &app.ctx.i18n,
+    );
+    assert!(
+        app.clash
+            .service_entry(ServiceTarget::Google)
+            .unwrap()
+            .result
+            .is_none()
+    );
+
+    app.clash.apply_event(
+        ClashEvent::ServiceCheckItemDone {
+            generation: 2,
+            item: ServiceCheckItem {
+                target: ServiceTarget::Google,
+                status: ServiceProbeStatus::Available,
+                delay_ms: Some(182),
+                region: Some("US".into()),
+                ip: Some("198.51.100.44".into()),
+                exit_node: Some("JP-Opt-02".into()),
+                checked_at: Instant::now(),
+            },
+        },
+        &app.ctx.i18n,
+    );
+    app.clash.apply_event(
+        ClashEvent::ServiceCheckItemDone {
+            generation: 2,
+            item: ServiceCheckItem {
+                target: ServiceTarget::GitHub,
+                status: ServiceProbeStatus::Available,
+                delay_ms: Some(245),
+                region: Some("SG".into()),
+                ip: Some("203.0.113.106".into()),
+                exit_node: Some("SG-AnyTLS".into()),
+                checked_at: Instant::now(),
+            },
+        },
+        &app.ctx.i18n,
+    );
+    let toast = app.clash.apply_event(
+        ClashEvent::ServiceCheckFinished {
+            generation: 2,
+            manual: true,
+        },
+        &app.ctx.i18n,
+    );
+    assert!(toast.is_some());
+    assert!(!app.clash.any_service_probing());
+    assert_eq!(app.clash.exit_probe.as_ref().unwrap().google_ms, Some(182));
+    assert_eq!(app.clash.exit_probe.as_ref().unwrap().github_ms, Some(245));
+
+    // 2. Overview services card renders pinned services + [c] button; clicking pinned cell opens modal focused on it
+    let ov_text = render_clash_frame_text(&mut app, 120, 36);
+    for needle in [
+        "服务状态",
+        "2/2 正常",
+        "Google",
+        "182ms",
+        "GitHub",
+        "[c] 服务检测",
+    ] {
+        assert!(
+            ov_text.contains(needle),
+            "Overview services card missing {needle:?}:\n{ov_text}"
+        );
+    }
+
+    let regions = LayoutRegions::compute(area, &app);
+    let Some(ClashBodyGeom::Overview(ov)) = regions.clash.as_ref().map(|g| &g.body) else {
+        panic!("expected Overview geometry");
+    };
+    let (_, second_target) = ov.service_cell_hits[1];
+    assert_eq!(second_target, ServiceTarget::GitHub);
+    let second_rect = ov.service_cell_hits[1].0;
+    app.handle_mouse(click(second_rect.x + 1, second_rect.y), area)
+        .unwrap();
+    assert!(matches!(
+        app.clash.modal,
+        Some(ClashModal::ServiceStatus {
+            cursor: 1,
+            manage: false
+        })
+    ));
+
+    // 3. ServiceStatus modal actions: Enter checks focused, `a` checks all, `y` copies IP safely under hide_ip
+    let single = app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(matches!(
+        single,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::CheckServices { ref targets, manual: true })
+        if targets == &[ServiceTarget::GitHub]
+    ));
+    let all = app.handle_key(key(KeyCode::Char('a'))).unwrap();
+    assert!(matches!(
+        all,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::CheckServices { ref targets, manual: true })
+        if targets.len() == ServiceTarget::ALL.len()
+    ));
+
+    app.clash.hide_ip = true;
+    let masked_modal = render_clash_frame_text(&mut app, 120, 36);
+    assert!(masked_modal.contains("*****"));
+    assert!(!masked_modal.contains("203.0.113.106"));
+    let copy_eff = app.handle_key(key(KeyCode::Char('y'))).unwrap();
+    assert!(matches!(
+        copy_eff,
+        super::state::Effect::Copy(ref v) if v == "203.0.113.106"
+    ));
+    assert!(
+        !app.toast
+            .as_ref()
+            .is_some_and(|t| t.text.contains("203.0.113.106"))
+    );
+    app.clash.hide_ip = false;
+
+    // 4. Manage mode (`m`): reorder (`K`), toggle (`Space`), last-enabled guard, reset (`r`), and persistence
+    app.handle_key(key(KeyCode::Char('m'))).unwrap();
+    assert!(matches!(
+        app.clash.modal,
+        Some(ClashModal::ServiceStatus {
+            cursor: 1,
+            manage: true
+        })
+    ));
+    let move_up = app.handle_key(key(KeyCode::Char('K'))).unwrap();
+    assert!(matches!(
+        move_up,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SetPinnedServices(ref list))
+        if list.first() == Some(&ServiceTarget::GitHub)
+    ));
+    let toggle_off = app.handle_key(key(KeyCode::Char(' '))).unwrap();
+    assert!(matches!(
+        toggle_off,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SetPinnedServices(_))
+    ));
+    assert!(!app.clash.is_service_enabled(ServiceTarget::GitHub));
+    let saved = Preferences::read(&app.ctx.paths.preferences, true).unwrap();
+    assert_eq!(
+        saved.clash_service_order.first().map(String::as_str),
+        Some("github")
+    );
+    assert_eq!(saved.clash_disabled_services, vec!["github".to_owned()]);
+
+    // Guard prevents disabling the final remaining service
+    for target in ServiceTarget::ALL {
+        if target != ServiceTarget::Google && app.clash.is_service_enabled(target) {
+            let _ = app.clash.toggle_service_enabled(target);
+        }
+    }
+    assert_eq!(app.clash.enabled_services(), vec![ServiceTarget::Google]);
+    assert!(!app.clash.toggle_service_enabled(ServiceTarget::Google));
+
+    // Reset restores defaults
+    let reset_eff = app.handle_key(key(KeyCode::Char('r'))).unwrap();
+    assert!(matches!(
+        reset_eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SetPinnedServices(ref list))
+        if list.first() == Some(&ServiceTarget::Google)
+    ));
+    assert_eq!(app.clash.enabled_services().len(), ServiceTarget::ALL.len());
+
+    // Close modal via shared ClashModalGeometry button
+    let mgeom = ClashModalGeometry::compute(
+        area,
+        app.clash.modal.as_ref().unwrap(),
+        &app.clash,
+        &app.ctx.i18n,
+    );
+    let close_btn = mgeom.service_close_btn.expect("service_close_btn");
+    app.handle_mouse(click(close_btn.x + 1, close_btn.y), area)
+        .unwrap();
+    assert!(app.clash.modal.is_none());
+
+    // 5. Profile usage fallback to external proxy_providers & detailed Profiles inspector
+    app.clash.snapshot.profiles[0].userinfo = None;
+    app.clash.snapshot.proxy_providers[0].userinfo = Some(SubscriptionUserinfo {
+        upload: 200_000_000_000,
+        download: 800_000_000_000,
+        total: 1_600_000_000_000,
+        expire: None,
+    });
+    let ov_fallback = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        ov_fallback.contains("63% 已用") && ov_fallback.contains("AirportNodes"),
+        "Overview profile card must fall back to proxy provider userinfo:\n{ov_fallback}"
+    );
+    app.clash.set_tab(ClashTab::Profiles);
+    let prof_text = render_clash_frame_text(&mut app, 120, 36);
+    for needle in ["已上传", "已下载", "剩余", "长期有效", "AirportNodes"] {
+        assert!(
+            prof_text.contains(needle),
+            "Profiles inspector missing usage detail {needle:?}:\n{prof_text}"
+        );
+    }
+
+    // 6. Plain ASCII theme in en-US is 100% pure 7-bit ASCII across Overview, Profiles, and ServiceStatus modal
+    let (_temp_en, mut app_en) = test_app("en-US");
+    app_en.clash.snapshot = sample_snapshot();
+    app_en.clash.service_states = sample_service_states();
+    app_en
+        .preview_theme("plain", Background::Detected((0, 0, 0)))
+        .unwrap();
+    app_en.open_clash(ClashTab::Overview, false, false);
+    for (w, h) in [(120u16, 36u16), (80, 24), (40, 16)] {
+        for modal in [
+            None,
+            Some(ClashModal::ServiceStatus {
+                cursor: 0,
+                manage: false,
+            }),
+            Some(ClashModal::ServiceStatus {
+                cursor: 0,
+                manage: true,
+            }),
+        ] {
+            app_en.clash.modal = modal;
+            let text = render_clash_frame_text(&mut app_en, w, h);
+            assert!(
+                text.is_ascii(),
+                "non-ASCII in plain ServiceStatus/Overview at {w}x{h}:\n{text}"
             );
         }
     }

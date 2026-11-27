@@ -58,6 +58,7 @@ clash.start            Start Mihomo
   Validate the base and Mixin YAML, publish a runtime configuration atomically, then start Mihomo with an ownership-checked PID record.
 clash.stop             Stop Mihomo
   Send SIGTERM to the CqShell-owned Mihomo process and wait for it to exit.
+  stop_force=off ["off", "on"]
 clash.reload           Hot-reload configuration
   Rebuild and validate the runtime YAML with Mihomo, atomically publish it, and trigger PUT /configs?force=true without restarting the running process. Rolls back on failure.
 clash.mode             Switch routing mode
@@ -132,13 +133,22 @@ clash.settings.configure Core proxy settings
   clash_ipv6=off ["off", "on"]
   sniffer=on ["on", "off"]
   log_level=info ["info", "warning", "error", "debug", "silent"]
+  tcp_concurrent=on ["on", "off"]
+  unified_delay=on ["on", "off"]
+  find_process_mode=strict ["strict", "always", "off"]
 clash.dns.status       DNS configuration status
   Read the effective Mihomo DNS state, enhanced-mode, IPv6 toggle, nameservers and fallback count.
 clash.dns.configure    Configure DNS preset
   Configure fake-ip, redir-host or off with China DoH (Alibaba/DNSPod + Cloudflare/Google fallback) or Global DoH presets and standard fake-ip-filter, automatically hot-reloading or restarting Mihomo when running.
   dns_mode=fake-ip ["fake-ip", "redir-host", "off"]
-  dns_preset=china ["china", "global"]
+  dns_preset=china ["china", "global", "keep"]
   dns_ipv6=off ["off", "on"]
+clash.dns.query        Query Mihomo DNS
+  Resolve a domain name directly through Mihomo's built-in DNS engine (GET /dns/query) to verify fake-ip or upstream answers.
+  dns_domain=example.com []
+  dns_record_type=A ["A", "AAAA", "CNAME", "TXT", "MX", "NS", "HTTPS"]
+clash.cache.flush      Flush Fake-IP and DNS caches
+  Clear Mihomo's in-memory Fake-IP pool and DNS cache via the REST controller without restarting the daemon.
 clash.mixin.status     View Mixin overrides
   Display persistent Mixin overrides with controller secrets and proxy authentication credentials redacted.
 clash.mixin.reset      Reset Mixin overrides
@@ -168,6 +178,8 @@ clash.tun.configure    Configure TUN mode
   tun_device=cqs-tun []
   auto_route=on ["on", "off"]
   dns_hijack=on ["on", "off"]
+  tun_strict_route=off ["off", "on"]
+  tun_bypass_private=on ["on", "off"]
 clash.logs             View / follow Mihomo logs
   Read a bounded log tail and redact secrets, proxy credentials and subscription queries; following can be cancelled.
   lines=100 []

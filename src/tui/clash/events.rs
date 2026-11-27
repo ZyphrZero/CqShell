@@ -9,7 +9,7 @@ use crate::{
     error::Result,
     ops::clash::{
         controller::{validate_delay_timeout, validate_test_url},
-        model::{ClashAvailability, ClashTab},
+        model::{ClashAvailability, ClashTab, ServiceTarget},
         monitor::ClashMonitorCmd,
     },
     tui::{
@@ -388,6 +388,81 @@ impl App {
         Effect::None
     }
 
+    fn open_service_status_modal(&mut self, focus: Option<ServiceTarget>) -> Effect {
+        let enabled = self.clash.enabled_services();
+        let cursor = focus
+            .and_then(|t| enabled.iter().position(|&x| x == t))
+            .unwrap_or(0);
+        self.clash.modal = Some(ClashModal::ServiceStatus {
+            cursor,
+            manage: false,
+        });
+        if !self.clash.snapshot.availability.is_ready() || self.clash.any_service_probing() {
+            return Effect::None;
+        }
+        if let Some(target) = focus {
+            if self
+                .clash
+                .service_entry(target)
+                .is_none_or(|e| !e.probing && e.result.is_none())
+            {
+                return self.trigger_service_check(vec![target], false);
+            }
+            return Effect::None;
+        }
+        let any_checked = enabled.iter().any(|t| {
+            self.clash
+                .service_entry(*t)
+                .is_some_and(|e| e.probing || e.result.is_some())
+        });
+        if !any_checked {
+            let pinned = self.clash.pinned_service_targets(4);
+            return self.trigger_service_check(pinned, false);
+        }
+        Effect::None
+    }
+
+    fn trigger_service_check(&mut self, targets: Vec<ServiceTarget>, manual: bool) -> Effect {
+        if targets.is_empty() {
+            return Effect::None;
+        }
+        if !self.clash.snapshot.availability.is_ready() {
+            self.clash_toast_key("clash.toast.service_need_running", Tone::Warning);
+            return Effect::None;
+        }
+        for &target in &targets {
+            self.clash.service_states.entry(target).or_default().probing = true;
+        }
+        Effect::ClashCmd(ClashMonitorCmd::CheckServices { targets, manual })
+    }
+
+    fn sync_service_prefs(&mut self) -> Effect {
+        self.persist_clash_service_prefs();
+        Effect::ClashCmd(ClashMonitorCmd::SetPinnedServices(
+            self.clash.pinned_service_targets(4),
+        ))
+    }
+
+    fn copy_focused_service_ip(&mut self, cursor: usize) -> Effect {
+        let enabled = self.clash.enabled_services();
+        if let Some(&target) = enabled.get(cursor)
+            && let Some(ip) = self
+                .clash
+                .service_entry(target)
+                .and_then(|e| e.result.as_ref())
+                .and_then(|r| r.ip.as_deref())
+                .map(ToOwned::to_owned)
+        {
+            let msg = self.ctx.i18n.format(
+                "clash.toast.service_ip_copied",
+                &[("service", target.label())],
+            );
+            self.toast(msg, Tone::Success);
+            return Effect::Copy(ip);
+        }
+        Effect::None
+    }
+
     fn execute_outbound_row_action(&mut self, action: OutboundRowAction) -> Effect {
         match action {
             OutboundRowAction::CopyIp => {
@@ -578,6 +653,9 @@ impl App {
             }
             KeyCode::Char('i' | 'I') => {
                 return Ok(self.open_outbound_ip_modal());
+            }
+            KeyCode::Char('c' | 'C') => {
+                return Ok(self.open_service_status_modal(None));
             }
             KeyCode::Char('N') => {
                 self.clash.exit_probing = true;
@@ -1031,6 +1109,7 @@ impl App {
             ToolEntry::ServiceStop => self.clash_trigger_action("clash.stop"),
             ToolEntry::ServiceReload => self.clash_trigger_action("clash.reload"),
             ToolEntry::OutboundIp => Ok(self.open_outbound_ip_modal()),
+            ToolEntry::ServiceStatus => Ok(self.open_service_status_modal(None)),
             ToolEntry::SocksSecretCard => self.open_socks_secret_modal(),
             ToolEntry::ViewLogs => {
                 self.clash.tools_log_mode = true;
@@ -1151,7 +1230,14 @@ impl App {
         let mut run_confirm = false;
         let mut outbound_refresh = false;
         let mut outbound_action: Option<OutboundRowAction> = None;
+        let mut service_check: Option<Vec<ServiceTarget>> = None;
+        let mut service_copy_cursor: Option<usize> = None;
+        let mut service_toggle: Option<ServiceTarget> = None;
+        let mut service_move: Option<(usize, bool)> = None;
+        let mut service_reset = false;
         let max_outbound_scroll = self.clash.max_outbound_modal_scroll.get();
+        let ordered_services = self.clash.ordered_services();
+        let enabled_services = self.clash.enabled_services();
 
         let Some(modal) = self.clash.modal.as_mut() else {
             return Ok(Effect::None);
@@ -1304,6 +1390,101 @@ impl App {
                 }
                 _ => {}
             },
+            ClashModal::ServiceStatus { cursor, manage } => {
+                let len = if *manage {
+                    ordered_services.len()
+                } else {
+                    enabled_services.len()
+                };
+                if len > 0 && *cursor >= len {
+                    *cursor = len - 1;
+                }
+                match key.code {
+                    KeyCode::Esc => {
+                        if *manage {
+                            let focused = ordered_services.get(*cursor).copied();
+                            *manage = false;
+                            *cursor = focused
+                                .and_then(|t| enabled_services.iter().position(|&x| x == t))
+                                .unwrap_or(0);
+                        } else {
+                            close_modal = true;
+                        }
+                    }
+                    KeyCode::Char('q' | 'Q') => {
+                        close_modal = true;
+                    }
+                    KeyCode::Char('c' | 'C') if !*manage => {
+                        close_modal = true;
+                    }
+                    KeyCode::Char('m' | 'M') | KeyCode::Tab => {
+                        let focused = if *manage {
+                            ordered_services.get(*cursor).copied()
+                        } else {
+                            enabled_services.get(*cursor).copied()
+                        };
+                        *manage = !*manage;
+                        let next_list = if *manage {
+                            &ordered_services
+                        } else {
+                            &enabled_services
+                        };
+                        *cursor = focused
+                            .and_then(|t| next_list.iter().position(|&x| x == t))
+                            .unwrap_or(0);
+                    }
+                    KeyCode::Up if *manage && key.modifiers.contains(KeyModifiers::ALT) => {
+                        service_move = Some((*cursor, true));
+                    }
+                    KeyCode::Down if *manage && key.modifiers.contains(KeyModifiers::ALT) => {
+                        service_move = Some((*cursor, false));
+                    }
+                    KeyCode::Char('K' | '[') if *manage => {
+                        service_move = Some((*cursor, true));
+                    }
+                    KeyCode::Char('J' | ']') if *manage => {
+                        service_move = Some((*cursor, false));
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if len > 0 => {
+                        *cursor = cursor.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') if len > 0 => {
+                        *cursor = (*cursor + 1).min(len - 1);
+                    }
+                    KeyCode::PageUp if len > 0 => {
+                        *cursor = cursor.saturating_sub(6);
+                    }
+                    KeyCode::PageDown if len > 0 => {
+                        *cursor = (*cursor + 6).min(len - 1);
+                    }
+                    KeyCode::Home => {
+                        *cursor = 0;
+                    }
+                    KeyCode::End if len > 0 => {
+                        *cursor = len - 1;
+                    }
+                    KeyCode::Char(' ') | KeyCode::Enter if *manage => {
+                        if let Some(&target) = ordered_services.get(*cursor) {
+                            service_toggle = Some(target);
+                        }
+                    }
+                    KeyCode::Char('r' | 'R') if *manage => {
+                        service_reset = true;
+                    }
+                    KeyCode::Enter | KeyCode::Char('r' | 'R') if !*manage => {
+                        if let Some(&target) = enabled_services.get(*cursor) {
+                            service_check = Some(vec![target]);
+                        }
+                    }
+                    KeyCode::Char('a' | 'A' | 't') if !*manage => {
+                        service_check = Some(enabled_services.clone());
+                    }
+                    KeyCode::Char('y' | 'Y') if !*manage => {
+                        service_copy_cursor = Some(*cursor);
+                    }
+                    _ => {}
+                }
+            }
             ClashModal::Confirm { accept, .. } => match key.code {
                 KeyCode::Esc | KeyCode::Char('n' | 'N') => {
                     close_modal = true;
@@ -1335,6 +1516,36 @@ impl App {
         }
         if let Some(action) = outbound_action {
             return Ok(self.execute_outbound_row_action(action));
+        }
+        if let Some(targets) = service_check {
+            return Ok(self.trigger_service_check(targets, true));
+        }
+        if let Some(cur) = service_copy_cursor {
+            return Ok(self.copy_focused_service_ip(cur));
+        }
+        if let Some(target) = service_toggle {
+            if self.clash.toggle_service_enabled(target) {
+                return Ok(self.sync_service_prefs());
+            }
+            self.clash_toast_key("clash.toast.service_keep_one", Tone::Warning);
+            return Ok(Effect::None);
+        }
+        if let Some((idx, up)) = service_move {
+            if let Some(next_idx) = self.clash.move_service_order(idx, up) {
+                if let Some(ClashModal::ServiceStatus { cursor, .. }) = self.clash.modal.as_mut() {
+                    *cursor = next_idx;
+                }
+                return Ok(self.sync_service_prefs());
+            }
+            return Ok(Effect::None);
+        }
+        if service_reset {
+            self.clash.reset_service_prefs();
+            if let Some(ClashModal::ServiceStatus { cursor, .. }) = self.clash.modal.as_mut() {
+                *cursor = 0;
+            }
+            self.clash_toast_key("clash.toast.service_prefs_reset", Tone::Info);
+            return Ok(self.sync_service_prefs());
         }
         if let Some((u, ms)) = save_delay {
             self.clash.delay_url = u;
@@ -1401,6 +1612,7 @@ impl App {
             let groups_len = self.clash.visible_groups().len();
             let pp_len = self.clash.snapshot.proxy_providers.len();
             let rp_len = self.clash.snapshot.rule_providers.len();
+            let enabled_services_len = self.clash.enabled_services().len();
             match self.clash.modal.as_mut() {
                 Some(ClashModal::GroupPicker { cursor }) if groups_len > 0 => {
                     *cursor = if up {
@@ -1426,6 +1638,20 @@ impl App {
                     } else {
                         scroll.saturating_add(2).min(max_s)
                     };
+                }
+                Some(ClashModal::ServiceStatus { cursor, manage }) => {
+                    let len = if *manage {
+                        ServiceTarget::ALL.len()
+                    } else {
+                        enabled_services_len
+                    };
+                    if len > 0 {
+                        *cursor = if up {
+                            cursor.saturating_sub(1)
+                        } else {
+                            (*cursor + 1).min(len - 1)
+                        };
+                    }
                 }
                 _ => {}
             }
@@ -1515,6 +1741,88 @@ impl App {
                 for (rect, action) in geom.outbound_row_hits {
                     if rect.contains(pos) {
                         return Ok(self.execute_outbound_row_action(action));
+                    }
+                }
+            }
+            ClashModal::ServiceStatus { cursor, manage } => {
+                if geom.service_close_btn.is_some_and(|r| r.contains(pos)) {
+                    self.clash.modal = None;
+                    return Ok(Effect::None);
+                }
+                if geom.service_manage_btn.is_some_and(|r| r.contains(pos)) {
+                    let ordered = self.clash.ordered_services();
+                    let enabled = self.clash.enabled_services();
+                    let focused = if manage {
+                        ordered.get(cursor).copied()
+                    } else {
+                        enabled.get(cursor).copied()
+                    };
+                    let next_manage = !manage;
+                    let next_list = if next_manage { &ordered } else { &enabled };
+                    let next_cur = focused
+                        .and_then(|t| next_list.iter().position(|&x| x == t))
+                        .unwrap_or(0);
+                    self.clash.modal = Some(ClashModal::ServiceStatus {
+                        cursor: next_cur,
+                        manage: next_manage,
+                    });
+                    return Ok(Effect::None);
+                }
+                if geom.service_check_btn.is_some_and(|r| r.contains(pos)) {
+                    if manage {
+                        let ordered = self.clash.ordered_services();
+                        if let Some(&target) = ordered.get(cursor) {
+                            if self.clash.toggle_service_enabled(target) {
+                                return Ok(self.sync_service_prefs());
+                            }
+                            self.clash_toast_key("clash.toast.service_keep_one", Tone::Warning);
+                        }
+                        return Ok(Effect::None);
+                    }
+                    let enabled = self.clash.enabled_services();
+                    if let Some(&target) = enabled.get(cursor) {
+                        return Ok(self.trigger_service_check(vec![target], true));
+                    }
+                    return Ok(Effect::None);
+                }
+                if geom.service_check_all_btn.is_some_and(|r| r.contains(pos)) {
+                    if manage {
+                        self.clash.reset_service_prefs();
+                        self.clash.modal = Some(ClashModal::ServiceStatus {
+                            cursor: 0,
+                            manage: true,
+                        });
+                        self.clash_toast_key("clash.toast.service_prefs_reset", Tone::Info);
+                        return Ok(self.sync_service_prefs());
+                    }
+                    let enabled = self.clash.enabled_services();
+                    return Ok(self.trigger_service_check(enabled, true));
+                }
+                if !manage && geom.service_copy_ip_btn.is_some_and(|r| r.contains(pos)) {
+                    return Ok(self.copy_focused_service_ip(cursor));
+                }
+                for (rect, idx) in geom.item_rows {
+                    if rect.contains(pos) {
+                        if let Some(ClashModal::ServiceStatus { cursor: c, .. }) =
+                            self.clash.modal.as_mut()
+                        {
+                            *c = idx;
+                        }
+                        if manage {
+                            let ordered = self.clash.ordered_services();
+                            if let Some(&target) = ordered.get(idx) {
+                                if self.clash.toggle_service_enabled(target) {
+                                    return Ok(self.sync_service_prefs());
+                                }
+                                self.clash_toast_key("clash.toast.service_keep_one", Tone::Warning);
+                            }
+                            return Ok(Effect::None);
+                        }
+                        let enabled = self.clash.enabled_services();
+                        if let Some(&target) = enabled.get(idx) {
+                            return Ok(self.trigger_service_check(vec![target], true));
+                        }
+                        return Ok(Effect::None);
                     }
                 }
             }
@@ -1675,6 +1983,14 @@ impl App {
                         && self.clash.busy_profiles.insert(name.clone())
                     {
                         return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateProfile { name }));
+                    }
+                }
+                if ov.service_check_btn.is_some_and(|r| r.contains(pos)) {
+                    return Ok(self.open_service_status_modal(None));
+                }
+                for &(rect, target) in &ov.service_cell_hits {
+                    if rect.contains(pos) {
+                        return Ok(self.open_service_status_modal(Some(target)));
                     }
                 }
                 if ov.socks_secret_btn.is_some_and(|r| r.contains(pos)) {

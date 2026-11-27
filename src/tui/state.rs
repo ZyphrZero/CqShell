@@ -774,6 +774,8 @@ impl App {
         let reduced_motion = preferences.reduced_motion.unwrap_or(false);
         self.sidebar_collapsed = preferences.sidebar_collapsed.unwrap_or(false);
         self.clash.hide_ip = preferences.clash_hide_ip.unwrap_or(false);
+        self.clash.service_order = preferences.clash_service_order.clone();
+        self.clash.disabled_services = preferences.clash_disabled_services.clone();
         let active = theme::resolve(&definition, style_selection, &background, transparent_bg);
         if let Some(detail) = &error {
             let message = self
@@ -1271,6 +1273,14 @@ impl App {
         self.clash.hide_ip = !self.clash.hide_ip;
         if let Ok(mut prefs) = Preferences::read(&self.ctx.paths.preferences, false) {
             prefs.clash_hide_ip = Some(self.clash.hide_ip);
+            let _ = prefs.write(&self.ctx.paths.preferences);
+        }
+    }
+
+    pub(super) fn persist_clash_service_prefs(&self) {
+        if let Ok(mut prefs) = Preferences::read(&self.ctx.paths.preferences, false) {
+            prefs.clash_service_order = self.clash.service_order.clone();
+            prefs.clash_disabled_services = self.clash.disabled_services.clone();
             let _ = prefs.write(&self.ctx.paths.preferences);
         }
     }
@@ -1826,6 +1836,7 @@ impl App {
         );
         self.notify(summary, tone);
         self.socks_cache.borrow_mut().take();
+        crate::ops::clash::runtime_cache::invalidate_all();
         self.completed_since_refresh = true;
         self.ctx.cancel.store(false, Ordering::SeqCst);
     }

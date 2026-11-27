@@ -775,7 +775,9 @@ pub fn configure(
         ctx.message(
             "notice.clash_socks",
             match applied {
-                MixinApplied::HotReloaded => "disabled and hot-reloaded into running Mihomo",
+                MixinApplied::Patched | MixinApplied::HotReloaded => {
+                    "disabled and hot-reloaded into running Mihomo"
+                }
                 MixinApplied::Restarted => "disabled and applied (Mihomo restarted)",
                 MixinApplied::SavedWhileStopped => "disabled in Mixin; start Mihomo to apply",
             },

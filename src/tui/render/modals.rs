@@ -1134,7 +1134,7 @@ fn help_rows(app: &App) -> Vec<HelpRow<'_>> {
             HelpRow::Item("o / O / h / c", i.text("clash.help.sort")),
             HelpRow::Section(i.text("clash.help.sec_manage")),
             HelpRow::Item("v / g t y / Space", i.text("clash.help.traffic")),
-            HelpRow::Item("m / p / s / R / i N", i.text("clash.help.overview")),
+            HelpRow::Item("m / p / s R / i c N", i.text("clash.help.overview")),
             HelpRow::Item("u / U / a / i / d", i.text("clash.help.profiles")),
             HelpRow::Item("a / , . f / x X", i.text("clash.help.conns")),
             HelpRow::Item("P / l,y / Shift+S", i.text("clash.help.tools")),

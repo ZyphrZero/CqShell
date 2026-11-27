@@ -62,6 +62,8 @@ pub enum Kind {
     ClashSettingsConfigure,
     ClashDnsStatus,
     ClashDnsConfigure,
+    ClashDnsQuery,
+    ClashCacheFlush,
     ClashMixinStatus,
     ClashMixinReset,
     ClashSocksStatus,
@@ -306,6 +308,11 @@ impl Spec {
             }
             Kind::ClashSettingsConfigure => {
                 ops::clash::settings::validate_mixed_port(&p["mixed_port"])?;
+                true
+            }
+            Kind::ClashDnsQuery => {
+                ops::clash::controller::validate_dns_domain(&p["dns_domain"])?;
+                ops::clash::controller::validate_dns_record_type(&p["dns_record_type"])?;
                 true
             }
             Kind::AiTest => {
@@ -643,7 +650,15 @@ fn build_specs() -> Vec<Spec> {
         false,
         vec![],
     );
-    add("clash.stop", "clash", ClashStop, false, true, false, vec![]);
+    add(
+        "clash.stop",
+        "clash",
+        ClashStop,
+        false,
+        true,
+        false,
+        vec![field("stop_force", "off", &["off", "on"], true)],
+    );
     add(
         "clash.reload",
         "clash",
@@ -897,6 +912,14 @@ fn build_specs() -> Vec<Spec> {
                 &["info", "warning", "error", "debug", "silent"],
                 true,
             ),
+            field("tcp_concurrent", "on", &["on", "off"], true),
+            field("unified_delay", "on", &["on", "off"], true),
+            field(
+                "find_process_mode",
+                "strict",
+                &["strict", "always", "off"],
+                true,
+            ),
         ],
     );
     add(
@@ -922,9 +945,35 @@ fn build_specs() -> Vec<Spec> {
                 &["fake-ip", "redir-host", "off"],
                 true,
             ),
-            field("dns_preset", "china", &["china", "global"], true),
+            field("dns_preset", "china", &["china", "global", "keep"], true),
             field("dns_ipv6", "off", &["off", "on"], true),
         ],
+    );
+    add(
+        "clash.dns.query",
+        "clash",
+        ClashDnsQuery,
+        false,
+        false,
+        false,
+        vec![
+            field("dns_domain", "example.com", &[], true),
+            field(
+                "dns_record_type",
+                "A",
+                &["A", "AAAA", "CNAME", "TXT", "MX", "NS", "HTTPS"],
+                true,
+            ),
+        ],
+    );
+    add(
+        "clash.cache.flush",
+        "clash",
+        ClashCacheFlush,
+        false,
+        true,
+        false,
+        vec![],
     );
     add(
         "clash.mixin.status",
@@ -1021,6 +1070,8 @@ fn build_specs() -> Vec<Spec> {
             field("tun_device", "cqs-tun", &[], true),
             field("auto_route", "on", &["on", "off"], true),
             field("dns_hijack", "on", &["on", "off"], true),
+            field("tun_strict_route", "off", &["off", "on"], true),
+            field("tun_bypass_private", "on", &["on", "off"], true),
         ],
     );
     add(
@@ -1419,6 +1470,7 @@ fn self_confirming(kind: Kind) -> bool {
             | Kind::ClashStart
             | Kind::ClashStop
             | Kind::ClashReload
+            | Kind::ClashCacheFlush
             | Kind::ToolInstall(_)
             | Kind::TerminalInstall
             | Kind::SelfUpdate
@@ -1520,7 +1572,7 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
         ClashInstall => ops::clash::install(ctx, &p["version"]),
         ClashStatus => ops::clash::status(ctx),
         ClashStart => ops::clash::start(ctx),
-        ClashStop => ops::clash::stop(ctx),
+        ClashStop => ops::clash::stop_with_force(ctx, p["stop_force"] == "on"),
         ClashReload => ops::clash::controller::reload(ctx),
         ClashMode => ops::clash::controller::mode(ctx, &p["proxy_mode"], p["persist"] == "on"),
         ClashSubscriptions => ops::clash::subscriptions(ctx),
@@ -1567,6 +1619,9 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
             p["clash_ipv6"] == "on",
             p["sniffer"] == "on",
             &p["log_level"],
+            p["tcp_concurrent"] == "on",
+            p["unified_delay"] == "on",
+            &p["find_process_mode"],
         ),
         ClashDnsStatus => ops::clash::settings::dns_status(ctx),
         ClashDnsConfigure => ops::clash::settings::dns_configure(
@@ -1575,6 +1630,10 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
             &p["dns_preset"],
             p["dns_ipv6"] == "on",
         ),
+        ClashDnsQuery => {
+            ops::clash::controller::query_dns(ctx, &p["dns_domain"], &p["dns_record_type"])
+        }
+        ClashCacheFlush => ops::clash::controller::flush_caches(ctx),
         ClashMixinStatus => ops::clash::settings::mixin_status(ctx),
         ClashMixinReset => ops::clash::settings::mixin_reset(ctx),
         ClashSocksStatus => ops::clash::socks::status(ctx),
@@ -1598,6 +1657,8 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
             &p["tun_device"],
             p["auto_route"] == "on",
             p["dns_hijack"] == "on",
+            p["tun_strict_route"] == "on",
+            p["tun_bypass_private"] == "on",
         ),
         ClashLogs => ops::clash::logs(ctx, &p["lines"], p["follow"] == "on"),
         ClashServiceStatus => ops::clash::service::status(ctx, &p["service_scope"]),
@@ -1822,6 +1883,7 @@ mod tests {
             "clash.start",
             "clash.stop",
             "clash.reload",
+            "clash.cache.flush",
             "tools.curl",
             "tools.wget",
             "tools.nano",

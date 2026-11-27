@@ -8,7 +8,9 @@ use super::{
     surface_bg,
 };
 use crate::{
-    ops::clash::model::{format_bytes, format_bytes_compact, format_relative_epoch},
+    ops::clash::model::{
+        UserinfoSource, format_bytes, format_bytes_compact, format_relative_epoch,
+    },
     theme::{Level, Role},
     tui::{
         clash::layout::ProfilesGeom,
@@ -193,10 +195,17 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ProfilesGeom) {
                 if rect.height >= 2 {
                     let meta = if let Some(info) = prof.userinfo.filter(|u| u.total > 0) {
                         format!(
-                            "{} / {}  ({}% ) {sep} {}",
+                            "{} / {}  ({}%) {sep} {}",
                             format_bytes_compact(info.used()),
                             format_bytes_compact(info.total),
                             (info.ratio() * 100.0).round() as u64,
+                            prof.host
+                        )
+                    } else if let Some(info) = prof.userinfo.filter(|u| u.used() > 0) {
+                        format!(
+                            "{} {} {sep} {}",
+                            i.text("clash.profile.used"),
+                            format_bytes_compact(info.used()),
                             prof.host
                         )
                     } else if let Some(sz) = prof.file_bytes {
@@ -275,36 +284,26 @@ fn draw_profile_inspector(app: &App, frame: &mut Frame, area: ratatui::layout::R
     let mut y = area.y + 1;
     let max_y = area.bottom().saturating_sub(1);
 
-    let mut row = |label: &str, val: &str, val_role: Option<Role>| {
-        if y >= max_y {
-            return;
-        }
-        let lw = 11usize.min(iw / 2);
-        buf.set_stringn(
-            ix,
-            y,
-            clip_ascii_safe(label, lw, ascii),
-            lw,
-            tokens::text(theme, Level::Tertiary).bg(bg),
-        );
-        let vw = iw.saturating_sub(lw + 1);
-        let st = match val_role {
-            Some(r) => tokens::fg(theme, r).bg(bg),
-            None => tokens::text(theme, Level::Primary).bg(bg),
-        };
-        buf.set_stringn(
-            ix + lw as u16 + 1,
-            y,
-            clip_ascii_safe(val, vw, ascii),
-            vw,
-            st,
-        );
-        y += 1;
-    };
-
     if let Some(prof) = cl.selected_profile() {
-        row(i.text("clash.profile.name"), &prof.name, Some(Role::Accent));
-        row(
+        draw_inspector_row(
+            buf,
+            &mut y,
+            max_y,
+            ix,
+            iw,
+            i.text("clash.profile.name"),
+            &prof.name,
+            Some(Role::Accent),
+            theme,
+            bg,
+            ascii,
+        );
+        draw_inspector_row(
+            buf,
+            &mut y,
+            max_y,
+            ix,
+            iw,
             i.text("clash.profile.status"),
             i.text(if prof.active {
                 "clash.profile.active"
@@ -316,8 +315,16 @@ fn draw_profile_inspector(app: &App, frame: &mut Frame, area: ratatui::layout::R
             } else {
                 Role::Text3
             }),
+            theme,
+            bg,
+            ascii,
         );
-        row(
+        draw_inspector_row(
+            buf,
+            &mut y,
+            max_y,
+            ix,
+            iw,
             i.text("clash.profile.source"),
             if prof.is_local {
                 i.text("clash.profile.local")
@@ -325,25 +332,276 @@ fn draw_profile_inspector(app: &App, frame: &mut Frame, area: ratatui::layout::R
                 &prof.host
             },
             None,
+            theme,
+            bg,
+            ascii,
         );
         if let Some(sz) = prof.file_bytes {
-            row(i.text("clash.profile.size"), &format_bytes(sz), None);
+            draw_inspector_row(
+                buf,
+                &mut y,
+                max_y,
+                ix,
+                iw,
+                i.text("clash.profile.size"),
+                &format_bytes(sz),
+                None,
+                theme,
+                bg,
+                ascii,
+            );
         }
-        if let Some(info) = prof.userinfo {
+        let now_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let effective = prof
+            .userinfo
+            .map(|u| (u, UserinfoSource::Profile))
+            .or_else(|| {
+                if prof.active {
+                    cl.snapshot.effective_active_userinfo()
+                } else {
+                    None
+                }
+            });
+        if let Some((info, source)) = effective {
             if info.total > 0 {
-                row(
+                let pct = (info.ratio() * 100.0).round() as u64;
+                let fill_role = if pct >= 90 {
+                    Role::Danger
+                } else if pct >= 75 {
+                    Role::Warning
+                } else {
+                    Role::Accent
+                };
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
                     i.text("clash.profile.quota"),
                     &format!(
-                        "{} / {}",
-                        format_bytes(info.used()),
-                        format_bytes(info.total)
+                        "{} / {} ({pct}%)",
+                        format_bytes_compact(info.used()),
+                        format_bytes_compact(info.total)
                     ),
+                    Some(fill_role),
+                    theme,
+                    bg,
+                    ascii,
+                );
+                if y < max_y {
+                    draw_progress_bar(
+                        buf,
+                        ratatui::layout::Rect::new(ix, y, iw as u16, 1),
+                        info.ratio(),
+                        fill_role,
+                        theme,
+                        bg,
+                    );
+                    y += 1;
+                }
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
+                    i.text("clash.profile.upload"),
+                    &format_bytes(info.upload),
                     None,
+                    theme,
+                    bg,
+                    ascii,
+                );
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
+                    i.text("clash.profile.download"),
+                    &format_bytes(info.download),
+                    None,
+                    theme,
+                    bg,
+                    ascii,
+                );
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
+                    i.text("clash.profile.remaining"),
+                    &format_bytes(info.remaining()),
+                    Some(if pct >= 90 {
+                        Role::Danger
+                    } else {
+                        Role::Success
+                    }),
+                    theme,
+                    bg,
+                    ascii,
+                );
+            } else if info.used() > 0 {
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
+                    i.text("clash.profile.used"),
+                    &format_bytes(info.used()),
+                    Some(Role::Accent),
+                    theme,
+                    bg,
+                    ascii,
+                );
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
+                    i.text("clash.profile.upload"),
+                    &format_bytes(info.upload),
+                    None,
+                    theme,
+                    bg,
+                    ascii,
+                );
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
+                    i.text("clash.profile.download"),
+                    &format_bytes(info.download),
+                    None,
+                    theme,
+                    bg,
+                    ascii,
                 );
             }
-            if let Some(exp) = info.expire_date() {
-                row(i.text("clash.profile.expire"), &exp, Some(Role::Warning));
+            if let Some(exp_ts) = info.expire
+                && let Some(exp) = info.expire_date()
+            {
+                let (exp_val, exp_role) = if exp_ts <= now_epoch {
+                    (
+                        format!("{exp} ({})", i.text("clash.profile.expired")),
+                        Role::Danger,
+                    )
+                } else if let Some(days) = info.days_until_expire(now_epoch) {
+                    (
+                        format!(
+                            "{exp} ({})",
+                            i.format("clash.profile.days_left", &[("days", &days.to_string())])
+                        ),
+                        if days <= 7 {
+                            Role::Warning
+                        } else {
+                            Role::Success
+                        },
+                    )
+                } else {
+                    (exp, Role::Warning)
+                };
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
+                    i.text("clash.profile.expire"),
+                    &exp_val,
+                    Some(exp_role),
+                    theme,
+                    bg,
+                    ascii,
+                );
+            } else {
+                draw_inspector_row(
+                    buf,
+                    &mut y,
+                    max_y,
+                    ix,
+                    iw,
+                    i.text("clash.profile.expire"),
+                    i.text("clash.profile.no_expiry"),
+                    Some(Role::Text3),
+                    theme,
+                    bg,
+                    ascii,
+                );
             }
+            match source {
+                UserinfoSource::Provider(name) => {
+                    draw_inspector_row(
+                        buf,
+                        &mut y,
+                        max_y,
+                        ix,
+                        iw,
+                        i.text("clash.profile.source"),
+                        &i.format("clash.profile.from_provider", &[("name", &name)]),
+                        Some(Role::Text3),
+                        theme,
+                        bg,
+                        ascii,
+                    );
+                }
+                UserinfoSource::Providers(count) => {
+                    draw_inspector_row(
+                        buf,
+                        &mut y,
+                        max_y,
+                        ix,
+                        iw,
+                        i.text("clash.profile.source"),
+                        &i.format(
+                            "clash.profile.from_providers",
+                            &[("count", &count.to_string())],
+                        ),
+                        Some(Role::Text3),
+                        theme,
+                        bg,
+                        ascii,
+                    );
+                }
+                UserinfoSource::Profile => {}
+            }
+        } else if cl.userinfo_probing_profile.as_deref() == Some(prof.name.as_str()) {
+            let loading = format!("{} {}", app.spin(), i.text("clash.profile.quota_loading"));
+            draw_inspector_row(
+                buf,
+                &mut y,
+                max_y,
+                ix,
+                iw,
+                i.text("clash.profile.quota"),
+                &loading,
+                Some(Role::Accent),
+                theme,
+                bg,
+                ascii,
+            );
+        } else if !prof.is_local {
+            draw_inspector_row(
+                buf,
+                &mut y,
+                max_y,
+                ix,
+                iw,
+                i.text("clash.profile.quota"),
+                i.text("clash.profile.no_quota_remote"),
+                Some(Role::Text3),
+                theme,
+                bg,
+                ascii,
+            );
         }
         y = y.saturating_add(1);
         if y < max_y {
@@ -411,4 +669,44 @@ fn draw_profile_inspector(app: &App, frame: &mut Frame, area: ratatui::layout::R
             y += 1;
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_inspector_row(
+    buf: &mut ratatui::buffer::Buffer,
+    y: &mut u16,
+    max_y: u16,
+    ix: u16,
+    iw: usize,
+    label: &str,
+    val: &str,
+    val_role: Option<Role>,
+    theme: &crate::theme::Theme,
+    bg: ratatui::style::Color,
+    ascii: bool,
+) {
+    if *y >= max_y {
+        return;
+    }
+    let lw = 11usize.min(iw / 2);
+    buf.set_stringn(
+        ix,
+        *y,
+        clip_ascii_safe(label, lw, ascii),
+        lw,
+        tokens::text(theme, Level::Tertiary).bg(bg),
+    );
+    let vw = iw.saturating_sub(lw + 1);
+    let st = match val_role {
+        Some(r) => tokens::fg(theme, r).bg(bg),
+        None => tokens::text(theme, Level::Primary).bg(bg),
+    };
+    buf.set_stringn(
+        ix + lw as u16 + 1,
+        *y,
+        clip_ascii_safe(val, vw, ascii),
+        vw,
+        st,
+    );
+    *y += 1;
 }
