@@ -21,7 +21,7 @@
 
 ## Screenshots
 
-> All animated demos below are recorded frame-by-frame offline from the real `cqs` TUI (`v0.2.0`), covering the core workbench, dedicated 6-tab Docker & Mihomo workspaces, native `Shift+M` MCP access card, and adaptive mobile touch UI.
+> All animated demos below are recorded frame-by-frame offline from the real `cqs` TUI (`v0.2`), covering the core workbench, dedicated 6-tab Docker & Mihomo workspaces, native `Shift+M` MCP access card, and adaptive mobile touch UI.
 
 ### Desktop TUI Tour (Overview · Live Theme/Style Morphing · Optimization · Command Palette · `Shift+M` MCP Card)
 
@@ -108,7 +108,7 @@ Append options after `bash -s --`:
 
 | Purpose | Append |
 | --- | --- |
-| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.2.0` |
+| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.2.1` |
 | Install into a custom absolute directory | `--install-dir /opt/cqs` |
 | Install for the current user (also omit `sudo`) | `--install-dir "$HOME/.local/bin"` |
 

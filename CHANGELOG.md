@@ -4,6 +4,17 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。各版本的独立发布说明见 [`docs/releases/`](docs/releases/)。
 
+## [v0.2.1] - 2026-11-27
+
+> 本版本紧接 `v0.2.0` 发布，除下方修复与文档媒体更新外，完整包含 `v0.2.0` 的全部新特性与加固（详见紧邻的 `v0.2.0` 节与 [`docs/releases/v0.2.1.md`](docs/releases/v0.2.1.md)）。
+
+### 修复
+- 修复移动端 `TouchMedium`（如 `59×34` 竖屏）下 2 行高动作列表滚动条计算错误：当列表项数多于可见项数但少于视口行数时，`rows.len() - visible_h` 会触发无符号减法下溢；改为基于 `geom.visual_rows.len()` 计算滑块高度与最大滚动量，并补充回归单元测试。
+
+### 文档与开发工具
+- 将 README 静态 PNG 截图全部替换为 4 组由真实 `cqs` TUI 离线逐帧渲染录制的动态 GIF 演示（桌面端全功能交互、Mihomo 6 标签工作台、Docker 6 标签工作台与 `59×34` 移动端触控体验），并在仓库中保留跨平台离线录制管线（`src/tui/gif_recorder.rs` 与 `scripts/render_gifs.mjs`）。
+- 在中英文 README 致谢列表中补充 `chen08209/FlClash`。
+
 ## [v0.2.0] - 2026-11-27
 
 ### 新增
@@ -111,7 +122,8 @@
 - 支持 Pi、Claude Code、Codex 官方独立二进制校验安装（无需 Node.js / npm）及常用系统工具独立安装。
 - 支持按需查询公网 IP/ISP、一键优化批处理清单与事务化备份恢复。
 
-[Unreleased]: https://github.com/ZyphrZero/CqShell/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ZyphrZero/CqShell/compare/v0.2.1...HEAD
+[v0.2.1]: https://github.com/ZyphrZero/CqShell/compare/v0.2.0...v0.2.1
 [v0.2.0]: https://github.com/ZyphrZero/CqShell/compare/v0.1.8...v0.2.0
 [v0.1.8]: https://github.com/ZyphrZero/CqShell/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/ZyphrZero/CqShell/compare/v0.1.6...v0.1.7

@@ -418,7 +418,7 @@ pub fn list_tools(policy: &ExecutionPolicy) -> Vec<Value> {
                 "properties": {
                     "version": {
                         "type": "string",
-                        "description": "Optional specific release tag to inspect (e.g. 'v0.2.0')."
+                        "description": "Optional specific release tag to inspect (e.g. 'v0.2.1')."
                     }
                 },
                 "additionalProperties": false
