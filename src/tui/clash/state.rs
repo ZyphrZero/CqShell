@@ -421,6 +421,8 @@ pub(in crate::tui) struct ClashState {
 
     // Overview & Real-Time Traffic Atlas
     pub overview_group_cursor: usize,
+    pub overview_group_page: usize,
+    pub overview_scroll: usize,
     pub last_overview_group_cols: Cell<usize>,
     pub exit_probe: Option<ExitProbeResult>,
     pub exit_probing: bool,
@@ -501,6 +503,8 @@ impl Default for ClashState {
             launched_standalone: false,
             snapshot: ClashSnapshot::default(),
             overview_group_cursor: 0,
+            overview_group_page: 0,
+            overview_scroll: 0,
             last_overview_group_cols: Cell::new(2),
             exit_probe: None,
             exit_probing: false,

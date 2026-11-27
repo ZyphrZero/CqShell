@@ -5,7 +5,8 @@
 use super::{
     layout::{
         self, CommandPaletteGeometry, ConfirmationGeometry, FormGeometry, LayoutRegions,
-        PickerGeometry, PromptPreviewGeometry, SocksSecretGeometry,
+        PickerGeometry, PromptPreviewGeometry, SocksSecretGeometry, ThumbAction, hit_best, hit_opt,
+        hit_rect,
     },
     palette::{self, PaletteItem},
     selection::{self, DragSelection, TextPane},
@@ -386,6 +387,7 @@ impl App {
             KeyCode::End => self.preview_theme_cursor(last),
             KeyCode::Char('b' | 'B') => self.toggle_transparent_bg(false),
             KeyCode::Char('m' | 'M') => self.toggle_reduced_motion(false),
+            KeyCode::Char('d' | 'D') => self.cycle_ui_density(false),
             KeyCode::Esc | KeyCode::Char('t' | 'T') => self.cancel_theme_drawer(),
             KeyCode::Enter => self.save_theme_drawer(),
             KeyCode::Char('?') | KeyCode::F(1) => {
@@ -415,8 +417,11 @@ impl App {
             self.viewport,
             &results,
             self.command_palette.as_ref().unwrap().cursor,
+            self.resolved_density(self.viewport),
         );
-        let page = geom.list.height.saturating_sub(1).max(1) as usize;
+        let page = (geom.list.height / geom.row_height.max(1))
+            .saturating_sub(1)
+            .max(1) as usize;
 
         match key.code {
             KeyCode::Esc => {
@@ -511,11 +516,18 @@ impl App {
             let picker = form.picker.as_ref().expect("open picker");
             let choices = form.choices(form.index);
             let matches = picker.matches(choices);
-            let geom = PickerGeometry::compute(self.viewport, matches.len(), picker.cursor);
+            let geom = PickerGeometry::compute(
+                self.viewport,
+                matches.len(),
+                picker.cursor,
+                self.resolved_density(self.viewport),
+            );
             (
                 matches.get(picker.cursor).map(|c| c.value.clone()),
                 matches.len(),
-                geom.list.height.saturating_sub(1).max(1) as usize,
+                (geom.list.height / geom.row_height.max(1))
+                    .saturating_sub(1)
+                    .max(1) as usize,
             )
         };
         let last = count.saturating_sub(1);
@@ -818,8 +830,9 @@ impl App {
     }
 
     fn confirm_key(&mut self, key: KeyEvent) -> Result<Effect> {
+        let density = self.resolved_density(self.viewport);
         let confirm = self.confirmation.as_mut().expect("active confirm");
-        let geom = ConfirmationGeometry::compute(self.viewport, confirm, &self.ctx.i18n);
+        let geom = ConfirmationGeometry::compute(self.viewport, confirm, &self.ctx.i18n, density);
         let page = geom.body.height.saturating_sub(1).max(1);
         let max_scroll = geom.max_scroll();
 
@@ -942,22 +955,23 @@ impl App {
             _ => {}
         }
 
+        let density = self.resolved_density(area);
+        let slop = density.slop_enabled();
+
         // 1. Confirmation (never dismissed by clicking outside!)
         if let Some(confirm) = &mut self.confirmation {
-            let geom = ConfirmationGeometry::compute(area, confirm, &self.ctx.i18n);
+            let geom = ConfirmationGeometry::compute(area, confirm, &self.ctx.i18n, density);
             match event.kind {
                 MouseEventKind::ScrollUp => confirm.scroll = confirm.scroll.saturating_sub(3),
                 MouseEventKind::ScrollDown => {
                     confirm.scroll = confirm.scroll.saturating_add(3).min(geom.max_scroll());
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    let answer = if geom.buttons[0].contains(point) {
-                        Some(false)
-                    } else if geom.buttons[1].contains(point) {
-                        Some(true)
-                    } else {
-                        None
-                    };
+                    let answer = hit_best(
+                        [(geom.buttons[0], false), (geom.buttons[1], true)],
+                        point,
+                        slop,
+                    );
                     if let Some(answer) = answer {
                         let confirm = self.confirmation.take().expect("confirm");
                         let _ = confirm.reply.send(answer);
@@ -985,6 +999,7 @@ impl App {
                 &modal.creds,
                 &self.ctx.i18n,
                 self.theme.active.flags.ascii,
+                density,
             );
             let max_s = super::render::socks_secret_max_scroll(self, area);
             match event.kind {
@@ -999,21 +1014,32 @@ impl App {
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if !geom.modal.contains(point) || geom.btn_close.contains(point) {
+                    let btn = hit_best(
+                        [
+                            (geom.btn_close, 0u8),
+                            (geom.btn_socks5h, 1u8),
+                            (geom.btn_socks5, 2u8),
+                            (geom.btn_password, 3u8),
+                            (geom.btn_curl, 4u8),
+                        ],
+                        point,
+                        slop,
+                    );
+                    if !geom.modal.contains(point) || btn == Some(0) {
                         self.close_socks_secret();
-                    } else if geom.btn_socks5h.contains(point) {
+                    } else if btn == Some(1) {
                         let uri = modal.creds.socks5h_uri.clone();
                         return Ok(
                             self.copy_socks_secret_field(uri, "ui.socks_secret_field_socks5h")
                         );
-                    } else if geom.btn_socks5.contains(point) {
+                    } else if btn == Some(2) {
                         let uri = modal.creds.socks5_uri.clone();
                         return Ok(
                             self.copy_socks_secret_field(uri, "ui.socks_secret_field_socks5")
                         );
-                    } else if geom.btn_password.contains(point) {
+                    } else if btn == Some(3) {
                         return Ok(self.copy_socks_secret_password());
-                    } else if geom.btn_curl.contains(point) {
+                    } else if btn == Some(4) {
                         let cmd = modal.creds.curl_cmd.clone();
                         return Ok(self.copy_socks_secret_field(cmd, "ui.socks_secret_field_curl"));
                     }
@@ -1029,7 +1055,7 @@ impl App {
                 let form = self.form.as_ref().unwrap();
                 let picker = form.picker.as_ref().unwrap();
                 let matches = picker.matches(form.choices(form.index));
-                let geom = PickerGeometry::compute(area, matches.len(), picker.cursor);
+                let geom = PickerGeometry::compute(area, matches.len(), picker.cursor, density);
                 let picked = geom
                     .item_at(point, matches.len())
                     .map(|idx| (idx, matches[idx].value.clone()));
@@ -1045,8 +1071,15 @@ impl App {
                     picker.cursor = (picker.cursor + 1).min(count - 1);
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
+                    let page = (geom.list.height / geom.row_height.max(1)).max(1) as usize;
                     if !geom.modal.contains(point) {
                         self.close_picker();
+                    } else if hit_opt(geom.prev_btn, point, slop) && count > 0 {
+                        let picker = self.form.as_mut().unwrap().picker.as_mut().unwrap();
+                        picker.cursor = picker.cursor.saturating_sub(page);
+                    } else if hit_opt(geom.next_btn, point, slop) && count > 0 {
+                        let picker = self.form.as_mut().unwrap().picker.as_mut().unwrap();
+                        picker.cursor = (picker.cursor + page).min(count - 1);
                     } else if let Some((_, value)) = picked {
                         return self.pick_choice(value);
                     }
@@ -1064,14 +1097,19 @@ impl App {
                     self.form = None;
                     return Ok(Effect::None);
                 }
-                if geom.buttons[0].contains(point) {
-                    return self.submit_form();
+                match hit_best(
+                    [(geom.buttons[0], 0u8), (geom.buttons[1], 1u8)],
+                    point,
+                    slop,
+                ) {
+                    Some(0) => return self.submit_form(),
+                    Some(1) => {
+                        self.form = None;
+                        return Ok(Effect::None);
+                    }
+                    _ => {}
                 }
-                if geom.buttons[1].contains(point) {
-                    self.form = None;
-                    return Ok(Effect::None);
-                }
-                if let Some((fi, ci)) = geom.chip_at(point) {
+                if let Some((fi, ci)) = geom.chip_at(point, slop) {
                     let form = self.form.as_mut().unwrap();
                     form.index = fi;
                     form.values[fi].replace(form.spec.fields[fi].choices[ci].into());
@@ -1234,6 +1272,7 @@ impl App {
                 area,
                 &results,
                 self.command_palette.as_ref().unwrap().cursor,
+                density,
             );
             match event.kind {
                 MouseEventKind::ScrollUp if count > 0 => {
@@ -1245,8 +1284,15 @@ impl App {
                     pal.cursor = (pal.cursor + 1).min(count - 1);
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
+                    let page = (geom.list.height / geom.row_height.max(1)).max(1) as usize;
                     if !geom.modal.contains(point) {
                         self.command_palette = None;
+                    } else if hit_opt(geom.prev_btn, point, slop) && count > 0 {
+                        let pal = self.command_palette.as_mut().unwrap();
+                        pal.cursor = pal.cursor.saturating_sub(page);
+                    } else if hit_opt(geom.next_btn, point, slop) && count > 0 {
+                        let pal = self.command_palette.as_mut().unwrap();
+                        pal.cursor = (pal.cursor + page).min(count - 1);
                     } else if let Some(idx) = geom.cursor_at(point, &results) {
                         let item = results.item_at(idx).cloned();
                         self.command_palette = None;
@@ -1258,19 +1304,34 @@ impl App {
             return Ok(Effect::None);
         }
 
-        // Layout regions for main workspace, sidebar, theme drawer, and log drawer
+        // Layout regions for main workspace, sidebar, theme drawer, log drawer, and bottom thumb bar
         let regions = LayoutRegions::compute(area, self);
+
+        // 7b. Bottom clickable Touch Thumb Bar (always accessible for one-handed navigation/actions)
+        if !regions.thumb_bar.is_empty()
+            && event.kind == MouseEventKind::Down(MouseButton::Left)
+            && regions.footer.contains(point)
+            && let Some(action) = hit_best(
+                regions.thumb_bar.iter().map(|b| (b.rect, b.action)),
+                point,
+                slop,
+            )
+        {
+            return self.handle_thumb_action(action);
+        }
 
         // 8. Compact sidebar overlay
         if self.sidebar_overlay {
             match event.kind {
                 MouseEventKind::ScrollUp => {
+                    self.sidebar_scroll = None;
                     let order = self.nav_order();
                     let cur = order.iter().position(|t| *t == self.nav);
                     self.nav = order[step(cur, order.len(), false)];
                     self.view_changed = self.now;
                 }
                 MouseEventKind::ScrollDown => {
+                    self.sidebar_scroll = None;
                     let order = self.nav_order();
                     let cur = order.iter().position(|t| *t == self.nav);
                     self.nav = order[step(cur, order.len(), true)];
@@ -1278,18 +1339,30 @@ impl App {
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(side) = &regions.sidebar {
-                        if let Some(target) = side.target_at(point) {
+                        if side.can_prev && hit_opt(side.prev_btn, point, slop) {
+                            let step_rows = side.visible_items.max(1);
+                            self.sidebar_scroll = Some(side.scroll.saturating_sub(step_rows));
+                        } else if side.can_next && hit_opt(side.next_btn, point, slop) {
+                            let step_rows = side.visible_items.max(1);
+                            let max_s = side.rows.len().saturating_sub(1);
+                            self.sidebar_scroll =
+                                Some(side.scroll.saturating_add(step_rows).min(max_s));
+                        } else if let Some(target) = side.target_at(point, slop) {
+                            self.sidebar_scroll = None;
                             self.goto_nav(target);
-                        } else if side.theme_btn.is_some_and(|r| r.contains(point)) {
+                        } else if hit_opt(side.theme_btn, point, slop) {
                             self.sidebar_overlay = false;
+                            self.sidebar_scroll = None;
                             self.open_theme_drawer();
-                        } else if side.collapse_btn.is_some_and(|r| r.contains(point))
+                        } else if hit_opt(side.collapse_btn, point, slop)
                             || !side.area.contains(point)
                         {
                             self.sidebar_overlay = false;
+                            self.sidebar_scroll = None;
                         }
                     } else {
                         self.sidebar_overlay = false;
+                        self.sidebar_scroll = None;
                     }
                 }
                 _ => {}
@@ -1302,6 +1375,8 @@ impl App {
             if drawer_geom.area.contains(point) {
                 let count = drawer.active_count();
                 let cur = drawer.active_cursor();
+                let page =
+                    (drawer_geom.list_area.height / drawer_geom.row_height.max(1)).max(1) as usize;
                 match event.kind {
                     MouseEventKind::ScrollUp => {
                         self.preview_theme_cursor(cur.saturating_sub(1));
@@ -1310,18 +1385,26 @@ impl App {
                         self.preview_theme_cursor((cur + 1).min(count.saturating_sub(1)));
                     }
                     MouseEventKind::Down(MouseButton::Left) => {
-                        if drawer_geom.tab_palette.contains(point) {
+                        if hit_rect(drawer_geom.tab_palette, point, slop) {
                             self.switch_theme_drawer_tab(super::theme_drawer::DrawerTab::Palette);
-                        } else if drawer_geom.tab_style.contains(point) {
+                        } else if hit_rect(drawer_geom.tab_style, point, slop) {
                             self.switch_theme_drawer_tab(super::theme_drawer::DrawerTab::Style);
-                        } else if drawer_geom.transparent_toggle.contains(point) {
+                        } else if drawer_geom.can_prev && hit_opt(drawer_geom.prev_btn, point, slop)
+                        {
+                            self.preview_theme_cursor(cur.saturating_sub(page));
+                        } else if drawer_geom.can_next && hit_opt(drawer_geom.next_btn, point, slop)
+                        {
+                            self.preview_theme_cursor((cur + page).min(count.saturating_sub(1)));
+                        } else if hit_rect(drawer_geom.transparent_toggle, point, false) {
                             self.toggle_transparent_bg(false);
-                        } else if drawer_geom.motion_toggle.contains(point) {
+                        } else if hit_rect(drawer_geom.motion_toggle, point, false) {
                             self.toggle_reduced_motion(false);
+                        } else if hit_rect(drawer_geom.density_toggle, point, false) {
+                            self.cycle_ui_density(false);
                         } else if let Some(idx) = drawer_geom.entry_at(point, count) {
                             let same = idx == cur;
                             self.preview_theme_cursor(idx);
-                            if same && self.is_double_click(point) {
+                            if same && (density.is_touch() || self.is_double_click(point)) {
                                 self.save_theme_drawer();
                             }
                         }
@@ -1336,31 +1419,36 @@ impl App {
             }
         }
 
-        // 10. TopBar interactive pills
-        if event.kind == MouseEventKind::Down(MouseButton::Left) && regions.topbar.contains(point) {
-            if regions
-                .topbar_hits
-                .nav_toggle
-                .is_some_and(|r| r.contains(point))
-            {
-                self.toggle_sidebar();
-                return Ok(Effect::None);
+        // 10. TopBar interactive pills (with 1-row downward touch slop grace on small screens)
+        if event.kind == MouseEventKind::Down(MouseButton::Left)
+            && point.y <= regions.topbar.y.saturating_add(u16::from(slop))
+        {
+            let mut top_targets: Vec<(Rect, u8)> = Vec::with_capacity(3);
+            if let Some(r) = regions.topbar_hits.nav_toggle {
+                top_targets.push((r, 0));
             }
-            if regions
-                .topbar_hits
-                .running_pill
-                .is_some_and(|r| r.contains(point))
-            {
-                self.logs_open = true;
-                return Ok(Effect::None);
+            if let Some(r) = regions.topbar_hits.running_pill {
+                top_targets.push((r, 1));
             }
-            if regions
-                .topbar_hits
-                .lang_btn
-                .is_some_and(|r| r.contains(point))
-            {
-                self.cycle_language()?;
-                return Ok(Effect::None);
+            if let Some(r) = regions.topbar_hits.lang_btn {
+                top_targets.push((r, 2));
+            }
+            if let Some(hit) = hit_best(top_targets, point, slop) {
+                match hit {
+                    0 => {
+                        self.toggle_sidebar();
+                        return Ok(Effect::None);
+                    }
+                    1 => {
+                        self.logs_open = true;
+                        return Ok(Effect::None);
+                    }
+                    2 => {
+                        self.cycle_language()?;
+                        return Ok(Effect::None);
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -1372,13 +1460,13 @@ impl App {
                 MouseEventKind::ScrollUp => self.scroll_logs(3),
                 MouseEventKind::ScrollDown => self.scroll_logs(-3),
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if regions.log_copy_btn.is_some_and(|r| r.contains(point)) {
+                    if hit_opt(regions.log_copy_btn, point, slop) {
                         return Ok(self.copy_logs());
                     }
-                    if regions.log_plain_btn.is_some_and(|r| r.contains(point)) {
+                    if hit_opt(regions.log_plain_btn, point, slop) {
                         return Ok(self.open_plain_view_logs());
                     }
-                    if regions.log_expand_btn.is_some_and(|r| r.contains(point)) {
+                    if hit_opt(regions.log_expand_btn, point, slop) {
                         self.log_modal = true;
                     } else if regions.log_body.contains(point) {
                         self.drag_select = Some(DragSelection::start(
@@ -1398,11 +1486,18 @@ impl App {
             && side.area.contains(point)
         {
             if event.kind == MouseEventKind::Down(MouseButton::Left) {
-                if let Some(target) = side.target_at(point) {
+                if side.can_prev && hit_opt(side.prev_btn, point, slop) {
+                    let step_rows = side.visible_items.max(1);
+                    self.sidebar_scroll = Some(side.scroll.saturating_sub(step_rows));
+                } else if side.can_next && hit_opt(side.next_btn, point, slop) {
+                    let step_rows = side.visible_items.max(1);
+                    let max_s = side.rows.len().saturating_sub(1);
+                    self.sidebar_scroll = Some(side.scroll.saturating_add(step_rows).min(max_s));
+                } else if let Some(target) = side.target_at(point, slop) {
                     self.goto_nav(target);
-                } else if side.collapse_btn.is_some_and(|r| r.contains(point)) {
+                } else if hit_opt(side.collapse_btn, point, slop) {
                     self.toggle_sidebar();
-                } else if side.theme_btn.is_some_and(|r| r.contains(point)) {
+                } else if hit_opt(side.theme_btn, point, slop) {
                     self.open_theme_drawer();
                 }
             }
@@ -1412,7 +1507,7 @@ impl App {
         // 13. Overview Quick Cards clicks
         if let Some(ov) = &regions.overview
             && event.kind == MouseEventKind::Down(MouseButton::Left)
-            && let Some(idx) = ov.card_at(point)
+            && let Some(idx) = ov.card_at(point, slop)
         {
             self.quick_cursor = idx;
             if self.worker.is_none() {
@@ -1442,21 +1537,18 @@ impl App {
                         self.inspector_scroll = self.inspector_scroll.saturating_add(2).min(max_s);
                     }
                     MouseEventKind::Down(MouseButton::Left)
-                        if wb.inspector_copy_btn.is_some_and(|btn| btn.contains(point)) =>
+                        if hit_opt(wb.inspector_copy_btn, point, slop) =>
                     {
                         return Ok(self.copy_current_command());
                     }
                     MouseEventKind::Down(MouseButton::Left)
-                        if self.worker.is_none()
-                            && wb.inspector_cta.is_some_and(|cta| cta.contains(point)) =>
+                        if self.worker.is_none() && hit_opt(wb.inspector_cta, point, slop) =>
                     {
                         return self.activate();
                     }
                     MouseEventKind::Down(MouseButton::Left) => {
-                        let body_h = wb
-                            .inspector_inner
-                            .height
-                            .saturating_sub(if wb.inspector_cta.is_some() { 2 } else { 0 });
+                        let cta_reserve = wb.inspector_cta.map_or(0, |r| r.height + 1);
+                        let body_h = wb.inspector_inner.height.saturating_sub(cta_reserve);
                         let body = Rect::new(
                             wb.inspector_inner.x,
                             wb.inspector_inner.y,
@@ -1478,7 +1570,22 @@ impl App {
                     MouseEventKind::ScrollDown => self.move_row(true),
                     MouseEventKind::Down(MouseButton::Left) => {
                         if let Some(group) = self.active_group() {
-                            if let Some(tab) = wb.section_pill_at(point) {
+                            if wb.can_prev && hit_opt(wb.prev_btn, point, slop) {
+                                let step_n = wb.selectable_rects.len().max(1);
+                                self.positions[group] =
+                                    self.positions[group].saturating_sub(step_n);
+                                self.inspector_scroll = 0;
+                                return Ok(Effect::None);
+                            }
+                            if wb.can_next && hit_opt(wb.next_btn, point, slop) {
+                                let step_n = wb.selectable_rects.len().max(1);
+                                let max_p = self.selectable_count(group).saturating_sub(1);
+                                self.positions[group] =
+                                    self.positions[group].saturating_add(step_n).min(max_p);
+                                self.inspector_scroll = 0;
+                                return Ok(Effect::None);
+                            }
+                            if let Some(tab) = wb.section_pill_at(point, slop) {
                                 self.set_section_tab(group, tab);
                                 return Ok(Effect::None);
                             }
@@ -1490,19 +1597,20 @@ impl App {
                                 self.set_section_tab(group, Some(idx));
                                 return Ok(Effect::None);
                             }
-                            if let Some(pos) = wb.selectable_at(point, &rows) {
+                            if let Some(pos) = wb.selectable_at(point, &rows, slop) {
                                 let was_selected = self.selected_in(group) == pos;
                                 self.positions[group] = pos;
                                 self.inspector_scroll = 0;
                                 let double = self.is_double_click(point);
                                 if self.worker.is_none() {
                                     // Clicking checkbox region in Optimization toggles immediately
+                                    let check_w = if density.is_touch() { 8 } else { 6 };
                                     if group == OPTIMIZATION_GROUP
-                                        && point.x <= wb.list_inner.x + 6
+                                        && point.x <= wb.list_inner.x + check_w
                                         && matches!(self.selected_row(), Some(Row::Action(_)))
                                     {
                                         self.toggle_selected()?;
-                                    } else if (was_selected && double)
+                                    } else if (was_selected && (density.is_touch() || double))
                                         || matches!(self.selected_row(), Some(Row::Execute))
                                     {
                                         return self.activate();
@@ -1516,6 +1624,85 @@ impl App {
             }
         }
 
+        Ok(Effect::None)
+    }
+
+    fn handle_thumb_action(&mut self, action: ThumbAction) -> Result<Effect> {
+        let idle = self.worker.is_none();
+        match action {
+            ThumbAction::NavToggle => {
+                self.toggle_sidebar();
+            }
+            ThumbAction::OverviewOpt => {
+                self.goto_nav(NavTarget::Optimization);
+            }
+            ThumbAction::OverviewPublicIp => {
+                return Ok(Effect::PublicIp);
+            }
+            ThumbAction::Theme => {
+                self.sidebar_overlay = false;
+                self.open_theme_drawer();
+            }
+            ThumbAction::Help => {
+                self.sidebar_overlay = false;
+                self.help = true;
+                self.help_scroll = 0;
+            }
+            ThumbAction::Search => {
+                self.sidebar_overlay = false;
+                self.command_palette = Some(palette::CommandPalette::default());
+            }
+            ThumbAction::Execute if idle => {
+                self.sidebar_overlay = false;
+                return self.activate();
+            }
+            ThumbAction::ToggleMark if idle => {
+                self.toggle_selected()?;
+            }
+            ThumbAction::RunOptimization if idle => {
+                return self.optimization_jobs();
+            }
+            ThumbAction::ClashNextTab
+            | ThumbAction::ClashCycleMode
+            | ThumbAction::ClashPrimary
+            | ThumbAction::ClashSecondary => {
+                self.sidebar_overlay = false;
+                return self.clash_thumb_action(action);
+            }
+            ThumbAction::DockerNextTab
+            | ThumbAction::DockerPrimary
+            | ThumbAction::DockerLogs
+            | ThumbAction::DockerRefresh => {
+                self.sidebar_overlay = false;
+                return self.docker_thumb_action(action);
+            }
+            ThumbAction::LogsToggle => {
+                if self.viewport.height.saturating_sub(2) < 16 {
+                    self.log_modal = !self.log_modal;
+                } else {
+                    self.logs_open = !self.logs_open;
+                }
+            }
+            ThumbAction::CancelTask if !idle => {
+                self.request_cancel(false);
+            }
+            ThumbAction::ThemeSave => {
+                self.save_theme_drawer();
+            }
+            ThumbAction::ThemeCancel => {
+                self.cancel_theme_drawer();
+            }
+            ThumbAction::ThemeDensity => {
+                self.cycle_ui_density(false);
+            }
+            ThumbAction::ThemeSwitchTab => {
+                if let Some(drawer) = &self.theme_drawer {
+                    let next = drawer.tab.toggle();
+                    self.switch_theme_drawer_tab(next);
+                }
+            }
+            _ => {}
+        }
         Ok(Effect::None)
     }
 

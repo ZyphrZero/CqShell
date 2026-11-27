@@ -236,8 +236,14 @@ pub(super) fn draw(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
         bg
     };
     let lang_label = layout::topbar_lang_label(app, bar.width);
+    let extra_pad = regions.density.is_expanded() && bar.width >= 56;
+    let lang_text = if extra_pad {
+        format!("  {lang_label}  ")
+    } else {
+        format!(" {lang_label} ")
+    };
     right.push(Span::styled(
-        format!(" {lang_label} "),
+        lang_text,
         tokens::text(theme, Level::Secondary).bg(lang_bg),
     ));
     right.push(Span::styled(" ", Style::default().bg(bg)));
@@ -252,12 +258,21 @@ pub(super) fn draw(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
         } else {
             tokens::color(theme, Role::SurfaceAlt)
         };
-        left.push(Span::styled(
+        let nav_text = if extra_pad {
+            format!(
+                "  {} {}  ",
+                tokens::glyph(theme, Glyph::Menu),
+                i.text("nav.toggle")
+            )
+        } else {
             format!(
                 " {} {} ",
                 tokens::glyph(theme, Glyph::Menu),
                 i.text("nav.toggle")
-            ),
+            )
+        };
+        left.push(Span::styled(
+            nav_text,
             Style::default()
                 .fg(tokens::color(theme, Role::Accent))
                 .bg(nav_bg)

@@ -96,14 +96,15 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ToolsGeom) {
             );
         } else {
             let active_bar = tokens::glyph(theme, Glyph::ActiveBar);
-            let vis = geom.list_inner.height as usize;
+            let rh = geom.row_height.max(1);
+            let vis = (geom.list_inner.height / rh) as usize;
             for slot in 0..vis {
                 let idx = geom.list_scroll + slot;
                 let Some(item) = tools.get(idx) else {
                     break;
                 };
-                let y = geom.list_inner.y + slot as u16;
-                let row_rect = Rect::new(geom.list_inner.x, y, geom.list_inner.width, 1);
+                let y = geom.list_inner.y + (slot as u16) * rh;
+                let row_rect = Rect::new(geom.list_inner.x, y, geom.list_inner.width, rh);
                 let is_cur = idx == cl.tool_cursor;
                 let is_hov = app.hover.is_some_and(|p| row_rect.contains(p));
                 let rbg = if is_cur {
@@ -115,13 +116,15 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ToolsGeom) {
                 };
                 fill_rect_bg(buf, row_rect, rbg);
                 if is_cur {
-                    buf.set_stringn(
-                        row_rect.x,
-                        y,
-                        active_bar,
-                        1,
-                        tokens::fg(theme, Role::Accent).bg(rbg),
-                    );
+                    for ry in row_rect.top()..row_rect.bottom() {
+                        buf.set_stringn(
+                            row_rect.x,
+                            ry,
+                            active_bar,
+                            1,
+                            tokens::fg(theme, Role::Accent).bg(rbg),
+                        );
+                    }
                 }
 
                 let title = tool_entry_title(item.entry, i);
@@ -144,12 +147,34 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ToolsGeom) {
                 if tag_w >= 4 {
                     tokens::put_right(
                         buf,
-                        row_rect,
+                        Rect::new(row_rect.x, y, row_rect.width, 1),
                         &clip_ascii_safe(sec_tag, tag_w, ascii),
                         tokens::text(theme, Level::Tertiary).bg(rbg),
                     );
                 }
+                if rh >= 2 && !is_cur && !is_hov && !ascii {
+                    let sep_style = ratatui::style::Style::default()
+                        .fg(tokens::color(theme, Role::Rule))
+                        .bg(lbg);
+                    for col in (row_rect.x + 2)..row_rect.right() {
+                        buf[(col, y + 1)].set_symbol("┄").set_style(sep_style);
+                    }
+                }
             }
+        }
+        if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+            tokens::draw_pager_buttons(
+                buf,
+                geom.prev_btn,
+                geom.next_btn,
+                geom.can_prev,
+                geom.can_next,
+                None,
+                app.hover,
+                theme,
+                i,
+                lbg,
+            );
         }
     }
 

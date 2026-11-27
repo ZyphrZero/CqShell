@@ -574,6 +574,10 @@ pub struct App {
     pub(super) sidebar_collapsed: bool,
     /// Whether the compact-viewport sidebar drawer overlay is currently open.
     pub(super) sidebar_overlay: bool,
+    /// Optional manual scroll offset for touch paging inside the sidebar overlay.
+    pub(super) sidebar_scroll: Option<usize>,
+    /// User-selected UI density / touch mode (`Auto`, `Compact`, `Touch`).
+    pub(super) ui_density: super::layout::UiDensityMode,
     /// Scroll offset for the right inspector panel (when focused or scrolled).
     pub(super) inspector_scroll: u16,
     pub(super) max_inspector_scroll: Cell<u16>,
@@ -694,6 +698,8 @@ impl App {
             quick_cursor: 0,
             sidebar_collapsed: false,
             sidebar_overlay: false,
+            sidebar_scroll: None,
+            ui_density: super::layout::UiDensityMode::Auto,
             inspector_scroll: 0,
             max_inspector_scroll: Cell::new(0),
             marked: BTreeSet::new(),
@@ -771,6 +777,8 @@ impl App {
         };
         let transparent_bg = preferences.transparent_bg.unwrap_or(false);
         let reduced_motion = preferences.reduced_motion.unwrap_or(false);
+        self.ui_density =
+            super::layout::UiDensityMode::from_pref(preferences.ui_density.as_deref());
         self.sidebar_collapsed = preferences.sidebar_collapsed.unwrap_or(false);
         self.clash.hide_ip = preferences.clash_hide_ip.unwrap_or(false);
         self.clash.service_order = preferences.clash_service_order.clone();
@@ -857,6 +865,7 @@ impl App {
     pub(super) fn goto_nav(&mut self, target: NavTarget) {
         if self.nav != target {
             self.nav = target;
+            self.sidebar_scroll = None;
             self.inspector_scroll = 0;
             self.max_inspector_scroll.set(0);
             self.docker.logs.searching = false;
@@ -1290,6 +1299,7 @@ impl App {
             || (self.is_clash_view() && self.clash.fullscreen)
         {
             self.sidebar_overlay = !self.sidebar_overlay;
+            self.sidebar_scroll = None;
         } else {
             self.sidebar_collapsed = !self.sidebar_collapsed;
             if let Ok(mut prefs) = Preferences::read(&self.ctx.paths.preferences, false) {
@@ -1375,6 +1385,7 @@ impl App {
             saved_style,
             self.theme.transparent_bg,
             self.theme.reduced_motion,
+            self.ui_density,
             self.now,
         ));
     }
@@ -1443,6 +1454,27 @@ impl App {
         }
     }
 
+    pub(super) fn cycle_ui_density(&mut self, persist: bool) {
+        self.ui_density = self.ui_density.next();
+        self.sidebar_scroll = None;
+        if persist {
+            if let Ok(mut prefs) = Preferences::read(&self.ctx.paths.preferences, false) {
+                prefs.ui_density = self.ui_density.as_pref().map(str::to_owned);
+                let _ = prefs.write(&self.ctx.paths.preferences);
+            }
+            let mode = self.ctx.i18n.text(self.ui_density.label_key()).to_owned();
+            let msg = self
+                .ctx
+                .i18n
+                .format("toast.density_changed", &[("mode", &mode)]);
+            self.notify(msg, Tone::Info);
+        }
+    }
+
+    pub(in crate::tui) fn resolved_density(&self, area: Rect) -> super::layout::ResolvedDensity {
+        super::layout::ResolvedDensity::resolve(self.ui_density, area)
+    }
+
     fn re_resolve_active_theme(&mut self) {
         if let Some(drawer) = &self.theme_drawer
             && let Some(resolved) =
@@ -1473,6 +1505,7 @@ impl App {
             self.theme.style_selection = drawer.previous_style_selection;
             self.theme.transparent_bg = drawer.previous_transparent;
             self.theme.reduced_motion = drawer.previous_motion;
+            self.ui_density = drawer.previous_density;
             self.apply_resolved_theme(drawer.previous_theme, true);
         }
     }
@@ -1490,6 +1523,7 @@ impl App {
         let style_sel = drawer.selected_style();
         let transparent_bg = self.theme.transparent_bg;
         let reduced_motion = self.theme.reduced_motion;
+        let ui_density = self.ui_density;
         let result = (|| -> Result<()> {
             let mut prefs = Preferences::read(&self.ctx.paths.preferences, false)?;
             prefs.theme = Some(id.clone());
@@ -1499,12 +1533,14 @@ impl App {
             };
             prefs.transparent_bg = Some(transparent_bg);
             prefs.reduced_motion = Some(reduced_motion);
+            prefs.ui_density = ui_density.as_pref().map(str::to_owned);
             prefs.write(&self.ctx.paths.preferences)
         })();
         if let Err(error) = result {
             self.theme.style_selection = drawer.previous_style_selection;
             self.theme.transparent_bg = drawer.previous_transparent;
             self.theme.reduced_motion = drawer.previous_motion;
+            self.ui_density = drawer.previous_density;
             self.apply_resolved_theme(drawer.previous_theme, false);
             self.fail_ui(error);
         } else {

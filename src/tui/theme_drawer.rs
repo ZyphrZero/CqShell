@@ -2,6 +2,7 @@
 //! and UI design styles (`[样式]`), plus live toggles for transparent canvas (`B`) and reduced
 //! motion (`M`). `Enter` persists all changes to `config.toml`; `Esc` restores prior state.
 
+use super::layout::UiDensityMode;
 use crate::{
     i18n::I18n,
     theme::{
@@ -85,6 +86,7 @@ pub(super) struct ThemeDrawer {
     pub previous_style_selection: StyleSelection,
     pub previous_transparent: bool,
     pub previous_motion: bool,
+    pub previous_density: UiDensityMode,
     pub saved_id: Option<String>,
     pub saved_style: Option<String>,
     pub opened: Instant,
@@ -100,6 +102,7 @@ impl ThemeDrawer {
         saved_style: Option<String>,
         transparent_bg: bool,
         reduced_motion: bool,
+        ui_density: UiDensityMode,
         now: Instant,
     ) -> Self {
         let mut entries: Vec<ThemeEntry> = builtin::all()
@@ -141,6 +144,7 @@ impl ThemeDrawer {
             previous_style_selection: style_selection,
             previous_transparent: transparent_bg,
             previous_motion: reduced_motion,
+            previous_density: ui_density,
             saved_id,
             saved_style,
             opened: now,

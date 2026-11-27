@@ -151,11 +151,12 @@ fn draw_header_and_tabs(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg:
     }
 
     // Tab pills row
+    let overflow_y = geom.tab_bar.y + geom.tab_bar.height.saturating_sub(1) / 2;
     if geom.tab_overflow_left {
         let sym = if theme.flags.ascii { "<" } else { "‹" };
         buf.set_stringn(
             geom.tab_bar.x,
-            geom.tab_bar.y,
+            overflow_y,
             sym,
             1,
             tokens::text(theme, Level::Tertiary).bg(bg),
@@ -165,7 +166,7 @@ fn draw_header_and_tabs(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg:
         let sym = if theme.flags.ascii { ">" } else { "›" };
         buf.set_stringn(
             geom.tab_bar.right().saturating_sub(1),
-            geom.tab_bar.y,
+            overflow_y,
             sym,
             1,
             tokens::text(theme, Level::Tertiary).bg(bg),
@@ -273,7 +274,7 @@ fn draw_unavailable_guidance(
         .saturating_sub(if area.width < 48 { 2 } else { 6 })
         .min(68)
         .max(20.min(area.width));
-    let card_h = 9u16
+    let card_h = (9u16 + cta_rect.map_or(0, |r| r.height.saturating_sub(1)))
         .min(area.height.saturating_sub(2))
         .max(6.min(area.height));
     let card_x = area.x + (area.width.saturating_sub(card_w)) / 2;
@@ -360,6 +361,24 @@ pub(super) fn draw_pill_chip(
     parent_bg: Color,
 ) {
     if rect.width < 2 || rect.height == 0 {
+        return;
+    }
+    if rect.height >= 2 {
+        let kind = if active {
+            tokens::TouchBtnKind::Primary
+        } else {
+            tokens::TouchBtnKind::Secondary
+        };
+        tokens::draw_touch_button(
+            buf,
+            rect,
+            text.trim(),
+            None,
+            kind,
+            hovered,
+            theme,
+            parent_bg,
+        );
         return;
     }
     if theme.flags.ascii {

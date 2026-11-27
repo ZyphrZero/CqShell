@@ -172,6 +172,16 @@ fn draw_header_and_tabs(app: &App, frame: &mut Frame, geom: &ClashGeometry, bg: 
     for pill in &geom.tab_pills {
         let active = pill.tab == cl.tab;
         let hovered = app.hover.is_some_and(|p| pill.rect.contains(p));
+        if pill.rect.height >= 2 {
+            let sub = (!pill.count.is_empty()).then_some(pill.count.as_str());
+            let kind = if active {
+                tokens::TouchBtnKind::Active
+            } else {
+                tokens::TouchBtnKind::Secondary
+            };
+            tokens::draw_touch_button(buf, pill.rect, &pill.label, sub, kind, hovered, theme, bg);
+            continue;
+        }
         let body = if pill.count.is_empty() {
             format!(" {} ", pill.label)
         } else {
@@ -442,6 +452,24 @@ pub(super) fn draw_pill_chip(
     parent_bg: Color,
 ) {
     if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    if rect.height >= 2 {
+        let kind = if active {
+            tokens::TouchBtnKind::Active
+        } else {
+            tokens::TouchBtnKind::Secondary
+        };
+        tokens::draw_touch_button(
+            buf,
+            rect,
+            label.trim(),
+            None,
+            kind,
+            hovered,
+            theme,
+            parent_bg,
+        );
         return;
     }
     let style = if active {

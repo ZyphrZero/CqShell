@@ -87,19 +87,6 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &SidebarGeometry) {
         );
     }
 
-    let top_inset = if geom.overlay {
-        1
-    } else {
-        tokens::card_top_inset(theme, geom.area.height)
-    };
-    let inner_y = geom.area.y + top_inset;
-    let framed_bottom = u16::from(geom.overlay || theme.flags.framed);
-    let footer_h = if geom.collapse_btn.is_some() {
-        2 + framed_bottom
-    } else {
-        0
-    };
-    let list_h = geom.area.height.saturating_sub(top_inset + footer_h) as usize;
     let mihomo_running = matches!(
         app.snapshot.local.mihomo_state,
         Reading::Value(ClashState::Running(_))
@@ -109,9 +96,11 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &SidebarGeometry) {
         app.reduced_motion(),
     );
 
-    for (offset, row) in geom.rows.iter().skip(geom.scroll).take(list_h).enumerate() {
-        let y = inner_y + offset as u16;
-        let row_rect = Rect::new(geom.area.x + 1, y, geom.area.width.saturating_sub(2), 1);
+    for &(row_rect, row_idx) in &geom.row_rects {
+        let Some(row) = geom.rows.get(row_idx) else {
+            continue;
+        };
+        let y = row_rect.y;
         match row {
             SidebarRow::Spacer => {}
             SidebarRow::Rule => {
@@ -157,9 +146,11 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &SidebarGeometry) {
                     base_bg
                 };
 
-                // Paint full row highlight
-                for col in row_rect.left()..row_rect.right() {
-                    buf[(col, y)].set_symbol(" ").set_bg(row_bg);
+                // Paint full row highlight (spans all rows of the touch item)
+                for ry in row_rect.top()..row_rect.bottom() {
+                    for col in row_rect.left()..row_rect.right() {
+                        buf[(col, ry)].set_symbol(" ").set_bg(row_bg);
+                    }
                 }
 
                 // Active left bar marker
@@ -172,7 +163,9 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &SidebarGeometry) {
                     .fg(tokens::animated_selected_accent(theme, elapsed, reduced))
                     .bg(row_bg)
                     .add_modifier(Modifier::BOLD);
-                buf.set_stringn(row_rect.x, y, mark, 1, mark_style);
+                for ry in row_rect.top()..row_rect.bottom() {
+                    buf.set_stringn(row_rect.x, ry, mark, 1, mark_style);
+                }
 
                 // Prefix icon or number shortcut
                 let (prefix, label, badge, badge_color) = match *target {
@@ -284,11 +277,38 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &SidebarGeometry) {
                         b_style,
                     );
                 }
+
+                // Subtle separator on bottom row of 2-row touch nav entries when inactive
+                if row_rect.height >= 2 && !active && !hovered && !theme.flags.ascii {
+                    let sep_y = row_rect.bottom() - 1;
+                    let sep_style = Style::default()
+                        .fg(tokens::color(theme, Role::Rule))
+                        .bg(base_bg);
+                    for col in (row_rect.x + 2)..row_rect.right().saturating_sub(1) {
+                        buf[(col, sep_y)].set_symbol("┄").set_style(sep_style);
+                    }
+                }
             }
         }
     }
 
-    // Bottom subtle sidebar action bar: `[ 折叠` | `T 风格`
+    // Touch pagination bar when expanded sidebar overflows
+    if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+        tokens::draw_pager_buttons(
+            buf,
+            geom.prev_btn,
+            geom.next_btn,
+            geom.can_prev,
+            geom.can_next,
+            geom.page_text.as_deref(),
+            app.hover,
+            theme,
+            i,
+            base_bg,
+        );
+    }
+
+    // Bottom sidebar action bar: `[ 折叠` | `T 主题` (compact 1-row or expanded 2-3 row touch buttons)
     if let (Some(col_btn), Some(thm_btn)) = (geom.collapse_btn, geom.theme_btn) {
         let rule_y = col_btn.y.saturating_sub(1);
         tokens::draw_rule(
@@ -301,50 +321,75 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &SidebarGeometry) {
         );
 
         let c_hover = app.hover.is_some_and(|p| col_btn.contains(p));
-        let c_bg = if c_hover && theme.flags.paint_bg {
-            tokens::color(theme, Role::SurfaceAlt)
-        } else {
-            base_bg
-        };
-        let c_text = clip_ascii_safe(
-            &format!("[ {}", i.text("nav.collapse")),
-            col_btn.width as usize,
-            theme.flags.ascii,
-        );
-        buf.set_stringn(
-            col_btn.x + 1,
-            col_btn.y,
-            &c_text,
-            col_btn.width.saturating_sub(1) as usize,
-            Style::default()
-                .fg(tokens::color(
-                    theme,
-                    if c_hover { Role::Accent } else { Role::Text3 },
-                ))
-                .bg(c_bg),
-        );
-
         let t_hover = app.hover.is_some_and(|p| thm_btn.contains(p));
-        let t_bg = if t_hover && theme.flags.paint_bg {
-            tokens::color(theme, Role::SurfaceAlt)
+        if col_btn.height >= 2 || thm_btn.height >= 2 {
+            let c_label = format!("[ {}", i.text("nav.collapse"));
+            let t_label = format!("T {}", i.text("nav.theme"));
+            tokens::draw_touch_button(
+                buf,
+                col_btn,
+                &c_label,
+                None,
+                tokens::TouchBtnKind::Secondary,
+                c_hover,
+                theme,
+                base_bg,
+            );
+            tokens::draw_touch_button(
+                buf,
+                thm_btn,
+                &t_label,
+                None,
+                tokens::TouchBtnKind::Primary,
+                t_hover,
+                theme,
+                base_bg,
+            );
         } else {
-            base_bg
-        };
-        let t_text = clip_ascii_safe(
-            &format!("T {}", i.text("nav.theme")),
-            thm_btn.width as usize,
-            theme.flags.ascii,
-        );
-        tokens::put_right(
-            buf,
-            Rect::new(thm_btn.x, thm_btn.y, thm_btn.width.saturating_sub(1), 1),
-            &t_text,
-            Style::default()
-                .fg(tokens::color(
-                    theme,
-                    if t_hover { Role::Accent } else { Role::Text3 },
-                ))
-                .bg(t_bg),
-        );
+            let c_bg = if c_hover && theme.flags.paint_bg {
+                tokens::color(theme, Role::SurfaceAlt)
+            } else {
+                base_bg
+            };
+            let c_text = clip_ascii_safe(
+                &format!("[ {}", i.text("nav.collapse")),
+                col_btn.width as usize,
+                theme.flags.ascii,
+            );
+            buf.set_stringn(
+                col_btn.x + 1,
+                col_btn.y,
+                &c_text,
+                col_btn.width.saturating_sub(1) as usize,
+                Style::default()
+                    .fg(tokens::color(
+                        theme,
+                        if c_hover { Role::Accent } else { Role::Text3 },
+                    ))
+                    .bg(c_bg),
+            );
+
+            let t_bg = if t_hover && theme.flags.paint_bg {
+                tokens::color(theme, Role::SurfaceAlt)
+            } else {
+                base_bg
+            };
+            let t_text = clip_ascii_safe(
+                &format!("T {}", i.text("nav.theme")),
+                thm_btn.width as usize,
+                theme.flags.ascii,
+            );
+            tokens::put_right(
+                buf,
+                Rect::new(thm_btn.x, thm_btn.y, thm_btn.width.saturating_sub(1), 1),
+                &t_text,
+                Style::default()
+                    .fg(tokens::color(
+                        theme,
+                        if t_hover { Role::Accent } else { Role::Text3 },
+                    ))
+                    .bg(t_bg),
+            );
+        }
     }
 }

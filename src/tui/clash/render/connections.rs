@@ -184,14 +184,15 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ConnectionsGeom) {
             }
         } else {
             let active_bar = tokens::glyph(theme, Glyph::ActiveBar);
-            let vis = geom.list_inner.height as usize;
+            let rh = geom.row_height.max(1);
+            let vis = (geom.list_inner.height / rh) as usize;
             for slot in 0..vis {
                 let idx = geom.list_scroll + slot;
                 let Some(conn) = conns.get(idx) else {
                     break;
                 };
-                let y = geom.list_inner.y + slot as u16;
-                let row_rect = Rect::new(geom.list_inner.x, y, geom.list_inner.width, 1);
+                let y = geom.list_inner.y + (slot as u16) * rh;
+                let row_rect = Rect::new(geom.list_inner.x, y, geom.list_inner.width, rh);
                 let is_cur = idx == cl.conn_cursor;
                 let is_hov = app.hover.is_some_and(|p| row_rect.contains(p));
                 let rbg = if is_cur {
@@ -203,13 +204,15 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ConnectionsGeom) {
                 };
                 fill_rect_bg(buf, row_rect, rbg);
                 if is_cur {
-                    buf.set_stringn(
-                        row_rect.x,
-                        y,
-                        active_bar,
-                        1,
-                        tokens::fg(theme, Role::Accent).bg(rbg),
-                    );
+                    for ry in row_rect.top()..row_rect.bottom() {
+                        buf.set_stringn(
+                            row_rect.x,
+                            ry,
+                            active_bar,
+                            1,
+                            tokens::fg(theme, Role::Accent).bg(rbg),
+                        );
+                    }
                 }
 
                 let mut x = row_rect.x + 1;
@@ -295,11 +298,35 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ConnectionsGeom) {
                 let tot = format_bytes_compact(conn.total_bytes());
                 tokens::put_right(
                     buf,
-                    row_rect,
+                    Rect::new(row_rect.x, y, row_rect.width, 1),
                     &tot,
                     tokens::text(theme, Level::Secondary).bg(rbg),
                 );
+                if rh >= 2 {
+                    let sub = format!("{} · {}", conn.display_process(), conn.rule);
+                    buf.set_stringn(
+                        row_rect.x + 1,
+                        y + 1,
+                        clip_ascii_safe(&sub, row_rect.width.saturating_sub(2) as usize, ascii),
+                        row_rect.width.saturating_sub(2) as usize,
+                        tokens::text(theme, Level::Tertiary).bg(rbg),
+                    );
+                }
             }
+        }
+        if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+            tokens::draw_pager_buttons(
+                buf,
+                geom.prev_btn,
+                geom.next_btn,
+                geom.can_prev,
+                geom.can_next,
+                None,
+                app.hover,
+                theme,
+                i,
+                lbg,
+            );
         }
     }
 

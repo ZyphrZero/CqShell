@@ -232,7 +232,7 @@ fn draw_sub_pills(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Color
         tokens::draw_rule(
             buf,
             geom.inspector_area.x + 1,
-            first.y + 1,
+            first.bottom(),
             geom.inspector_area.width.saturating_sub(2),
             theme,
             bg,

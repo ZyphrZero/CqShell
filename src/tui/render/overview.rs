@@ -1053,6 +1053,15 @@ fn draw_quick_list_card(app: &App, frame: &mut Frame, list_box: Rect, rows: &[Re
                 sub_budget,
                 Style::default().fg(sub_fg).bg(row_bg),
             );
+            if rect.height >= 3 && !selected && !hovered && !theme.flags.ascii {
+                let sep_y = rect.bottom() - 1;
+                let sep_style = Style::default()
+                    .fg(tokens::color(theme, Role::Rule))
+                    .bg(base_bg);
+                for col in (rect.x + 2)..rect.right().saturating_sub(1) {
+                    buf[(col, sep_y)].set_symbol("┄").set_style(sep_style);
+                }
+            }
         } else {
             let title_used = clipped_title.width();
             let remain = text_budget.saturating_sub(title_used);

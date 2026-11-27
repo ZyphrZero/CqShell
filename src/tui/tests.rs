@@ -388,6 +388,7 @@ fn mouse_clicks_route_to_sidebar_overview_cards_and_modals_safely() {
         area,
         app.confirmation.as_ref().unwrap(),
         &app.ctx.i18n,
+        app.resolved_density(area),
     );
     app.handle_mouse(click(geom.buttons[1].x + 1, geom.buttons[1].y), area)
         .unwrap();
@@ -2180,6 +2181,7 @@ fn socks5_transient_secret_modal_reveals_copies_masks_and_never_logs_secrets() {
         &app.socks_secret.as_ref().unwrap().creds,
         &app.ctx.i18n,
         false,
+        app.resolved_density(area),
     );
     assert_eq!(
         copy_text(
@@ -2697,6 +2699,7 @@ fn clash_workspace_keyboard_mouse_delay_sorting_and_modals_work_end_to_end() {
         app.clash.modal.as_ref().unwrap(),
         &app.clash,
         &app.ctx.i18n,
+        app.resolved_density(area),
     );
     let field1 = delay_geom.field_rects[1];
     app.handle_mouse(click(field1.x + 1, field1.y + 1), area)
@@ -2717,6 +2720,7 @@ fn clash_workspace_keyboard_mouse_delay_sorting_and_modals_work_end_to_end() {
         app.clash.modal.as_ref().unwrap(),
         &app.clash,
         &app.ctx.i18n,
+        app.resolved_density(area),
     );
     let rules_sub = prov_geom.subtab_rules.unwrap();
     app.handle_mouse(click(rules_sub.x + 1, rules_sub.y), area)
@@ -3359,6 +3363,7 @@ fn clash_outbound_ip_detection_modal_hide_ip_copy_and_generation_guard_work() {
         app.clash.modal.as_ref().unwrap(),
         &app.clash,
         &app.ctx.i18n,
+        app.resolved_density(area),
     );
     let close_btn = mgeom.outbound_close_btn.expect("outbound_close_btn");
     app.handle_mouse(click(close_btn.x + 1, close_btn.y), area)
@@ -3762,6 +3767,7 @@ fn clash_service_status_modal_management_and_profile_usage_fallback_work() {
         app.clash.modal.as_ref().unwrap(),
         &app.clash,
         &app.ctx.i18n,
+        app.resolved_density(area),
     );
     let close_btn = mgeom.service_close_btn.expect("service_close_btn");
     app.handle_mouse(click(close_btn.x + 1, close_btn.y), area)
@@ -4102,5 +4108,345 @@ fn clash_proxy_selection_ux_and_quota_visualization_work_across_themes() {
                 "non-ASCII in plain {tab:?} at {w}x{h}:\n{txt}"
             );
         }
+    }
+}
+
+#[test]
+fn touch_density_resolution_and_hit_slop_matrix() {
+    use super::layout::{ResolvedDensity, UiDensityMode, hit_best};
+    use ratatui::layout::{Position, Rect};
+
+    let cases = [
+        (UiDensityMode::Auto, 120, 36, ResolvedDensity::Compact),
+        (UiDensityMode::Auto, 100, 30, ResolvedDensity::Compact),
+        (UiDensityMode::Auto, 80, 24, ResolvedDensity::Compact),
+        (UiDensityMode::Auto, 59, 24, ResolvedDensity::TouchSlim),
+        (UiDensityMode::Auto, 40, 16, ResolvedDensity::TouchSlim),
+        (UiDensityMode::Auto, 82, 54, ResolvedDensity::TouchTall),
+        (UiDensityMode::Auto, 52, 36, ResolvedDensity::TouchMedium),
+        (UiDensityMode::Auto, 90, 46, ResolvedDensity::TouchTall),
+        (UiDensityMode::Touch, 120, 36, ResolvedDensity::TouchMedium),
+        (UiDensityMode::Touch, 120, 48, ResolvedDensity::TouchTall),
+        (UiDensityMode::Touch, 82, 22, ResolvedDensity::TouchSlim),
+        (UiDensityMode::Compact, 82, 54, ResolvedDensity::Compact),
+        (UiDensityMode::Compact, 52, 36, ResolvedDensity::Compact),
+    ];
+    for (mode, w, h, expected) in cases {
+        let got = ResolvedDensity::resolve(mode, Rect::new(0, 0, w, h));
+        assert_eq!(got, expected, "mode={mode:?} size={w}x{h}");
+    }
+
+    assert_eq!(ResolvedDensity::TouchTall.button_height(), 3);
+    assert_eq!(ResolvedDensity::TouchTall.thumb_bar_height(), 3);
+    assert_eq!(ResolvedDensity::TouchMedium.button_height(), 2);
+    assert_eq!(ResolvedDensity::TouchMedium.thumb_bar_height(), 2);
+    assert_eq!(ResolvedDensity::TouchSlim.button_height(), 1);
+    assert!(ResolvedDensity::TouchSlim.slop_enabled());
+    assert!(!ResolvedDensity::Compact.slop_enabled());
+
+    // Touch slop hit-testing: exact beats slop, 1-cell miss hits when slop=true, midpoint tie => None
+    let left = Rect::new(10, 10, 10, 2); // x: 10..20, y: 10..12
+    let right = Rect::new(22, 10, 10, 2); // x: 22..32, y: 10..12 (gap at x=20,21)
+    let items = [(left, "left"), (right, "right")];
+
+    assert_eq!(hit_best(items, Position::new(12, 10), false), Some("left"));
+    assert_eq!(hit_best(items, Position::new(12, 9), false), None);
+    assert_eq!(hit_best(items, Position::new(12, 9), true), Some("left"));
+    assert_eq!(hit_best(items, Position::new(12, 12), true), Some("left"));
+    assert_eq!(hit_best(items, Position::new(12, 13), true), None);
+
+    // Adjacent 1-cell gap tie (midpoint x=20 equidistant from 10..20 and 21..31) returns None
+    let adj_right = Rect::new(21, 10, 10, 2);
+    assert_eq!(
+        hit_best([(left, 1u8), (adj_right, 2u8)], Position::new(20, 10), true),
+        None
+    );
+}
+
+#[test]
+fn touch_portrait_82x54_and_narrow_52x36_full_app_workflows_and_plain_ascii() {
+    use super::clash::fixture::sample_snapshot;
+    use super::clash::layout::ClashBodyGeom;
+    use super::docker::fixture::fixture_docker_state;
+    use super::layout::{LayoutRegions, ResolvedDensity, ThumbAction, UiDensityMode};
+    use crate::config::Preferences;
+    use crate::ops::clash::model::{ClashTab, ProxyGroupItem, ProxyGroupKind};
+    use crate::ops::clash::monitor::ClashMonitorCmd;
+    use crate::ops::docker::model::DockerTab;
+    use crate::theme::Background;
+    use ratatui::layout::Rect;
+
+    // 1. Portrait 82x54 (user mobile SSH scenario): Mihomo Overview, Thumb Bar, Sidebar, Guard
+    let (_temp, mut app) = test_app("zh-CN");
+    let mut snap = sample_snapshot();
+    // Add extra policy groups to exercise 2-column 3-row tile pagination on 82x54
+    for idx in 0..10 {
+        snap.groups.push(ProxyGroupItem {
+            name: format!("Group-{idx:02}"),
+            kind: ProxyGroupKind::Selector,
+            now: "HK-HY2-01".into(),
+            resolved_chain: vec!["HK-HY2-01".into()],
+            fixed: None,
+            hidden: false,
+            members: Vec::new(),
+        });
+    }
+    app.clash.snapshot = snap;
+    app.open_clash(ClashTab::Overview, false, false);
+
+    let portrait = Rect::new(0, 0, 82, 54);
+    let regions = LayoutRegions::compute(portrait, &app);
+    assert_eq!(regions.density, ResolvedDensity::TouchTall);
+    assert_eq!(regions.footer.height, 3);
+    assert!(regions.thumb_bar.len() >= 4);
+
+    let clash_geom = regions.clash.as_ref().expect("clash geometry");
+    assert_eq!(clash_geom.tab_bar.height, 2);
+    let ClashBodyGeom::Overview(ov) = &clash_geom.body else {
+        panic!("expected Clash overview geometry");
+    };
+    assert_eq!(ov.mode_pills.len(), 3);
+    assert!(ov.mode_pills.iter().all(|(r, _)| r.height == 3));
+    assert!(ov.start_stop_btn.is_some_and(|r| r.height >= 2));
+    assert!(ov.reload_btn.is_some_and(|r| r.height >= 2));
+    assert!(ov.service_check_btn.is_some_and(|r| r.height >= 2));
+    assert!(
+        ov.group_card_hits.iter().all(|(r, _)| r.height >= 3),
+        "overview policy group tiles should be >=3 rows tall in TouchTall"
+    );
+    assert!(ov.group_can_next && ov.group_next_btn.is_some());
+
+    // Render full portrait 82x54 frame
+    let rendered_82 = render_clash_frame_text(&mut app, 82, 54);
+    assert!(rendered_82.contains("下页"));
+
+    // Click group next pager button -> advances overview_group_page
+    let next_btn = ov.group_next_btn.unwrap();
+    app.handle_mouse(click(next_btn.x + 1, next_btn.y), portrait)
+        .unwrap();
+    assert_eq!(app.clash.overview_group_page, 1);
+
+    // Click 1 row above mode_pills[1] ("global") using touch slop -> emits SetMode("global")
+    let global_btn = ov.mode_pills[1].0;
+    let eff = app
+        .handle_mouse(
+            click(global_btn.x + 2, global_btn.y.saturating_sub(1)),
+            portrait,
+        )
+        .unwrap();
+    assert!(matches!(
+        eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SetMode { ref mode }) if mode == "global"
+    ));
+
+    // Anti-mis-tap guard: tapping the 1-cell border/gap beside profile card buttons must NOT jump to Profiles
+    if let (Some(b0), Some(b1)) = (ov.profile_update_btn, ov.profile_switch_btn)
+        && b1.x > b0.right()
+    {
+        app.handle_mouse(click(b0.right(), b0.y), portrait).unwrap();
+        assert_eq!(
+            app.clash.tab,
+            ClashTab::Overview,
+            "gap tap between profile buttons must not mis-tap card navigation"
+        );
+    }
+
+    // Bottom Thumb Bar slot 0 (≡ 导航) opens wide touch overlay sidebar with 2-row items
+    let nav_thumb = regions
+        .thumb_bar
+        .iter()
+        .find(|b| b.action == ThumbAction::NavToggle)
+        .expect("nav thumb button");
+    app.handle_mouse(click(nav_thumb.rect.x + 1, nav_thumb.rect.y + 1), portrait)
+        .unwrap();
+    assert!(app.sidebar_overlay);
+    let sb_regions = LayoutRegions::compute(portrait, &app);
+    let sb = sb_regions.sidebar.as_ref().expect("overlay sidebar");
+    assert!(sb.overlay);
+    assert!(sb.area.width >= 28);
+    assert!(sb.item_rects.iter().all(|(r, _)| r.height == 2));
+    // Close sidebar via NavToggle again
+    app.handle_mouse(click(nav_thumb.rect.x + 1, nav_thumb.rect.y + 1), portrait)
+        .unwrap();
+    assert!(!app.sidebar_overlay);
+
+    // Bottom Thumb Bar ClashNextTab advances tab Overview -> Proxies
+    let next_tab_thumb = regions
+        .thumb_bar
+        .iter()
+        .find(|b| b.action == ThumbAction::ClashNextTab)
+        .expect("clash next tab thumb");
+    app.handle_mouse(
+        click(next_tab_thumb.rect.x + 1, next_tab_thumb.rect.y + 1),
+        portrait,
+    )
+    .unwrap();
+    assert_eq!(app.clash.tab, ClashTab::Proxies);
+    let _ = render_clash_frame_text(&mut app, 82, 54);
+    for tab in [
+        ClashTab::Profiles,
+        ClashTab::Connections,
+        ClashTab::Rules,
+        ClashTab::Tools,
+    ] {
+        app.clash.set_tab(tab);
+        let _ = render_clash_frame_text(&mut app, 82, 54);
+    }
+
+    // 2. Narrow 52x36 single-column scrollable deck in Mihomo Overview: zero cards hidden!
+    app.clash.set_tab(ClashTab::Overview);
+    app.clash.overview_scroll = 0;
+    let narrow = Rect::new(0, 0, 52, 36);
+    let narrow_regions = LayoutRegions::compute(narrow, &app);
+    assert_eq!(narrow_regions.density, ResolvedDensity::TouchMedium);
+    let ClashBodyGeom::Overview(nov) = &narrow_regions.clash.as_ref().unwrap().body else {
+        panic!("expected narrow overview");
+    };
+    assert!(nov.overview_max_scroll > 0);
+    assert!(nov.overview_next_btn.is_some());
+    let mut combined_deck = String::new();
+    for page in 0..=nov.overview_max_scroll {
+        app.clash.overview_scroll = page;
+        combined_deck.push_str(&render_clash_frame_text(&mut app, 52, 36));
+        combined_deck.push('\n');
+    }
+    assert!(combined_deck.contains("内核状态"));
+    assert!(combined_deck.contains("服务状态"));
+    assert!(combined_deck.contains("当前订阅"));
+    assert!(combined_deck.contains("策略组速览"));
+
+    // 3. Workbench at 82x54: 2-row action rows, restored stacked CTA, same-row second tap
+    let system_idx = GROUPS.iter().position(|g| *g == "system").unwrap();
+    let docker_idx = GROUPS.iter().position(|g| *g == "docker").unwrap();
+    app.goto_nav(NavTarget::Group(system_idx));
+    let wb_regions = LayoutRegions::compute(portrait, &app);
+    let wb = wb_regions.workbench.as_ref().expect("workbench geometry");
+    assert!(wb.stacked);
+    assert!(wb.inspector_cta.is_some_and(|r| r.height >= 2));
+    assert!(wb.inspector_copy_btn.is_some_and(|r| r.height >= 2));
+    assert!(wb.selectable_rects.iter().all(|(r, _)| r.height == 2));
+    let _ = render_clash_frame_text(&mut app, 82, 54);
+
+    // Tap row 1 once -> selects; tap different x on same row -> activates!
+    let (row1_rect, row1_idx) = wb.selectable_rects[1];
+    app.handle_mouse(click(row1_rect.x + 2, row1_rect.y), portrait)
+        .unwrap();
+    assert_eq!(app.positions[system_idx], row1_idx);
+    let second_eff = app
+        .handle_mouse(click(row1_rect.x + 12, row1_rect.y + 1), portrait)
+        .unwrap();
+    assert!(
+        !matches!(second_eff, super::state::Effect::None)
+            || app.form.is_some()
+            || app.confirmation.is_some(),
+        "second tap anywhere on the same 2-row action should activate it"
+    );
+    app.form = None;
+    app.confirmation = None;
+
+    // 4. Docker 6 tabs + ActionMenu & PruneWizard at 82x54
+    app.docker = fixture_docker_state(app.now);
+    app.goto_nav(NavTarget::Group(docker_idx));
+    let dk_regions = LayoutRegions::compute(portrait, &app);
+    let dk = dk_regions.docker.as_ref().expect("docker geometry");
+    assert_eq!(dk.tab_bar.height, 2);
+    assert_eq!(dk.row_height, 2);
+    assert!(dk.quick_btns.iter().all(|b| b.rect.height >= 2));
+    for tab in DockerTab::ALL {
+        app.docker.set_tab(tab);
+        let _ = render_clash_frame_text(&mut app, 82, 54);
+    }
+    app.docker.set_tab(DockerTab::Containers);
+    let dk_next = dk_regions
+        .thumb_bar
+        .iter()
+        .find(|b| b.action == ThumbAction::DockerNextTab)
+        .expect("docker next tab thumb");
+    app.handle_mouse(click(dk_next.rect.x + 1, dk_next.rect.y + 1), portrait)
+        .unwrap();
+    assert_eq!(app.docker.tab, DockerTab::Compose);
+
+    // 5. Theme Drawer [D] live preview, Esc revert, Enter persist to config.toml
+    app.goto_nav(NavTarget::Overview);
+    let desktop = Rect::new(0, 0, 120, 36);
+    assert_eq!(app.ui_density, UiDensityMode::Auto);
+    assert_eq!(app.resolved_density(desktop), ResolvedDensity::Compact);
+    app.handle_key(key(KeyCode::Char('T'))).unwrap();
+    assert!(app.theme_drawer.is_some());
+    app.handle_key(key(KeyCode::Char('d'))).unwrap();
+    assert_eq!(app.ui_density, UiDensityMode::Touch);
+    assert_eq!(app.resolved_density(desktop), ResolvedDensity::TouchMedium);
+    // Esc reverts ui_density back to Auto
+    app.handle_key(key(KeyCode::Esc)).unwrap();
+    assert!(app.theme_drawer.is_none());
+    assert_eq!(app.ui_density, UiDensityMode::Auto);
+    // Re-open, toggle to Touch, save with Enter -> persists to config.toml
+    app.handle_key(key(KeyCode::Char('T'))).unwrap();
+    app.handle_key(key(KeyCode::Char('d'))).unwrap();
+    app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(app.theme_drawer.is_none());
+    assert_eq!(app.ui_density, UiDensityMode::Touch);
+    let reloaded = Preferences::read(&app.ctx.paths.preferences, true).unwrap();
+    assert_eq!(reloaded.ui_density.as_deref(), Some("touch"));
+
+    // 6. Plain ASCII theme in en-US must stay 100% 7-bit ASCII across TouchTall (82x54) & TouchMedium (52x36)
+    let (_temp_en, mut app_en) = test_app("en-US");
+    app_en.clash.snapshot = sample_snapshot();
+    app_en.docker = fixture_docker_state(app_en.now);
+    app_en
+        .preview_theme("plain", Background::Detected((0, 0, 0)))
+        .unwrap();
+
+    let assert_plain_chrome_ascii = |txt: &str, label: &str| {
+        assert!(
+            !txt.chars()
+                .any(|c| !c.is_ascii() && c != '·' && c != '×' && c != 'é'),
+            "non-ASCII chrome in plain {label}:\n{txt}"
+        );
+        // Bottom thumb bar (last 3 rows) must be 100% strict 7-bit ASCII
+        for row in txt.lines().rev().take(3) {
+            assert!(
+                row.is_ascii(),
+                "non-ASCII in plain thumb bar ({label}): {row}"
+            );
+        }
+    };
+
+    for (w, h) in [(82u16, 54u16), (52, 36)] {
+        app_en.goto_nav(NavTarget::Overview);
+        let txt = render_clash_frame_text(&mut app_en, w, h);
+        assert_plain_chrome_ascii(&txt, &format!("overview {w}x{h}"));
+
+        app_en.sidebar_overlay = true;
+        let txt = render_clash_frame_text(&mut app_en, w, h);
+        assert_plain_chrome_ascii(&txt, &format!("sidebar {w}x{h}"));
+        app_en.sidebar_overlay = false;
+
+        app_en.goto_nav(NavTarget::Group(system_idx));
+        let txt = render_clash_frame_text(&mut app_en, w, h);
+        assert_plain_chrome_ascii(&txt, &format!("workbench {w}x{h}"));
+
+        app_en.open_clash(ClashTab::Overview, false, false);
+        let txt = render_clash_frame_text(&mut app_en, w, h);
+        assert!(
+            txt.is_ascii(),
+            "non-ASCII in plain clash overview {w}x{h}:\n{txt}"
+        );
+
+        app_en.clash.set_tab(ClashTab::Proxies);
+        let txt = render_clash_frame_text(&mut app_en, w, h);
+        assert!(
+            txt.is_ascii(),
+            "non-ASCII in plain clash proxies {w}x{h}:\n{txt}"
+        );
+
+        app_en.goto_nav(NavTarget::Group(docker_idx));
+        let txt = render_clash_frame_text(&mut app_en, w, h);
+        assert!(txt.is_ascii(), "non-ASCII in plain docker {w}x{h}:\n{txt}");
+
+        app_en.handle_key(key(KeyCode::Char('T'))).unwrap();
+        let txt = render_clash_frame_text(&mut app_en, w, h);
+        assert_plain_chrome_ascii(&txt, &format!("theme drawer {w}x{h}"));
+        app_en.handle_key(key(KeyCode::Esc)).unwrap();
     }
 }

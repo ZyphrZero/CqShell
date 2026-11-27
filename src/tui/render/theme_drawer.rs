@@ -78,23 +78,54 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ThemeDrawerGeometry) {
         drawer.tab == DrawerTab::Style,
         bg,
     );
-    if geom.tab_palette.y + 1 < geom.list_area.y {
+    if geom.tab_palette.bottom() < geom.list_area.y {
         tokens::draw_rule(
             buf,
             geom.list_area.x,
-            geom.tab_palette.y + 1,
+            geom.tab_palette.bottom(),
             geom.list_area.width,
             theme,
             bg,
         );
     }
 
-    let list_h = geom.list_area.height as usize;
+    let visible_entries = (geom.list_area.height / geom.row_height.max(1)) as usize;
     match drawer.tab {
-        DrawerTab::Palette => {
-            draw_palette_list(app, buf, geom, drawer, list_h, bg, elapsed, reduced)
-        }
-        DrawerTab::Style => draw_style_list(app, buf, geom, drawer, list_h, bg, elapsed, reduced),
+        DrawerTab::Palette => draw_palette_list(
+            app,
+            buf,
+            geom,
+            drawer,
+            visible_entries,
+            bg,
+            elapsed,
+            reduced,
+        ),
+        DrawerTab::Style => draw_style_list(
+            app,
+            buf,
+            geom,
+            drawer,
+            visible_entries,
+            bg,
+            elapsed,
+            reduced,
+        ),
+    }
+
+    if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+        tokens::draw_pager_buttons(
+            buf,
+            geom.prev_btn,
+            geom.next_btn,
+            geom.can_prev,
+            geom.can_next,
+            None,
+            app.hover,
+            theme,
+            i,
+            bg,
+        );
     }
 
     // Divider above toggles
@@ -129,6 +160,18 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ThemeDrawerGeometry) {
         "M",
         i.text("ui.style_motion"),
         app.theme.reduced_motion,
+        bg,
+    );
+
+    // Live Toggle 3: Touch Density Mode (`D`)
+    draw_value_row(
+        app,
+        buf,
+        geom.density_toggle,
+        "D",
+        i.text("ui.style_density"),
+        i.text(app.ui_density.label_key()),
+        !matches!(app.ui_density, crate::tui::layout::UiDensityMode::Compact),
         bg,
     );
 
@@ -269,6 +312,15 @@ fn draw_tab_pill(
     }
     let theme = &app.theme.active;
     let hovered = app.hover.is_some_and(|p| rect.contains(p));
+    if rect.height >= 2 {
+        let kind = if active {
+            tokens::TouchBtnKind::Active
+        } else {
+            tokens::TouchBtnKind::Secondary
+        };
+        tokens::draw_touch_button(buf, rect, label, None, kind, hovered, theme, base_bg);
+        return;
+    }
     if theme.flags.ascii {
         let text = if active {
             format!("[{label}]")
@@ -346,8 +398,8 @@ fn draw_palette_list(
         .enumerate()
     {
         let idx = geom.list_scroll + offset;
-        let y = geom.list_area.y + offset as u16;
-        let row_rect = Rect::new(geom.list_area.x, y, geom.list_area.width, 1);
+        let y = geom.list_area.y + (offset as u16) * geom.row_height;
+        let row_rect = Rect::new(geom.list_area.x, y, geom.list_area.width, geom.row_height);
         let active = idx == drawer.cursor;
         let hovered = app.hover.is_some_and(|p| row_rect.contains(p));
         let row_bg = if active {
@@ -357,19 +409,20 @@ fn draw_palette_list(
         } else {
             bg
         };
-        for col in row_rect.left()..row_rect.right() {
-            buf[(col, y)].set_symbol(" ").set_bg(row_bg);
-        }
-
-        if active {
-            buf[(row_rect.x, y)]
-                .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
-                .set_style(
-                    Style::default()
-                        .fg(tokens::animated_selected_accent(theme, elapsed, reduced))
-                        .bg(row_bg)
-                        .add_modifier(Modifier::BOLD),
-                );
+        for ry in row_rect.top()..row_rect.bottom() {
+            for col in row_rect.left()..row_rect.right() {
+                buf[(col, ry)].set_symbol(" ").set_bg(row_bg);
+            }
+            if active {
+                buf[(row_rect.x, ry)]
+                    .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
+                    .set_style(
+                        Style::default()
+                            .fg(tokens::animated_selected_accent(theme, elapsed, reduced))
+                            .bg(row_bg)
+                            .add_modifier(Modifier::BOLD),
+                    );
+            }
         }
 
         let name = entry.display_name(i);
@@ -461,8 +514,8 @@ fn draw_style_list(
         .enumerate()
     {
         let idx = geom.list_scroll + offset;
-        let y = geom.list_area.y + offset as u16;
-        let row_rect = Rect::new(geom.list_area.x, y, geom.list_area.width, 1);
+        let y = geom.list_area.y + (offset as u16) * geom.row_height;
+        let row_rect = Rect::new(geom.list_area.x, y, geom.list_area.width, geom.row_height);
         let active = idx == drawer.style_cursor;
         let hovered = app.hover.is_some_and(|p| row_rect.contains(p));
         let row_bg = if active {
@@ -472,19 +525,20 @@ fn draw_style_list(
         } else {
             bg
         };
-        for col in row_rect.left()..row_rect.right() {
-            buf[(col, y)].set_symbol(" ").set_bg(row_bg);
-        }
-
-        if active {
-            buf[(row_rect.x, y)]
-                .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
-                .set_style(
-                    Style::default()
-                        .fg(tokens::animated_selected_accent(theme, elapsed, reduced))
-                        .bg(row_bg)
-                        .add_modifier(Modifier::BOLD),
-                );
+        for ry in row_rect.top()..row_rect.bottom() {
+            for col in row_rect.left()..row_rect.right() {
+                buf[(col, ry)].set_symbol(" ").set_bg(row_bg);
+            }
+            if active {
+                buf[(row_rect.x, ry)]
+                    .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
+                    .set_style(
+                        Style::default()
+                            .fg(tokens::animated_selected_accent(theme, elapsed, reduced))
+                            .bg(row_bg)
+                            .add_modifier(Modifier::BOLD),
+                    );
+            }
         }
 
         let (label, right_badge) = match *choice {
@@ -556,8 +610,10 @@ fn draw_toggle_row(
     } else {
         base_bg
     };
-    for col in rect.left()..rect.right() {
-        buf[(col, rect.y)].set_symbol(" ").set_bg(bg);
+    for ry in rect.top()..rect.bottom() {
+        for col in rect.left()..rect.right() {
+            buf[(col, ry)].set_symbol(" ").set_bg(bg);
+        }
     }
 
     let state_label = if enabled {
@@ -602,6 +658,70 @@ fn draw_toggle_row(
     tokens::put_right(
         buf,
         rect,
+        &state_label,
+        Style::default()
+            .fg(state_color)
+            .bg(bg)
+            .add_modifier(Modifier::BOLD),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_value_row(
+    app: &App,
+    buf: &mut ratatui::buffer::Buffer,
+    rect: Rect,
+    key: &str,
+    label: &str,
+    value: &str,
+    highlighted: bool,
+    base_bg: Color,
+) {
+    if rect.height == 0 || rect.width < 10 {
+        return;
+    }
+    let theme = &app.theme.active;
+    let hovered = app.hover.is_some_and(|p| rect.contains(p));
+    let bg = if hovered && theme.flags.paint_bg {
+        tokens::color(theme, Role::SurfaceAlt)
+    } else {
+        base_bg
+    };
+    for ry in rect.top()..rect.bottom() {
+        for col in rect.left()..rect.right() {
+            buf[(col, ry)].set_symbol(" ").set_bg(bg);
+        }
+    }
+    let state_label = format!("{} {value}", tokens::glyph(theme, Glyph::DotOn));
+    let state_color = if highlighted {
+        tokens::color(theme, Role::Accent)
+    } else {
+        tokens::color(theme, Role::Text3)
+    };
+    let key_str = format!("[{key}] ");
+    buf.set_stringn(
+        rect.x,
+        rect.y,
+        &key_str,
+        key_str.width(),
+        tokens::fg(theme, Role::Accent)
+            .bg(bg)
+            .add_modifier(Modifier::BOLD),
+    );
+    let label_budget = rect
+        .width
+        .saturating_sub(key_str.width() as u16 + state_label.width() as u16 + 2)
+        as usize;
+    buf.set_stringn(
+        rect.x + key_str.width() as u16,
+        rect.y,
+        clip_ascii_safe(label, label_budget, theme.flags.ascii),
+        label_budget,
+        tokens::text(theme, Level::Secondary).bg(bg),
+    );
+    tokens::put_right(
+        buf,
+        Rect::new(rect.x, rect.y, rect.width, 1),
         &state_label,
         Style::default()
             .fg(state_color)

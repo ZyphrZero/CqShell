@@ -342,6 +342,68 @@ fn draw_footer(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
         return;
     }
     tokens::fill_surface(frame.buffer_mut(), bar, theme, Role::Sidebar);
+
+    if !regions.thumb_bar.is_empty() && bar.height >= 2 {
+        let bar_bg = if theme.flags.paint_bg {
+            tokens::color(theme, Role::Sidebar)
+        } else {
+            ratatui::style::Color::Reset
+        };
+        let buf = frame.buffer_mut();
+        for btn in &regions.thumb_bar {
+            let hovered = app.hover.is_some_and(|p| btn.rect.contains(p));
+            let kind = if btn.danger {
+                tokens::TouchBtnKind::Danger
+            } else if btn.emphasized {
+                tokens::TouchBtnKind::Primary
+            } else {
+                tokens::TouchBtnKind::Secondary
+            };
+            tokens::draw_touch_button(
+                buf, btn.rect, &btn.label, None, kind, hovered, theme, bar_bg,
+            );
+        }
+
+        // Floating Toast Pill sits right above the thumb bar so it never hides thumb buttons
+        if let Some(toast) = &app.toast {
+            let age = app.now.saturating_duration_since(toast.shown);
+            let opacity = fx::toast_opacity(age);
+            if opacity > 0.05 && bar.y > 1 {
+                let max_toast_w = bar.width.saturating_sub(2).min(48) as usize;
+                let icon = match toast.tone {
+                    super::state::Tone::Success => tokens::glyph(theme, tokens::Glyph::Success),
+                    super::state::Tone::Warning => tokens::glyph(theme, tokens::Glyph::Warning),
+                    super::state::Tone::Danger => tokens::glyph(theme, tokens::Glyph::Failure),
+                    _ => tokens::glyph(theme, tokens::Glyph::DotOn),
+                };
+                let content = clip_ascii_safe(
+                    &format!(" {icon} {} ", toast.text),
+                    max_toast_w,
+                    theme.flags.ascii,
+                );
+                let w = content.width() as u16;
+                let x = bar.right().saturating_sub(w + 1);
+                let toast_y = bar.y.saturating_sub(1);
+                let fg_col = tokens::color(theme, tokens::tone_role(toast.tone));
+                let bg_col = if theme.flags.paint_bg {
+                    tokens::color(theme, Role::Elevated)
+                } else {
+                    ratatui::style::Color::Reset
+                };
+                let blended_fg =
+                    fx::blend_ratatui(tokens::color(theme, Role::Canvas), fg_col, opacity);
+                let style = Style::default()
+                    .fg(blended_fg)
+                    .bg(bg_col)
+                    .add_modifier(Modifier::BOLD);
+                frame
+                    .buffer_mut()
+                    .set_stringn(x, toast_y, &content, w as usize, style);
+            }
+        }
+        return;
+    }
+
     let mobile = bar.width < 80;
 
     let pairs: Vec<(&str, &str)> = if app.worker.is_some() {
@@ -357,7 +419,7 @@ fn draw_footer(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
         vec![
             ("←→/Tab", i.text("key.switch_tab")),
             ("↑↓", i.text("key.preview")),
-            ("B/M", i.text("key.toggle_opt")),
+            ("B/M/D", i.text("key.toggle_opt")),
             ("↵", i.text("key.keep_theme")),
             ("Esc", i.text("key.restore_theme")),
         ]

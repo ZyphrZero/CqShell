@@ -200,6 +200,15 @@ fn draw_chain_action(
     if rect.width == 0 || rect.height == 0 {
         return;
     }
+    if rect.height >= 2 {
+        let kind = if accent {
+            tokens::TouchBtnKind::Primary
+        } else {
+            tokens::TouchBtnKind::Secondary
+        };
+        tokens::draw_touch_button(buf, rect, label.trim(), None, kind, hovered, theme, bg);
+        return;
+    }
     let style = if hovered {
         tokens::text(theme, Level::Primary)
             .bg(tokens::color(theme, Role::Selection))
@@ -697,6 +706,20 @@ fn draw_node_grid(app: &App, buf: &mut Buffer, geom: &ProxiesGeom, bg: Color) {
             geom.grid_visible_rows,
             geom.grid_total_rows,
             theme,
+            bg,
+        );
+    }
+    if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+        tokens::draw_pager_buttons(
+            buf,
+            geom.prev_btn,
+            geom.next_btn,
+            geom.can_prev,
+            geom.can_next,
+            geom.page_text.as_deref(),
+            app.hover,
+            theme,
+            &app.ctx.i18n,
             bg,
         );
     }

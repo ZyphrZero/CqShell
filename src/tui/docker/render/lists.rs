@@ -53,6 +53,20 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &DockerGeometry) {
 
     if app.docker.tab == DockerTab::Daemon {
         draw_daemon_list(app, frame, geom, bg);
+        if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+            tokens::draw_pager_buttons(
+                frame.buffer_mut(),
+                geom.prev_btn,
+                geom.next_btn,
+                geom.can_prev,
+                geom.can_next,
+                None,
+                app.hover,
+                theme,
+                &app.ctx.i18n,
+                bg,
+            );
+        }
         return;
     }
 
@@ -66,6 +80,21 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &DockerGeometry) {
         DockerTab::Volumes => draw_volumes_rows(app, frame, geom, bg),
         DockerTab::Networks => draw_networks_rows(app, frame, geom, bg),
         DockerTab::Daemon => unreachable!(),
+    }
+
+    if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+        tokens::draw_pager_buttons(
+            frame.buffer_mut(),
+            geom.prev_btn,
+            geom.next_btn,
+            geom.can_prev,
+            geom.can_next,
+            None,
+            app.hover,
+            theme,
+            &app.ctx.i18n,
+            bg,
+        );
     }
 
     if let Some(batch) = geom.batch_bar {
@@ -309,14 +338,16 @@ fn paint_selectable_row(
     };
     fill_rect_bg(buf, row_rect, row_bg);
     if active && row_rect.width > 0 && row_rect.height > 0 {
-        buf[(row_rect.x, row_rect.y)]
-            .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
-            .set_style(
-                Style::default()
-                    .fg(tokens::selected_accent(theme))
-                    .bg(row_bg)
-                    .add_modifier(Modifier::BOLD),
-            );
+        for y in row_rect.top()..row_rect.bottom() {
+            buf[(row_rect.x, y)]
+                .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
+                .set_style(
+                    Style::default()
+                        .fg(tokens::selected_accent(theme))
+                        .bg(row_bg)
+                        .add_modifier(Modifier::BOLD),
+                );
+        }
     }
     row_bg
 }
@@ -354,15 +385,12 @@ fn draw_containers_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg:
     let selected = app.docker.cursor();
     let buf = frame.buffer_mut();
 
-    for (offset, c) in items
-        .iter()
-        .skip(geom.list_scroll)
-        .take(inner.height as usize)
-        .enumerate()
-    {
+    let rh = geom.row_height.max(1);
+    let vis = (inner.height / rh) as usize;
+    for (offset, c) in items.iter().skip(geom.list_scroll).take(vis).enumerate() {
         let idx = geom.list_scroll + offset;
-        let y = inner.y + offset as u16;
-        let row_rect = Rect::new(inner.x, y, inner.width, 1);
+        let y = inner.y + offset as u16 * rh;
+        let row_rect = Rect::new(inner.x, y, inner.width, rh);
         let active = idx == selected;
         let row_bg = paint_selectable_row(app, buf, row_rect, active, bg);
 
@@ -458,6 +486,21 @@ fn draw_containers_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg:
                 );
             }
         }
+        if rh >= 2 && y + 1 < inner.bottom() {
+            let sub_w = inner.width.saturating_sub(8) as usize;
+            let sub_text = if !show_image {
+                format!("{}  {}", c.image, c.status)
+            } else {
+                c.status.clone()
+            };
+            buf.set_stringn(
+                inner.x + 7,
+                y + 1,
+                clip_ascii_safe(&sub_text, sub_w, ascii),
+                sub_w,
+                tokens::text(theme, Level::Tertiary).bg(row_bg),
+            );
+        }
     }
 }
 
@@ -489,7 +532,8 @@ fn draw_compose_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Co
     }
 
     let selected = app.docker.cursor();
-    let avail_h = inner.height as usize;
+    let rh = geom.row_height.max(1);
+    let avail_h = (inner.height / rh) as usize;
     for (offset, p) in items
         .iter()
         .skip(geom.list_scroll)
@@ -497,8 +541,8 @@ fn draw_compose_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Co
         .enumerate()
     {
         let idx = geom.list_scroll + offset;
-        let y = inner.y + offset as u16;
-        let row_rect = Rect::new(inner.x, y, inner.width, 1);
+        let y = inner.y + offset as u16 * rh;
+        let row_rect = Rect::new(inner.x, y, inner.width, rh);
         let active = idx == selected;
         let row_bg = paint_selectable_row(app, buf, row_rect, active, bg);
 
@@ -576,15 +620,12 @@ fn draw_images_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Col
     let selected = app.docker.cursor();
     let buf = frame.buffer_mut();
 
-    for (offset, img) in items
-        .iter()
-        .skip(geom.list_scroll)
-        .take(inner.height as usize)
-        .enumerate()
-    {
+    let rh = geom.row_height.max(1);
+    let vis = (inner.height / rh) as usize;
+    for (offset, img) in items.iter().skip(geom.list_scroll).take(vis).enumerate() {
         let idx = geom.list_scroll + offset;
-        let y = inner.y + offset as u16;
-        let row_rect = Rect::new(inner.x, y, inner.width, 1);
+        let y = inner.y + offset as u16 * rh;
+        let row_rect = Rect::new(inner.x, y, inner.width, rh);
         let active = idx == selected;
         let row_bg = paint_selectable_row(app, buf, row_rect, active, bg);
 
@@ -659,15 +700,12 @@ fn draw_volumes_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Co
     let selected = app.docker.cursor();
     let buf = frame.buffer_mut();
 
-    for (offset, vol) in items
-        .iter()
-        .skip(geom.list_scroll)
-        .take(inner.height as usize)
-        .enumerate()
-    {
+    let rh = geom.row_height.max(1);
+    let vis = (inner.height / rh) as usize;
+    for (offset, vol) in items.iter().skip(geom.list_scroll).take(vis).enumerate() {
         let idx = geom.list_scroll + offset;
-        let y = inner.y + offset as u16;
-        let row_rect = Rect::new(inner.x, y, inner.width, 1);
+        let y = inner.y + offset as u16 * rh;
+        let row_rect = Rect::new(inner.x, y, inner.width, rh);
         let active = idx == selected;
         let row_bg = paint_selectable_row(app, buf, row_rect, active, bg);
 
@@ -747,15 +785,12 @@ fn draw_networks_rows(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: C
     let selected = app.docker.cursor();
     let buf = frame.buffer_mut();
 
-    for (offset, net) in items
-        .iter()
-        .skip(geom.list_scroll)
-        .take(inner.height as usize)
-        .enumerate()
-    {
+    let rh = geom.row_height.max(1);
+    let vis = (inner.height / rh) as usize;
+    for (offset, net) in items.iter().skip(geom.list_scroll).take(vis).enumerate() {
         let idx = geom.list_scroll + offset;
-        let y = inner.y + offset as u16;
-        let row_rect = Rect::new(inner.x, y, inner.width, 1);
+        let y = inner.y + offset as u16 * rh;
+        let row_rect = Rect::new(inner.x, y, inner.width, rh);
         let active = idx == selected;
         let row_bg = paint_selectable_row(app, buf, row_rect, active, bg);
 
@@ -842,15 +877,17 @@ fn draw_daemon_list(app: &App, frame: &mut Frame, geom: &DockerGeometry, bg: Col
     let buf = frame.buffer_mut();
 
     // Render all 10 interactive Daemon entries directly aligned with `geom.row_at()`
+    let rh = geom.row_height.max(1);
+    let vis = (inner.height / rh) as usize;
     for (offset, entry) in DaemonEntry::ALL
         .iter()
         .skip(geom.list_scroll)
-        .take(inner.height as usize)
+        .take(vis)
         .enumerate()
     {
         let idx = geom.list_scroll + offset;
-        let y = inner.y + offset as u16;
-        let row_rect = Rect::new(inner.x, y, inner.width, 1);
+        let y = inner.y + offset as u16 * rh;
+        let row_rect = Rect::new(inner.x, y, inner.width, rh);
         let active = idx == selected;
         let row_bg = paint_selectable_row(app, buf, row_rect, active, bg);
 

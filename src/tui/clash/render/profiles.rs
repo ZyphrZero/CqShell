@@ -271,6 +271,20 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ProfilesGeom) {
                 }
             }
         }
+        if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+            tokens::draw_pager_buttons(
+                buf,
+                geom.prev_btn,
+                geom.next_btn,
+                geom.can_prev,
+                geom.can_next,
+                None,
+                app.hover,
+                theme,
+                i,
+                lbg,
+            );
+        }
     }
 
     // 3. Right Profile Inspector & Providers summary

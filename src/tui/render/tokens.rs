@@ -825,6 +825,409 @@ pub(in crate::tui) fn put_right(buf: &mut Buffer, row: Rect, text: &str, style: 
     );
 }
 
+/// Visual tone for touch-scaled multi-row buttons (`draw_touch_button`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::tui) enum TouchBtnKind {
+    Primary,
+    Secondary,
+    Danger,
+    Active,
+}
+
+/// Draw a style-adapted button spanning 1, 2, or 3 rows cleanly across all 8 UI styles and
+/// pure 7-bit ASCII `plain` mode:
+/// - `height >= 3`: symmetric bordered (or solid tonal padded) button with centered text on row 1.
+/// - `height == 2`: solid tonal pill with centered label on row 0 and optional sublabel / accent
+///   underline indicator on row 1.
+/// - `height == 1`: compact single-row pill.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::tui) fn draw_touch_button(
+    buf: &mut Buffer,
+    rect: Rect,
+    label: &str,
+    sublabel: Option<&str>,
+    kind: TouchBtnKind,
+    hovered: bool,
+    theme: &Theme,
+    parent_bg: Color,
+) {
+    let area = rect.intersection(buf.area);
+    if area.width < 2 || area.height == 0 {
+        return;
+    }
+    let ascii = theme.flags.ascii;
+    let is_primary = matches!(kind, TouchBtnKind::Primary | TouchBtnKind::Active);
+    let is_danger = kind == TouchBtnKind::Danger;
+
+    if ascii {
+        let base_style = if is_primary || hovered {
+            Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            text(theme, Level::Secondary)
+        };
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)].set_symbol(" ").set_style(Style::default());
+            }
+        }
+        if area.height >= 3 && area.width >= 4 {
+            let l = area.left();
+            let r = area.right() - 1;
+            let t = area.top();
+            let b = area.bottom() - 1;
+            let border_style = if is_primary || hovered {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                text(theme, Level::Tertiary)
+            };
+            buf[(l, t)].set_symbol("+").set_style(border_style);
+            buf[(r, t)].set_symbol("+").set_style(border_style);
+            buf[(l, b)].set_symbol("+").set_style(border_style);
+            buf[(r, b)].set_symbol("+").set_style(border_style);
+            for x in (l + 1)..r {
+                buf[(x, t)].set_symbol("-").set_style(border_style);
+                buf[(x, b)].set_symbol("-").set_style(border_style);
+            }
+            for y in (t + 1)..b {
+                buf[(l, y)].set_symbol("|").set_style(border_style);
+                buf[(r, y)].set_symbol("|").set_style(border_style);
+            }
+            let inner_w = area.width.saturating_sub(2) as usize;
+            let mid_y = area.y + area.height / 2;
+            let clipped = super::clip_ascii_safe(label, inner_w, true);
+            let pad = inner_w.saturating_sub(clipped.width()) / 2;
+            if is_primary || hovered {
+                for x in (l + 1)..r {
+                    buf[(x, mid_y)].set_symbol(" ").set_style(base_style);
+                }
+            }
+            buf.set_stringn(l + 1 + pad as u16, mid_y, &clipped, inner_w, base_style);
+        } else {
+            let bracketed = if is_primary {
+                format!("[{label}]")
+            } else {
+                format!(" {label} ")
+            };
+            let clipped = super::clip_ascii_safe(&bracketed, area.width as usize, true);
+            let pad = (area.width as usize).saturating_sub(clipped.width()) / 2;
+            buf.set_stringn(
+                area.x + pad as u16,
+                area.y,
+                &clipped,
+                area.width as usize,
+                base_style,
+            );
+            if area.height >= 2 {
+                if let Some(sub) = sublabel.filter(|s| !s.is_empty()) {
+                    let s = super::clip_ascii_safe(sub, area.width as usize, true);
+                    let sp = (area.width as usize).saturating_sub(s.width()) / 2;
+                    buf.set_stringn(
+                        area.x + sp as u16,
+                        area.y + 1,
+                        &s,
+                        area.width as usize,
+                        text(theme, Level::Tertiary),
+                    );
+                } else if is_primary {
+                    for x in area.left()..area.right() {
+                        buf[(x, area.y + 1)]
+                            .set_symbol("=")
+                            .set_style(Style::default().add_modifier(Modifier::BOLD));
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    let (fg_col, bg_col, border_col) = if is_danger {
+        if hovered {
+            (
+                color(theme, Role::OnAccent),
+                color(theme, Role::Danger),
+                color(theme, Role::Danger),
+            )
+        } else if theme.flags.paint_bg {
+            (
+                color(theme, Role::Danger),
+                color(theme, Role::SurfaceAlt),
+                color(theme, Role::Danger),
+            )
+        } else {
+            (
+                color(theme, Role::Danger),
+                parent_bg,
+                color(theme, Role::Danger),
+            )
+        }
+    } else if is_primary {
+        (
+            color(theme, Role::OnAccent),
+            color(theme, Role::Accent),
+            color(theme, Role::Accent),
+        )
+    } else if hovered {
+        (
+            selected_fg(theme),
+            color(theme, Role::Selection),
+            color(theme, Role::BorderFocus),
+        )
+    } else if theme.flags.paint_bg {
+        (
+            color(theme, Role::Text1),
+            color(theme, Role::SurfaceAlt),
+            color(theme, Role::Border),
+        )
+    } else {
+        (
+            color(theme, Role::Text1),
+            parent_bg,
+            color(theme, Role::Border),
+        )
+    };
+
+    let fill_style = Style::default().fg(fg_col).bg(bg_col);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buf[(x, y)].set_symbol(" ").set_style(fill_style);
+        }
+    }
+
+    let mut label_style = Style::default().fg(fg_col).bg(bg_col);
+    if is_primary || hovered || is_danger {
+        label_style = label_style.add_modifier(Modifier::BOLD);
+    }
+
+    if area.height >= 3 && area.width >= 4 {
+        let use_box = theme.flags.framed || !theme.flags.paint_bg;
+        if use_box {
+            let (tl, tr, bl, br, hz, vt) = match theme.style {
+                UiStyle::Heavy => ("┏", "┓", "┗", "┛", "━", "┃"),
+                UiStyle::Atelier | UiStyle::Editorial | UiStyle::Hud => {
+                    ("┌", "┐", "└", "┘", "─", "│")
+                }
+                _ => ("╭", "╮", "╰", "╯", "─", "│"),
+            };
+            let bstyle = Style::default()
+                .fg(if is_primary && theme.flags.paint_bg {
+                    fg_col
+                } else {
+                    border_col
+                })
+                .bg(bg_col);
+            let l = area.left();
+            let r = area.right() - 1;
+            let t = area.top();
+            let b = area.bottom() - 1;
+            buf[(l, t)].set_symbol(tl).set_style(bstyle);
+            buf[(r, t)].set_symbol(tr).set_style(bstyle);
+            buf[(l, b)].set_symbol(bl).set_style(bstyle);
+            buf[(r, b)].set_symbol(br).set_style(bstyle);
+            for x in (l + 1)..r {
+                buf[(x, t)].set_symbol(hz).set_style(bstyle);
+                buf[(x, b)].set_symbol(hz).set_style(bstyle);
+            }
+            for y in (t + 1)..b {
+                buf[(l, y)].set_symbol(vt).set_style(bstyle);
+                buf[(r, y)].set_symbol(vt).set_style(bstyle);
+            }
+            let inner_w = area.width.saturating_sub(2) as usize;
+            let mid_y = area.y + area.height / 2;
+            let clipped = super::clip_ascii_safe(label, inner_w, false);
+            let pad = inner_w.saturating_sub(clipped.width()) / 2;
+            buf.set_stringn(l + 1 + pad as u16, mid_y, &clipped, inner_w, label_style);
+        } else {
+            let inner_w = area.width.saturating_sub(2) as usize;
+            let mid_y = area.y + area.height / 2;
+            let clipped = super::clip_ascii_safe(label, inner_w, false);
+            let pad = inner_w.saturating_sub(clipped.width()) / 2;
+            buf.set_stringn(
+                area.x + 1 + pad as u16,
+                mid_y,
+                &clipped,
+                inner_w,
+                label_style,
+            );
+            if let Some(sub) = sublabel.filter(|s| !s.is_empty())
+                && mid_y + 1 < area.bottom()
+            {
+                let sub_fg = if is_primary {
+                    fg_col
+                } else {
+                    color(theme, Role::Text3)
+                };
+                let sc = super::clip_ascii_safe(sub, inner_w, false);
+                let sp = inner_w.saturating_sub(sc.width()) / 2;
+                buf.set_stringn(
+                    area.x + 1 + sp as u16,
+                    mid_y + 1,
+                    &sc,
+                    inner_w,
+                    Style::default().fg(sub_fg).bg(bg_col),
+                );
+            }
+        }
+    } else if area.height == 2 {
+        let inner_w = area.width.saturating_sub(2).max(1) as usize;
+        let x0 = area.x + u16::from(area.width > 2);
+        let clipped = super::clip_ascii_safe(label, inner_w, false);
+        let pad = inner_w.saturating_sub(clipped.width()) / 2;
+        buf.set_stringn(x0 + pad as u16, area.y, &clipped, inner_w, label_style);
+        if let Some(sub) = sublabel.filter(|s| !s.is_empty()) {
+            let sub_fg = if is_primary {
+                fg_col
+            } else {
+                color(theme, Role::Text3)
+            };
+            let sc = super::clip_ascii_safe(sub, inner_w, false);
+            let sp = inner_w.saturating_sub(sc.width()) / 2;
+            buf.set_stringn(
+                x0 + sp as u16,
+                area.y + 1,
+                &sc,
+                inner_w,
+                Style::default().fg(sub_fg).bg(bg_col),
+            );
+        } else if is_primary || hovered {
+            let bar_fg = if is_primary {
+                fg_col
+            } else {
+                color(theme, Role::Accent)
+            };
+            for x in x0..(x0 + inner_w as u16).min(area.right()) {
+                buf[(x, area.y + 1)]
+                    .set_symbol("─")
+                    .set_style(Style::default().fg(bar_fg).bg(bg_col));
+            }
+        }
+    } else {
+        let inner_w = area.width as usize;
+        let padded = format!(" {label} ");
+        let clipped = super::clip_ascii_safe(&padded, inner_w, false);
+        let pad = inner_w.saturating_sub(clipped.width()) / 2;
+        buf.set_stringn(area.x + pad as u16, area.y, &clipped, inner_w, label_style);
+    }
+}
+
+/// Draw a consistent pair of touch-friendly Prev/Next pagination buttons with optional center indicator.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::tui) fn draw_pager_buttons(
+    buf: &mut Buffer,
+    prev_rect: Option<Rect>,
+    next_rect: Option<Rect>,
+    can_prev: bool,
+    can_next: bool,
+    page_text: Option<&str>,
+    hover: Option<ratatui::layout::Position>,
+    theme: &Theme,
+    i18n: &crate::i18n::I18n,
+    parent_bg: Color,
+) {
+    let ascii = theme.flags.ascii;
+    let prev_lbl = if ascii {
+        format!("^ {}", i18n.text("touch.page_prev"))
+    } else {
+        format!("▲ {}", i18n.text("touch.page_prev"))
+    };
+    let next_lbl = if ascii {
+        format!("v {}", i18n.text("touch.page_next"))
+    } else {
+        format!("▼ {}", i18n.text("touch.page_next"))
+    };
+    if let Some(r) = prev_rect {
+        let hov = can_prev && hover.is_some_and(|p| r.contains(p));
+        if can_prev {
+            draw_touch_button(
+                buf,
+                r,
+                &prev_lbl,
+                None,
+                TouchBtnKind::Secondary,
+                hov,
+                theme,
+                parent_bg,
+            );
+        } else {
+            let area = r.intersection(buf.area);
+            let bg = if theme.flags.paint_bg {
+                parent_bg
+            } else {
+                Color::Reset
+            };
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    buf[(x, y)].set_symbol(" ").set_bg(bg);
+                }
+            }
+            let mid_y = area.y + area.height / 2;
+            let clipped = super::clip_ascii_safe(&prev_lbl, area.width as usize, ascii);
+            let pad = (area.width as usize).saturating_sub(clipped.width()) / 2;
+            buf.set_stringn(
+                area.x + pad as u16,
+                mid_y,
+                &clipped,
+                area.width as usize,
+                text(theme, Level::Tertiary).bg(bg),
+            );
+        }
+    }
+    if let Some(r) = next_rect {
+        let hov = can_next && hover.is_some_and(|p| r.contains(p));
+        if can_next {
+            draw_touch_button(
+                buf,
+                r,
+                &next_lbl,
+                None,
+                TouchBtnKind::Secondary,
+                hov,
+                theme,
+                parent_bg,
+            );
+        } else {
+            let area = r.intersection(buf.area);
+            let bg = if theme.flags.paint_bg {
+                parent_bg
+            } else {
+                Color::Reset
+            };
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    buf[(x, y)].set_symbol(" ").set_bg(bg);
+                }
+            }
+            let mid_y = area.y + area.height / 2;
+            let clipped = super::clip_ascii_safe(&next_lbl, area.width as usize, ascii);
+            let pad = (area.width as usize).saturating_sub(clipped.width()) / 2;
+            buf.set_stringn(
+                area.x + pad as u16,
+                mid_y,
+                &clipped,
+                area.width as usize,
+                text(theme, Level::Tertiary).bg(bg),
+            );
+        }
+    }
+    if let (Some(p), Some(n), Some(info)) = (prev_rect, next_rect, page_text)
+        && n.x > p.right() + 2
+    {
+        let mid_x = p.right() + 1;
+        let mid_w = n.x.saturating_sub(mid_x + 1);
+        let mid_y = p.y + p.height / 2;
+        if mid_w >= 3 && mid_y < buf.area.bottom() {
+            let clipped = super::clip_ascii_safe(info, mid_w as usize, ascii);
+            let pad = (mid_w as usize).saturating_sub(clipped.width()) / 2;
+            buf.set_stringn(
+                mid_x + pad as u16,
+                mid_y,
+                &clipped,
+                mid_w as usize,
+                text(theme, Level::Tertiary).bg(parent_bg),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,7 +8,10 @@ use crate::{
         ClashAvailability, ClashTab, IpQualityLevel, IpQualityOutcome, ServiceTarget,
     },
     theme::Role,
-    tui::{layout::list_offset, state::App},
+    tui::{
+        layout::{ResolvedDensity, list_offset, split_touch_buttons},
+        state::App,
+    },
 };
 use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
@@ -58,6 +61,17 @@ pub(in crate::tui) struct OverviewGeom {
     pub connections_card: Rect,
     pub groups_card: Rect,
     pub group_card_hits: Vec<(Rect, usize)>,
+    pub group_prev_btn: Option<Rect>,
+    pub group_next_btn: Option<Rect>,
+    pub group_can_prev: bool,
+    pub group_can_next: bool,
+    pub group_page_text: Option<String>,
+    pub overview_prev_btn: Option<Rect>,
+    pub overview_next_btn: Option<Rect>,
+    pub overview_can_prev: bool,
+    pub overview_can_next: bool,
+    pub overview_page_text: Option<String>,
+    pub overview_max_scroll: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -104,12 +118,25 @@ pub(in crate::tui) struct ProxiesGeom {
     pub grid_total_rows: usize,
     pub visible_node_range: (usize, usize),
     pub node_hits: Vec<(Rect, usize)>,
+    pub prev_btn: Option<Rect>,
+    pub next_btn: Option<Rect>,
+    pub can_prev: bool,
+    pub can_next: bool,
+    pub page_text: Option<String>,
 }
 
 /// Shared hit-test rectangle for a proxy node card's right-aligned latency badge.
 /// Clicking this sub-region triggers a single-node delay test without switching the active node.
 pub(in crate::tui) fn proxy_card_delay_hit(card: Rect) -> Option<Rect> {
-    if card.height >= 2 && card.width >= 16 {
+    if card.height >= 3 && card.width >= 16 {
+        let w = 10u16.min(card.width.saturating_sub(8));
+        Some(Rect::new(
+            card.right().saturating_sub(w + 1),
+            card.y + 1,
+            w,
+            2,
+        ))
+    } else if card.height >= 2 && card.width >= 16 {
         let w = 8u16.min(card.width.saturating_sub(8));
         Some(Rect::new(
             card.right().saturating_sub(w + 1),
@@ -137,6 +164,10 @@ pub(in crate::tui) struct ProfilesGeom {
     pub list_inner: Rect,
     pub item_hits: Vec<(Rect, usize)>,
     pub inspector_area: Rect,
+    pub prev_btn: Option<Rect>,
+    pub next_btn: Option<Rect>,
+    pub can_prev: bool,
+    pub can_next: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +183,11 @@ pub(in crate::tui) struct ConnectionsGeom {
     pub table_header: Rect,
     pub list_inner: Rect,
     pub list_scroll: usize,
+    pub row_height: u16,
+    pub prev_btn: Option<Rect>,
+    pub next_btn: Option<Rect>,
+    pub can_prev: bool,
+    pub can_next: bool,
     pub inspector_area: Rect,
     pub inspector_body: Rect,
 }
@@ -167,6 +203,11 @@ pub(in crate::tui) struct RulesGeom {
     pub table_header: Rect,
     pub list_inner: Rect,
     pub list_scroll: usize,
+    pub row_height: u16,
+    pub prev_btn: Option<Rect>,
+    pub next_btn: Option<Rect>,
+    pub can_prev: bool,
+    pub can_next: bool,
     pub providers_area: Rect,
 }
 
@@ -178,6 +219,11 @@ pub(in crate::tui) struct ToolsGeom {
     pub list_area: Rect,
     pub list_inner: Rect,
     pub list_scroll: usize,
+    pub row_height: u16,
+    pub prev_btn: Option<Rect>,
+    pub next_btn: Option<Rect>,
+    pub can_prev: bool,
+    pub can_next: bool,
     pub inspector_area: Rect,
     pub inspector_body: Rect,
 }
@@ -210,17 +256,24 @@ pub(in crate::tui) struct ClashGeometry {
     pub tab_pills: Vec<ClashTabPill>,
     pub tab_overflow_left: bool,
     pub tab_overflow_right: bool,
+    pub tab_prev_hit: Option<Rect>,
+    pub tab_next_hit: Option<Rect>,
     pub focus_btn: Option<Rect>,
     pub tab_rule_y: u16,
     pub body: ClashBodyGeom,
 }
 
 impl ClashGeometry {
-    pub fn compute(area: Rect, app: &App, drawer_open: bool) -> Self {
+    pub fn compute(area: Rect, app: &App, drawer_open: bool, density: ResolvedDensity) -> Self {
         let cl = &app.clash;
         let i = &app.ctx.i18n;
         let theme = &app.theme.active;
         let framed = theme.flags.framed;
+        let tab_h = if density.is_expanded() && area.height >= 16 {
+            2u16
+        } else {
+            1u16
+        };
 
         let inner_x = area.x + 2;
         let inner_w = area.width.saturating_sub(4);
@@ -237,7 +290,7 @@ impl ClashGeometry {
                 (inner_x + inner_w).saturating_sub(focus_w),
                 tab_y,
                 focus_w,
-                1,
+                tab_h,
             ))
         } else {
             None
@@ -246,9 +299,18 @@ impl ClashGeometry {
         let pills_w = focus_btn
             .map(|r| r.x.saturating_sub(inner_x + 1))
             .unwrap_or(inner_w);
-        let tab_bar = Rect::new(inner_x, tab_y, pills_w, 1);
-        let (tab_pills, tab_overflow_left, tab_overflow_right) = build_tab_pills(tab_bar, cl, i);
-        let tab_rule_y = (tab_y + 1).min(area.bottom().saturating_sub(1));
+        let tab_bar = Rect::new(inner_x, tab_y, pills_w, tab_h);
+        let (tab_pills, tab_overflow_left, tab_overflow_right) =
+            build_tab_pills(tab_bar, cl, i, tab_h);
+        let tab_prev_hit = (tab_overflow_left && tab_bar.width >= 2)
+            .then_some(Rect::new(tab_bar.x, tab_bar.y, 2, tab_h));
+        let tab_next_hit = (tab_overflow_right && tab_bar.width >= 2).then_some(Rect::new(
+            tab_bar.right().saturating_sub(2),
+            tab_bar.y,
+            2,
+            tab_h,
+        ));
+        let tab_rule_y = (tab_y + tab_h).min(area.bottom().saturating_sub(1));
 
         let body_y = (tab_rule_y + 1).min(area.bottom());
         let body_h = area.bottom().saturating_sub(body_y + u16::from(framed));
@@ -263,9 +325,13 @@ impl ClashGeometry {
                 tab_pills,
                 tab_overflow_left,
                 tab_overflow_right,
+                tab_prev_hit,
+                tab_next_hit,
                 focus_btn,
                 tab_rule_y,
-                body: ClashBodyGeom::TrafficFullscreen(build_traffic_fullscreen(body_rect, cl, i)),
+                body: ClashBodyGeom::TrafficFullscreen(build_traffic_fullscreen(
+                    body_rect, cl, i, density,
+                )),
             };
         }
         if cl.tools_log_fullscreen || cl.conn_inspector_fullscreen {
@@ -275,6 +341,8 @@ impl ClashGeometry {
                 tab_pills,
                 tab_overflow_left,
                 tab_overflow_right,
+                tab_prev_hit,
+                tab_next_hit,
                 focus_btn,
                 tab_rule_y,
                 body: ClashBodyGeom::Fullscreen(body_rect),
@@ -287,13 +355,15 @@ impl ClashGeometry {
             ClashTab::Overview | ClashTab::Proxies | ClashTab::Connections | ClashTab::Rules
         );
         if needs_controller && !cl.snapshot.availability.is_ready() {
-            let unavail = build_unavailable(body_rect, cl, i);
+            let unavail = build_unavailable(body_rect, cl, i, density);
             return Self {
                 area,
                 tab_bar,
                 tab_pills,
                 tab_overflow_left,
                 tab_overflow_right,
+                tab_prev_hit,
+                tab_next_hit,
                 focus_btn,
                 tab_rule_y,
                 body: ClashBodyGeom::Unavailable(unavail),
@@ -301,14 +371,18 @@ impl ClashGeometry {
         }
 
         let body = match cl.tab {
-            ClashTab::Overview => ClashBodyGeom::Overview(build_overview(body_rect, cl, i)),
-            ClashTab::Proxies => ClashBodyGeom::Proxies(build_proxies(body_rect, cl, i)),
-            ClashTab::Profiles => ClashBodyGeom::Profiles(build_profiles(body_rect, cl, i, framed)),
-            ClashTab::Connections => {
-                ClashBodyGeom::Connections(build_connections(body_rect, cl, i, framed))
+            ClashTab::Overview => {
+                ClashBodyGeom::Overview(build_overview(body_rect, cl, i, density))
             }
-            ClashTab::Rules => ClashBodyGeom::Rules(build_rules(body_rect, cl, i, framed)),
-            ClashTab::Tools => ClashBodyGeom::Tools(build_tools(body_rect, cl, i, framed)),
+            ClashTab::Proxies => ClashBodyGeom::Proxies(build_proxies(body_rect, cl, i, density)),
+            ClashTab::Profiles => {
+                ClashBodyGeom::Profiles(build_profiles(body_rect, cl, i, framed, density))
+            }
+            ClashTab::Connections => {
+                ClashBodyGeom::Connections(build_connections(body_rect, cl, i, framed, density))
+            }
+            ClashTab::Rules => ClashBodyGeom::Rules(build_rules(body_rect, cl, i, framed, density)),
+            ClashTab::Tools => ClashBodyGeom::Tools(build_tools(body_rect, cl, i, framed, density)),
         };
 
         Self {
@@ -317,6 +391,8 @@ impl ClashGeometry {
             tab_pills,
             tab_overflow_left,
             tab_overflow_right,
+            tab_prev_hit,
+            tab_next_hit,
             focus_btn,
             tab_rule_y,
             body,
@@ -324,7 +400,18 @@ impl ClashGeometry {
     }
 }
 
-fn build_unavailable(body: Rect, cl: &ClashState, i: &I18n) -> UnavailableGeom {
+fn build_unavailable(
+    body: Rect,
+    cl: &ClashState,
+    i: &I18n,
+    density: ResolvedDensity,
+) -> UnavailableGeom {
+    let expanded = density.is_expanded() && body.height >= 12;
+    let btn_h = if expanded {
+        density.compact_btn_height()
+    } else {
+        1u16
+    };
     let is_no_ctrl = matches!(
         cl.snapshot.availability,
         ClashAvailability::ControllerUnconfigured
@@ -335,7 +422,7 @@ fn build_unavailable(body: Rect, cl: &ClashState, i: &I18n) -> UnavailableGeom {
         .saturating_sub(if body.width < 48 { 2 } else { 6 })
         .min(if is_no_ctrl { 72 } else { 68 })
         .max(20.min(body.width));
-    let target_h = if is_no_ctrl { 10u16 } else { 9u16 };
+    let target_h = if is_no_ctrl { 10u16 } else { 9u16 } + btn_h.saturating_sub(1);
     let card_h = target_h
         .min(body.height.saturating_sub(2))
         .max(6.min(body.height));
@@ -352,34 +439,53 @@ fn build_unavailable(body: Rect, cl: &ClashState, i: &I18n) -> UnavailableGeom {
         && card_w >= 20
     {
         let inner_w = card_w.saturating_sub(4);
-        let btn_y = card_y + card_h.saturating_sub(2);
-        let primary_label = match cl.snapshot.availability {
-            ClashAvailability::NotInstalled => {
-                format!(" [Enter] {} ", i.text("clash.avail.cta_install"))
+        let btn_y = card_y + card_h.saturating_sub(1 + btn_h);
+        if expanded && btn_h >= 2 {
+            if is_no_ctrl && !enabling_ctrl {
+                let btns = split_touch_buttons(Rect::new(card_x + 2, btn_y, inner_w, btn_h), 2);
+                (Some(btns[0]), Some(btns[1]))
+            } else {
+                (Some(Rect::new(card_x + 2, btn_y, inner_w, btn_h)), None)
             }
-            ClashAvailability::Stopped => {
-                format!(" [Enter] {} ", i.text("clash.avail.cta_start"))
-            }
-            ClashAvailability::ControllerUnconfigured => {
-                if enabling_ctrl {
-                    format!(" * {} ", i.text("clash.avail.enabling_ctrl"))
-                } else {
-                    format!(" [Enter] {} ", i.text("clash.avail.cta_configure"))
+        } else {
+            let primary_label = match cl.snapshot.availability {
+                ClashAvailability::NotInstalled => {
+                    format!(" [Enter] {} ", i.text("clash.avail.cta_install"))
                 }
-            }
-            _ => String::new(),
-        };
-        let primary_w = (primary_label.width() as u16).max(16).min(inner_w);
-        if is_no_ctrl && !enabling_ctrl {
-            let sec_label = format!(" [c] {} ", i.text("clash.avail.cta_custom"));
-            let sec_w = (sec_label.width() as u16).max(12);
-            if primary_w + 2 + sec_w <= inner_w {
-                let total_w = primary_w + 2 + sec_w;
-                let start_x = card_x + card_w.saturating_sub(total_w) / 2;
-                (
-                    Some(Rect::new(start_x, btn_y, primary_w, 1)),
-                    Some(Rect::new(start_x + primary_w + 2, btn_y, sec_w, 1)),
-                )
+                ClashAvailability::Stopped => {
+                    format!(" [Enter] {} ", i.text("clash.avail.cta_start"))
+                }
+                ClashAvailability::ControllerUnconfigured => {
+                    if enabling_ctrl {
+                        format!(" * {} ", i.text("clash.avail.enabling_ctrl"))
+                    } else {
+                        format!(" [Enter] {} ", i.text("clash.avail.cta_configure"))
+                    }
+                }
+                _ => String::new(),
+            };
+            let primary_w = (primary_label.width() as u16).max(16).min(inner_w);
+            if is_no_ctrl && !enabling_ctrl {
+                let sec_label = format!(" [c] {} ", i.text("clash.avail.cta_custom"));
+                let sec_w = (sec_label.width() as u16).max(12);
+                if primary_w + 2 + sec_w <= inner_w {
+                    let total_w = primary_w + 2 + sec_w;
+                    let start_x = card_x + card_w.saturating_sub(total_w) / 2;
+                    (
+                        Some(Rect::new(start_x, btn_y, primary_w, 1)),
+                        Some(Rect::new(start_x + primary_w + 2, btn_y, sec_w, 1)),
+                    )
+                } else {
+                    (
+                        Some(Rect::new(
+                            card_x + card_w.saturating_sub(primary_w) / 2,
+                            btn_y,
+                            primary_w,
+                            1,
+                        )),
+                        None,
+                    )
+                }
             } else {
                 (
                     Some(Rect::new(
@@ -391,16 +497,6 @@ fn build_unavailable(body: Rect, cl: &ClashState, i: &I18n) -> UnavailableGeom {
                     None,
                 )
             }
-        } else {
-            (
-                Some(Rect::new(
-                    card_x + card_w.saturating_sub(primary_w) / 2,
-                    btn_y,
-                    primary_w,
-                    1,
-                )),
-                None,
-            )
         }
     } else {
         (None, None)
@@ -414,7 +510,12 @@ fn build_unavailable(body: Rect, cl: &ClashState, i: &I18n) -> UnavailableGeom {
     }
 }
 
-fn build_tab_pills(bar: Rect, cl: &ClashState, i: &I18n) -> (Vec<ClashTabPill>, bool, bool) {
+fn build_tab_pills(
+    bar: Rect,
+    cl: &ClashState,
+    i: &I18n,
+    tab_h: u16,
+) -> (Vec<ClashTabPill>, bool, bool) {
     let mut specs: Vec<(ClashTab, String, String, u16)> = ClashTab::ALL
         .iter()
         .map(|&tab| {
@@ -424,12 +525,16 @@ fn build_tab_pills(bar: Rect, cl: &ClashState, i: &I18n) -> (Vec<ClashTabPill>, 
                 i.text(tab.label_key()).to_owned()
             };
             let count = cl.tab_count(tab);
-            let inner = if count.is_empty() {
-                format!(" {label} ")
+            let w = if tab_h >= 2 {
+                (label.width().max(count.width()) + 2).max(8) as u16
             } else {
-                format!(" {label} {count} ")
+                let inner = if count.is_empty() {
+                    format!(" {label} ")
+                } else {
+                    format!(" {label} {count} ")
+                };
+                inner.width() as u16
             };
-            let w = inner.width() as u16;
             (tab, label, count, w)
         })
         .collect();
@@ -485,151 +590,173 @@ fn build_tab_pills(bar: Rect, cl: &ClashState, i: &I18n) -> (Vec<ClashTabPill>, 
             tab,
             label,
             count,
-            rect: Rect::new(x, bar.y, pw, 1),
+            rect: Rect::new(x, bar.y, pw, tab_h),
         });
         x = x.saturating_add(pw + 1);
     }
     (pills, overflow_left, overflow_right)
 }
 
-fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
+fn build_overview(body: Rect, cl: &ClashState, i: &I18n, density: ResolvedDensity) -> OverviewGeom {
     let w = body.width;
     let h = body.height;
+    let expanded = density.is_expanded();
+    let single_col_deck = expanded && w < 72 && h >= 18;
 
-    // Row 1: Full-width Hero Real-Time Traffic Atlas (always visible across all breakpoints!)
-    let traffic_h = if h >= 28 {
-        10
-    } else if h >= 24 {
-        9
-    } else if h >= 20 {
-        8
-    } else if h >= 16 {
-        7
-    } else if h >= 12 {
-        6
-    } else {
-        5
-    }
-    .min(h);
-    let traffic_card = Rect::new(body.x, body.y, w, traffic_h);
+    let mut overview_prev_btn = None;
+    let mut overview_next_btn = None;
+    let mut overview_can_prev = false;
+    let mut overview_can_next = false;
+    let mut overview_page_text = None;
+    let mut overview_max_scroll = 0usize;
 
-    let mut traffic_mode_chip = None;
-    let mut traffic_window_chip = None;
-    let mut traffic_scale_chip = None;
-    let mut traffic_pause_chip = None;
-    let mut traffic_expand_btn = None;
-    let mut traffic_plot = Rect::default();
-    let mut traffic_side = Rect::default();
-
-    if traffic_card.width >= 20 && traffic_card.height >= 4 {
-        let ix = traffic_card.x + 2;
-        let iw = traffic_card.width.saturating_sub(4);
-        let kpi_y = traffic_card.y + 1;
-        let mut right = ix + iw;
-
-        // Allocate right-aligned interactive pills in priority order while preserving KPI space.
-        let min_kpi_w: u16 = if iw >= 64 { 26 } else { 18 };
-        let expand_lbl = format!(" [v] {} ", i.text("clash.key.traffic_atlas"));
-        let ew = expand_lbl.width() as u16;
-        if right >= ix + min_kpi_w + ew {
-            right -= ew;
-            traffic_expand_btn = Some(Rect::new(right, kpi_y, ew, 1));
-            right = right.saturating_sub(1);
-        }
-
-        let mode_lbl = format!(" [g] {} ", i.text(cl.traffic_mode.label_key()));
-        let mw = mode_lbl.width() as u16;
-        if right >= ix + min_kpi_w + mw {
-            right -= mw;
-            traffic_mode_chip = Some(Rect::new(right, kpi_y, mw, 1));
-            right = right.saturating_sub(1);
-        }
-
-        let win_lbl = format!(" [t] {} ", cl.traffic_window.label());
-        let ww = win_lbl.width() as u16;
-        if right >= ix + min_kpi_w + ww {
-            right -= ww;
-            traffic_window_chip = Some(Rect::new(right, kpi_y, ww, 1));
-            right = right.saturating_sub(1);
-        }
-
-        let scale_lbl = format!(" [y] {} ", i.text(cl.traffic_scale.label_key()));
-        let sw = scale_lbl.width() as u16;
-        if right >= ix + min_kpi_w + 10 + sw {
-            right -= sw;
-            traffic_scale_chip = Some(Rect::new(right, kpi_y, sw, 1));
-            right = right.saturating_sub(1);
-        }
-
-        let pause_key = if cl.is_traffic_paused() {
-            "clash.traffic.resume"
-        } else {
-            "clash.traffic.pause"
-        };
-        let pause_lbl = format!(" {} ", i.text(pause_key));
-        let pw = pause_lbl.width() as u16;
-        if right >= ix + min_kpi_w + 16 + pw {
-            right -= pw;
-            traffic_pause_chip = Some(Rect::new(right, kpi_y, pw, 1));
-        }
-
-        // Plot body starts below the KPI row and ends above bottom card border.
-        let plot_y = traffic_card.y + 2;
-        let plot_h = traffic_card.bottom().saturating_sub(plot_y + 1);
-        if plot_h >= 1 && iw >= 8 {
-            if iw >= 80 && plot_h >= 4 {
-                let side_w = (iw * 31 / 100).clamp(24, 34);
-                let plot_w = iw.saturating_sub(side_w + 3);
-                traffic_plot = Rect::new(ix, plot_y, plot_w, plot_h);
-                traffic_side = Rect::new(ix + plot_w + 3, plot_y, side_w, plot_h);
+    let (
+        traffic_card,
+        mode_bar,
+        status_card,
+        services_card,
+        profile_card,
+        connections_card,
+        groups_card,
+    ) = if single_col_deck {
+        // Full-width scrollable deck for narrow/enlarged-font portrait phones (e.g. 52x36):
+        // zero cards dropped, every card gets full viewport width and big touch buttons.
+        let deck_pager_h = 2u16;
+        let deck_h = h.saturating_sub(deck_pager_h);
+        let deck_bottom = body.y + deck_h;
+        let mode_h = density.compact_btn_height();
+        let sections: [(u8, u16); 6] = [
+            (0, 8 + mode_h), // Traffic + Mode bar
+            (1, 8),          // Status
+            (2, 8),          // Services
+            (3, 8),          // Profile
+            (4, 6),          // Connections
+            (5, 11),         // Groups
+        ];
+        overview_max_scroll = sections.len().saturating_sub(1);
+        let mut scroll = cl.overview_scroll.min(overview_max_scroll);
+        while scroll > 0 {
+            let tail_h: u16 = sections[scroll - 1..].iter().map(|(_, sh)| *sh).sum();
+            if tail_h <= deck_h {
+                scroll -= 1;
             } else {
-                traffic_plot = Rect::new(ix, plot_y, iw, plot_h);
+                break;
             }
         }
-    }
 
-    // Row 2: Sleek 1-row Outbound Mode strip (Rule / Global / Direct)
-    let mode_y = body.y + traffic_h;
-    let mode_h = u16::from(mode_y < body.bottom());
-    let mode_bar = Rect::new(body.x, mode_y, w, mode_h);
-    let mut mode_pills = Vec::new();
-    if mode_h > 0 && w >= 24 {
-        let py = mode_bar.y;
-        let prefix_w = if w >= 48 {
-            i.text("clash.overview.mode").width() as u16 + 3
+        let mut tc = Rect::default();
+        let mut mb = Rect::default();
+        let mut sc = Rect::default();
+        let mut svc = Rect::default();
+        let mut pc = Rect::default();
+        let mut cc = Rect::default();
+        let mut gc = Rect::default();
+
+        let mut y = body.y;
+        let mut last_rendered = scroll;
+        for (idx, &(kind, pref_h)) in sections.iter().enumerate().skip(scroll) {
+            let avail = deck_bottom.saturating_sub(y);
+            if avail == 0 {
+                break;
+            }
+            if y > body.y && avail < pref_h.min(6) {
+                break;
+            }
+            let sh = if idx == sections.len() - 1 {
+                avail
+            } else {
+                pref_h.min(avail)
+            };
+            match kind {
+                0 => {
+                    let th = sh.saturating_sub(mode_h).max(5).min(sh);
+                    tc = Rect::new(body.x, y, w, th);
+                    let mh = sh.saturating_sub(th);
+                    if mh > 0 {
+                        mb = Rect::new(body.x, y + th, w, mh);
+                    }
+                }
+                1 => sc = Rect::new(body.x, y, w, sh),
+                2 => svc = Rect::new(body.x, y, w, sh),
+                3 => pc = Rect::new(body.x, y, w, sh),
+                4 => cc = Rect::new(body.x, y, w, sh),
+                _ => gc = Rect::new(body.x, y, w, sh),
+            }
+            last_rendered = idx;
+            y += sh;
+        }
+
+        let py = deck_bottom;
+        let p_inner = Rect::new(body.x + 1, py, w.saturating_sub(2), deck_pager_h);
+        let btns = split_touch_buttons(p_inner, 2);
+        overview_prev_btn = Some(btns[0]);
+        overview_next_btn = Some(btns[1]);
+        overview_can_prev = scroll > 0;
+        overview_can_next = last_rendered + 1 < sections.len();
+        overview_page_text = Some(format!("{}/{}", scroll + 1, sections.len()));
+
+        (tc, mb, sc, svc, pc, cc, gc)
+    } else {
+        // Row 1: Full-width Hero Real-Time Traffic Atlas
+        let traffic_h = if expanded {
+            if h >= 36 {
+                9
+            } else if h >= 26 {
+                8
+            } else {
+                7
+            }
+        } else if h >= 28 {
+            10
+        } else if h >= 24 {
+            9
+        } else if h >= 20 {
+            8
+        } else if h >= 16 {
+            7
+        } else if h >= 12 {
+            6
         } else {
-            2
-        };
-        let mut mx = mode_bar.x + prefix_w;
-        for (mode_id, key) in [
-            ("rule", "clash.mode.rule"),
-            ("global", "clash.mode.global"),
-            ("direct", "clash.mode.direct"),
-        ] {
-            let lbl = format!(" {} ", i.text(key));
-            let pw = lbl.width() as u16;
-            if mx + pw <= mode_bar.right().saturating_sub(1) {
-                mode_pills.push((Rect::new(mx, py, pw, 1), mode_id));
-                mx += pw + 1;
-            }
+            5
         }
-    }
+        .min(h);
+        let tc = Rect::new(body.x, body.y, w, traffic_h);
 
-    // Lower Dashboard Bento Grid (adapts smoothly from 40x16 up to 160x50+)
-    let lower_y = mode_y + mode_h;
-    let rem = body.bottom().saturating_sub(lower_y);
+        // Row 2: Outbound Mode strip (1 row compact; 2-3 row big equal buttons in touch mode)
+        let mode_y = body.y + traffic_h;
+        let desired_mode_h = if expanded && h >= 24 {
+            if h >= 36 {
+                density.button_height()
+            } else {
+                density.compact_btn_height()
+            }
+        } else {
+            1u16
+        };
+        let mode_h = desired_mode_h.min(body.bottom().saturating_sub(mode_y));
+        let mb = Rect::new(body.x, mode_y, w, mode_h);
 
-    let (status_card, services_card, profile_card, connections_card, groups_card) =
-        if rem >= 15 && w >= 66 {
-            // Wide / Medium (120x36 & 100x30): all 5 lower cards visible
-            let row3_h = if rem >= 18 {
+        // Lower Dashboard Bento Grid
+        let lower_y = mode_y + mode_h;
+        let rem = body.bottom().saturating_sub(lower_y);
+
+        let (sc, svc, pc, cc, gc) = if rem >= 15 && w >= 66 {
+            let row3_h = if expanded && rem >= 22 {
+                8
+            } else if rem >= 18 {
                 7
             } else if rem >= 16 {
                 6
             } else {
                 5
             };
-            let row4_h = if rem >= 18 { 6 } else { 5 };
+            let row4_h = if expanded && rem >= 22 {
+                8
+            } else if rem >= 18 {
+                6
+            } else {
+                5
+            };
             let row5_h = rem.saturating_sub(row3_h + row4_h);
             let r3_left = (w * 53 / 100).max(32).min(w.saturating_sub(28));
             let r3_right = w.saturating_sub(r3_left + 1);
@@ -649,7 +776,6 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
                 },
             )
         } else if rem >= 9 && w >= 66 {
-            // Compact (80x24): Status|Profile + Connections|Groups
             let row3_h = rem / 2;
             let row4_h = rem.saturating_sub(row3_h);
             let left_w = (w * 52 / 100).max(28).min(w.saturating_sub(26));
@@ -663,7 +789,6 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
                 Rect::new(body.x + left_w + 1, row4_y, right_w, row4_h),
             )
         } else if rem >= 9 {
-            // Mobile (59x24): stacked full-width Status + Groups
             let row3_h = rem / 2;
             let row4_h = rem.saturating_sub(row3_h);
             (
@@ -674,7 +799,6 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
                 Rect::new(body.x, lower_y + row3_h, w, row4_h),
             )
         } else if rem >= 4 {
-            // Ultra-compact (40x16): full-width Status below Traffic Graph & Mode strip
             (
                 Rect::new(body.x, lower_y, w, rem),
                 Rect::default(),
@@ -691,6 +815,123 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
                 Rect::default(),
             )
         };
+        (tc, mb, sc, svc, pc, cc, gc)
+    };
+
+    let mut traffic_mode_chip = None;
+    let mut traffic_window_chip = None;
+    let mut traffic_scale_chip = None;
+    let mut traffic_pause_chip = None;
+    let mut traffic_expand_btn = None;
+    let mut traffic_plot = Rect::default();
+    let mut traffic_side = Rect::default();
+
+    if traffic_card.width >= 20 && traffic_card.height >= 4 {
+        let ix = traffic_card.x + 2;
+        let iw = traffic_card.width.saturating_sub(4);
+        let kpi_y = traffic_card.y + 1;
+        let chip_h = if expanded && traffic_card.height >= 8 {
+            2u16
+        } else {
+            1u16
+        };
+        let mut right = ix + iw;
+
+        let min_kpi_w: u16 = if iw >= 64 { 26 } else { 18 };
+        let expand_lbl = format!(" [v] {} ", i.text("clash.key.traffic_atlas"));
+        let ew = expand_lbl.width() as u16;
+        if right >= ix + min_kpi_w + ew {
+            right -= ew;
+            traffic_expand_btn = Some(Rect::new(right, kpi_y, ew, chip_h));
+            right = right.saturating_sub(1);
+        }
+
+        let mode_lbl = format!(" [g] {} ", i.text(cl.traffic_mode.label_key()));
+        let mw = mode_lbl.width() as u16;
+        if right >= ix + min_kpi_w + mw {
+            right -= mw;
+            traffic_mode_chip = Some(Rect::new(right, kpi_y, mw, chip_h));
+            right = right.saturating_sub(1);
+        }
+
+        let win_lbl = format!(" [t] {} ", cl.traffic_window.label());
+        let ww = win_lbl.width() as u16;
+        if right >= ix + min_kpi_w + ww {
+            right -= ww;
+            traffic_window_chip = Some(Rect::new(right, kpi_y, ww, chip_h));
+            right = right.saturating_sub(1);
+        }
+
+        let scale_lbl = format!(" [y] {} ", i.text(cl.traffic_scale.label_key()));
+        let sw = scale_lbl.width() as u16;
+        if right >= ix + min_kpi_w + 10 + sw {
+            right -= sw;
+            traffic_scale_chip = Some(Rect::new(right, kpi_y, sw, chip_h));
+            right = right.saturating_sub(1);
+        }
+
+        let pause_key = if cl.is_traffic_paused() {
+            "clash.traffic.resume"
+        } else {
+            "clash.traffic.pause"
+        };
+        let pause_lbl = format!(" {} ", i.text(pause_key));
+        let pw = pause_lbl.width() as u16;
+        if right >= ix + min_kpi_w + 16 + pw {
+            right -= pw;
+            traffic_pause_chip = Some(Rect::new(right, kpi_y, pw, chip_h));
+        }
+
+        let plot_y = traffic_card.y + 1 + chip_h;
+        let plot_h = traffic_card.bottom().saturating_sub(plot_y + 1);
+        if plot_h >= 1 && iw >= 8 {
+            if iw >= 80 && plot_h >= 4 {
+                let side_w = (iw * 31 / 100).clamp(24, 34);
+                let plot_w = iw.saturating_sub(side_w + 3);
+                traffic_plot = Rect::new(ix, plot_y, plot_w, plot_h);
+                traffic_side = Rect::new(ix + plot_w + 3, plot_y, side_w, plot_h);
+            } else {
+                traffic_plot = Rect::new(ix, plot_y, iw, plot_h);
+            }
+        }
+    }
+
+    let mut mode_pills = Vec::new();
+    if mode_bar.height >= 2 && mode_bar.width >= 24 {
+        let pad_x = u16::from(mode_bar.width >= 30);
+        let strip = Rect::new(
+            mode_bar.x + pad_x,
+            mode_bar.y,
+            mode_bar.width.saturating_sub(pad_x * 2),
+            mode_bar.height,
+        );
+        let rects = split_touch_buttons(strip, 3);
+        for (rect, mode_id) in rects.into_iter().zip(["rule", "global", "direct"]) {
+            if rect.width >= 4 {
+                mode_pills.push((rect, mode_id));
+            }
+        }
+    } else if mode_bar.height > 0 && mode_bar.width >= 24 {
+        let py = mode_bar.y;
+        let prefix_w = if mode_bar.width >= 48 {
+            i.text("clash.overview.mode").width() as u16 + 3
+        } else {
+            2
+        };
+        let mut mx = mode_bar.x + prefix_w;
+        for (mode_id, key) in [
+            ("rule", "clash.mode.rule"),
+            ("global", "clash.mode.global"),
+            ("direct", "clash.mode.direct"),
+        ] {
+            let lbl = format!(" {} ", i.text(key));
+            let pw = lbl.width() as u16;
+            if mx + pw <= mode_bar.right().saturating_sub(1) {
+                mode_pills.push((Rect::new(mx, py, pw, 1), mode_id));
+                mx += pw + 1;
+            }
+        }
+    }
 
     let mut outbound_badge_hit = None;
     let mut outbound_ip_hit = None;
@@ -713,7 +954,20 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
             }
         }
     }
-    if status_card.width >= 30 && status_card.height >= 5 {
+    if expanded && status_card.width >= 24 && status_card.height >= 7 {
+        let btn_h = 2u16;
+        let btn_y = status_card.bottom().saturating_sub(1 + btn_h);
+        let bar = Rect::new(
+            status_card.x + 2,
+            btn_y,
+            status_card.width.saturating_sub(4),
+            btn_h,
+        );
+        let btns = split_touch_buttons(bar, 3);
+        outbound_detail_btn = Some(btns[0]);
+        start_stop_btn = Some(btns[1]);
+        reload_btn = Some(btns[2]);
+    } else if status_card.width >= 30 && status_card.height >= 5 {
         let btn_y = status_card.bottom().saturating_sub(2);
         let s_lbl = format!(" [s] {} ", i.text("clash.key.stop"));
         let r_lbl = format!(" [R] {} ", i.text("clash.key.reload"));
@@ -735,7 +989,19 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
 
     let mut profile_switch_btn = None;
     let mut profile_update_btn = None;
-    if profile_card.width >= 30 && profile_card.height >= 4 {
+    if expanded && profile_card.width >= 22 && profile_card.height >= 7 {
+        let btn_h = 2u16;
+        let by = profile_card.bottom().saturating_sub(1 + btn_h);
+        let bar = Rect::new(
+            profile_card.x + 2,
+            by,
+            profile_card.width.saturating_sub(4),
+            btn_h,
+        );
+        let btns = split_touch_buttons(bar, 2);
+        profile_update_btn = Some(btns[0]);
+        profile_switch_btn = Some(btns[1]);
+    } else if profile_card.width >= 30 && profile_card.height >= 4 {
         let by = profile_card.y + 1;
         let updating_active = cl
             .snapshot
@@ -761,11 +1027,16 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
     let mut exit_probe_btn = None;
     let mut socks_secret_btn = None;
     let mut webui_btn = None;
+    let svc_btn_h = if expanded && services_card.height >= 7 {
+        2u16
+    } else {
+        1u16
+    };
     if services_card.width >= 24 && services_card.height >= 5 {
         let ix = services_card.x + 2;
         let iw = services_card.width.saturating_sub(4);
-        let btn_y = services_card.bottom().saturating_sub(2);
-        let grid_rows = if services_card.height >= 7 && services_card.y + 3 < btn_y {
+        let btn_y = services_card.bottom().saturating_sub(1 + svc_btn_h);
+        let grid_rows = if services_card.height >= 6 + svc_btn_h && services_card.y + 3 < btn_y {
             2usize
         } else if services_card.y + 2 < btn_y {
             1usize
@@ -788,7 +1059,18 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
             }
         }
     }
-    if services_card.width >= 28 && services_card.height >= 4 {
+    if expanded && services_card.width >= 24 && services_card.height >= 7 {
+        let by = services_card.bottom().saturating_sub(1 + svc_btn_h);
+        let bar = Rect::new(
+            services_card.x + 2,
+            by,
+            services_card.width.saturating_sub(4),
+            svc_btn_h,
+        );
+        let btns = split_touch_buttons(bar, 2);
+        exit_probe_btn = Some(btns[0]);
+        service_check_btn = Some(btns[1]);
+    } else if services_card.width >= 28 && services_card.height >= 4 {
         let by = services_card.bottom().saturating_sub(2);
         let c_lbl = format!(" [c] {} ", i.text("clash.key.services"));
         let n_lbl = format!(" [N] {} ", i.text("clash.key.probe_exit"));
@@ -828,36 +1110,93 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
 
     let mut group_card_hits = Vec::new();
     let mut group_cols = 1usize;
+    let mut group_prev_btn = None;
+    let mut group_next_btn = None;
+    let mut group_can_prev = false;
+    let mut group_can_next = false;
+    let mut group_page_text = None;
+
     if groups_card.width >= 18 && groups_card.height >= 4 {
-        let inner = Rect::new(
+        let raw_inner = Rect::new(
             groups_card.x + 2,
             groups_card.y + 1,
             groups_card.width.saturating_sub(4),
             groups_card.height.saturating_sub(2),
         );
-        let cols = if inner.width >= 72 {
+        let tile_h: u16 = if expanded && raw_inner.height >= 6 {
             3
-        } else if inner.width >= 36 {
+        } else {
+            2
+        };
+        let cols = if expanded {
+            if raw_inner.width >= 44 { 2 } else { 1 }
+        } else if raw_inner.width >= 72 {
+            3
+        } else if raw_inner.width >= 36 {
             2
         } else {
             1
         };
         group_cols = cols;
+        let groups = cl.visible_groups();
+        let full_rows = (raw_inner.height / tile_h).max(1) as usize;
+        let need_pager =
+            expanded && groups.len() > full_rows * cols && raw_inner.height >= tile_h + 2;
+        let pager_h = if need_pager { 2u16 } else { 0 };
+        let inner = Rect::new(
+            raw_inner.x,
+            raw_inner.y,
+            raw_inner.width,
+            raw_inner.height.saturating_sub(pager_h),
+        );
+        let rows = (inner.height / tile_h).max(1) as usize;
+        let per_page = (rows * cols).max(1);
+        let total_pages = groups.len().div_ceil(per_page).max(1);
+        let page = if need_pager {
+            cl.overview_group_page.min(total_pages.saturating_sub(1))
+        } else {
+            0
+        };
+        let start_idx = page * per_page;
+
         let gap = if cols > 1 { 1u16 } else { 0 };
         let cell_w = inner
             .width
             .saturating_sub(gap.saturating_mul(cols.saturating_sub(1) as u16))
             / (cols as u16);
-        let rows = (inner.height / 2).max(1) as usize;
-        let groups = cl.visible_groups();
-        for idx in 0..groups.len().min(rows * cols) {
-            let r = idx / cols;
-            let c = idx % cols;
-            let cx = inner.x + (c as u16) * (cell_w + gap);
-            let cy = inner.y + (r as u16) * 2;
-            if cy + 1 < inner.bottom() {
-                group_card_hits.push((Rect::new(cx, cy, cell_w, 2), idx));
+        for slot in 0..per_page {
+            let idx = start_idx + slot;
+            if idx >= groups.len() {
+                break;
             }
+            let r = slot / cols;
+            let c = slot % cols;
+            let cx = inner.x + (c as u16) * (cell_w + gap);
+            let cy = inner.y + (r as u16) * tile_h;
+            if cy + tile_h <= inner.bottom() {
+                group_card_hits.push((Rect::new(cx, cy, cell_w, tile_h), idx));
+            }
+        }
+        if need_pager {
+            let py = inner.bottom();
+            let btn_w = (raw_inner.width.saturating_sub(10) / 2).clamp(10, 18);
+            if raw_inner.width >= btn_w * 2 + 2 {
+                group_prev_btn = Some(Rect::new(raw_inner.x, py, btn_w, pager_h));
+                group_next_btn = Some(Rect::new(
+                    raw_inner.right().saturating_sub(btn_w),
+                    py,
+                    btn_w,
+                    pager_h,
+                ));
+            } else {
+                let btns =
+                    split_touch_buttons(Rect::new(raw_inner.x, py, raw_inner.width, pager_h), 2);
+                group_prev_btn = Some(btns[0]);
+                group_next_btn = Some(btns[1]);
+            }
+            group_can_prev = page > 0;
+            group_can_next = page + 1 < total_pages;
+            group_page_text = Some(format!("{}/{total_pages}", page + 1));
         }
     }
     cl.last_overview_group_cols.set(group_cols);
@@ -891,13 +1230,34 @@ fn build_overview(body: Rect, cl: &ClashState, i: &I18n) -> OverviewGeom {
         connections_card,
         groups_card,
         group_card_hits,
+        group_prev_btn,
+        group_next_btn,
+        group_can_prev,
+        group_can_next,
+        group_page_text,
+        overview_prev_btn,
+        overview_next_btn,
+        overview_can_prev,
+        overview_can_next,
+        overview_page_text,
+        overview_max_scroll,
     }
 }
 
-fn build_traffic_fullscreen(body: Rect, cl: &ClashState, i: &I18n) -> TrafficFullscreenGeom {
+fn build_traffic_fullscreen(
+    body: Rect,
+    cl: &ClashState,
+    i: &I18n,
+    density: ResolvedDensity,
+) -> TrafficFullscreenGeom {
     let x = body.x + 1;
     let w = body.width.saturating_sub(2);
-    let toolbar = Rect::new(x, body.y, w, u16::from(body.height > 0));
+    let tb_h = if density.is_expanded() && body.height >= 16 {
+        2u16
+    } else {
+        u16::from(body.height > 0)
+    };
+    let toolbar = Rect::new(x, body.y, w, tb_h);
     let mut right = toolbar.right();
     let title_min = i.text("clash.traffic.atlas_title").width() as u16 + 3;
     let min_title_w: u16 = if w >= 54 {
@@ -918,7 +1278,7 @@ fn build_traffic_fullscreen(body: Rect, cl: &ClashState, i: &I18n) -> TrafficFul
         let cw = close_lbl.width() as u16;
         if right >= x + min_title_w + cw {
             right -= cw;
-            close_btn = Some(Rect::new(right, toolbar.y, cw, 1));
+            close_btn = Some(Rect::new(right, toolbar.y, cw, tb_h));
             right = right.saturating_sub(1);
         }
 
@@ -926,7 +1286,7 @@ fn build_traffic_fullscreen(body: Rect, cl: &ClashState, i: &I18n) -> TrafficFul
         let bw = bd_lbl.width() as u16;
         if right >= x + min_title_w + bw {
             right -= bw;
-            breakdown_chip = Some(Rect::new(right, toolbar.y, bw, 1));
+            breakdown_chip = Some(Rect::new(right, toolbar.y, bw, tb_h));
             right = right.saturating_sub(1);
         }
 
@@ -939,7 +1299,7 @@ fn build_traffic_fullscreen(body: Rect, cl: &ClashState, i: &I18n) -> TrafficFul
         let pw = pause_lbl.width() as u16;
         if right >= x + min_title_w + pw {
             right -= pw;
-            pause_chip = Some(Rect::new(right, toolbar.y, pw, 1));
+            pause_chip = Some(Rect::new(right, toolbar.y, pw, tb_h));
             right = right.saturating_sub(1);
         }
 
@@ -947,7 +1307,7 @@ fn build_traffic_fullscreen(body: Rect, cl: &ClashState, i: &I18n) -> TrafficFul
         let sw = scale_lbl.width() as u16;
         if right >= x + min_title_w + sw {
             right -= sw;
-            scale_chip = Some(Rect::new(right, toolbar.y, sw, 1));
+            scale_chip = Some(Rect::new(right, toolbar.y, sw, tb_h));
             right = right.saturating_sub(1);
         }
 
@@ -955,7 +1315,7 @@ fn build_traffic_fullscreen(body: Rect, cl: &ClashState, i: &I18n) -> TrafficFul
         let ww = win_lbl.width() as u16;
         if right >= x + min_title_w + ww {
             right -= ww;
-            window_chip = Some(Rect::new(right, toolbar.y, ww, 1));
+            window_chip = Some(Rect::new(right, toolbar.y, ww, tb_h));
             right = right.saturating_sub(1);
         }
 
@@ -963,11 +1323,11 @@ fn build_traffic_fullscreen(body: Rect, cl: &ClashState, i: &I18n) -> TrafficFul
         let mw = mode_lbl.width() as u16;
         if right >= x + min_title_w + mw {
             right -= mw;
-            mode_chip = Some(Rect::new(right, toolbar.y, mw, 1));
+            mode_chip = Some(Rect::new(right, toolbar.y, mw, tb_h));
         }
     }
 
-    let main_y = body.y.saturating_add(1).min(body.bottom());
+    let main_y = body.y.saturating_add(tb_h).min(body.bottom());
     let main_h = body.bottom().saturating_sub(main_y);
 
     let (waveform_card, panel_one, panel_two, panel_three) = if main_h >= 12 {
@@ -1027,7 +1387,9 @@ fn build_traffic_fullscreen(body: Rect, cl: &ClashState, i: &I18n) -> TrafficFul
     }
 }
 
-fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
+fn build_proxies(body: Rect, cl: &ClashState, i: &I18n, density: ResolvedDensity) -> ProxiesGeom {
+    let expanded = density.is_expanded() && body.height >= 16;
+    let bar_h = if expanded { 2u16 } else { 1u16 };
     let x = body.x + 1;
     let w = body.width.saturating_sub(2);
     let mut y = body.y;
@@ -1036,31 +1398,37 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
     let picker_lbl = format!(" [g] {} ", i.text("clash.key.groups"));
     let picker_w = picker_lbl.width() as u16;
     let group_picker_btn = if w >= picker_w + 26 && cl.visible_groups().len() > 1 {
-        Some(Rect::new(x + w - picker_w, y, picker_w, 1))
+        Some(Rect::new(x + w - picker_w, y, picker_w, bar_h))
     } else {
         None
     };
     let gbar_w = group_picker_btn
         .map(|r| r.x.saturating_sub(x + 1))
         .unwrap_or(w);
-    let group_bar = Rect::new(x, y, gbar_w, 1);
-    let (group_pills, group_overflow_left, group_overflow_right) = build_group_pills(group_bar, cl);
+    let group_bar = Rect::new(x, y, gbar_w, bar_h);
+    let (group_pills, group_overflow_left, group_overflow_right) =
+        build_group_pills(group_bar, cl, bar_h);
     let group_prev_hit = (group_overflow_left && group_bar.width >= 2).then_some(Rect::new(
         group_bar.x,
         group_bar.y,
         2,
-        1,
+        bar_h,
     ));
     let group_next_hit = (group_overflow_right && group_bar.width >= 2).then_some(Rect::new(
         group_bar.right().saturating_sub(2),
         group_bar.y,
         2,
-        1,
+        bar_h,
     ));
-    y = y.saturating_add(1).min(body.bottom());
+    y = y.saturating_add(bar_h).min(body.bottom());
 
     // Row 1: Filter + action toolbar (`/` filter | `[t]` Test | `[o]` Sort | `[h]` Hide | `[P]` Providers)
-    let toolbar = Rect::new(x, y, w, u16::from(y < body.bottom()));
+    let tb_h = if y + bar_h <= body.bottom() {
+        bar_h
+    } else {
+        u16::from(y < body.bottom())
+    };
+    let toolbar = Rect::new(x, y, w, tb_h);
     let mut right_edge = toolbar.right();
     let mut providers_btn = None;
     let mut hide_chip = None;
@@ -1077,7 +1445,7 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
             let bw = lbl.width() as u16;
             if right_edge >= x + 16 + bw {
                 right_edge -= bw;
-                providers_btn = Some(Rect::new(right_edge, toolbar.y, bw, 1));
+                providers_btn = Some(Rect::new(right_edge, toolbar.y, bw, tb_h));
                 right_edge = right_edge.saturating_sub(1);
             }
         }
@@ -1092,14 +1460,14 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
         let hw = hide_lbl.width() as u16;
         if right_edge >= x + 18 + hw {
             right_edge -= hw;
-            hide_chip = Some(Rect::new(right_edge, toolbar.y, hw, 1));
+            hide_chip = Some(Rect::new(right_edge, toolbar.y, hw, tb_h));
             right_edge = right_edge.saturating_sub(1);
         }
         let sort_lbl = format!(" [o] {}^ ", i.text(cl.proxy_sort.label_key()));
         let sw = sort_lbl.width() as u16;
         if right_edge >= x + 12 + sw {
             right_edge -= sw;
-            sort_chip = Some(Rect::new(right_edge, toolbar.y, sw, 1));
+            sort_chip = Some(Rect::new(right_edge, toolbar.y, sw, tb_h));
             right_edge = right_edge.saturating_sub(1);
         }
         let active_group_name = cl.current_group().map(|g| g.name.as_str());
@@ -1118,15 +1486,25 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
         let tw = test_lbl.width() as u16;
         if right_edge >= x + 8 + tw {
             right_edge -= tw;
-            test_btn = Some(Rect::new(right_edge, toolbar.y, tw, 1));
+            test_btn = Some(Rect::new(right_edge, toolbar.y, tw, tb_h));
             right_edge = right_edge.saturating_sub(1);
         }
     }
-    let filter_bar = Rect::new(x, toolbar.y, right_edge.saturating_sub(x), toolbar.height);
-    y = y.saturating_add(1).min(body.bottom());
+    let filter_bar = Rect::new(
+        x,
+        toolbar.y,
+        right_edge.saturating_sub(x),
+        1.min(toolbar.height),
+    );
+    y = y.saturating_add(tb_h).min(body.bottom());
 
     // Row 2: Active group summary & resolved chain bar + right-aligned clickable quick actions
-    let chain_bar = Rect::new(x, y, w, u16::from(y < body.bottom()));
+    let cb_h = if y + bar_h <= body.bottom() {
+        bar_h
+    } else {
+        u16::from(y < body.bottom())
+    };
+    let chain_bar = Rect::new(x, y, w, cb_h);
     let mut unfix_btn = None;
     let mut ping_btn = None;
     let mut fastest_btn = None;
@@ -1144,28 +1522,28 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
         let uw = url_lbl.width() as u16;
         if cx >= min_left + uw {
             cx -= uw;
-            delay_url_btn = Some(Rect::new(cx, chain_bar.y, uw, 1));
+            delay_url_btn = Some(Rect::new(cx, chain_bar.y, uw, cb_h));
             cx = cx.saturating_sub(1);
         }
         let loc_lbl = format!(" [c] {} ", i.text("clash.key.locate"));
         let lw = loc_lbl.width() as u16;
         if cx >= min_left + lw {
             cx -= lw;
-            locate_btn = Some(Rect::new(cx, chain_bar.y, lw, 1));
+            locate_btn = Some(Rect::new(cx, chain_bar.y, lw, cb_h));
             cx = cx.saturating_sub(1);
         }
         let fast_lbl = format!(" [f] {} ", i.text("clash.key.fastest"));
         let fw = fast_lbl.width() as u16;
         if cx >= min_left + fw {
             cx -= fw;
-            fastest_btn = Some(Rect::new(cx, chain_bar.y, fw, 1));
+            fastest_btn = Some(Rect::new(cx, chain_bar.y, fw, cb_h));
             cx = cx.saturating_sub(1);
         }
         let ping_lbl = format!(" [p] {} ", i.text("clash.key.ping_node"));
         let pw = ping_lbl.width() as u16;
         if cx >= min_left + pw {
             cx -= pw;
-            ping_btn = Some(Rect::new(cx, chain_bar.y, pw, 1));
+            ping_btn = Some(Rect::new(cx, chain_bar.y, pw, cb_h));
             cx = cx.saturating_sub(1);
         }
         if is_pinned {
@@ -1173,42 +1551,59 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
             let xw = unfix_lbl.width() as u16;
             if cx >= min_left + xw {
                 cx -= xw;
-                unfix_btn = Some(Rect::new(cx, chain_bar.y, xw, 1));
+                unfix_btn = Some(Rect::new(cx, chain_bar.y, xw, cb_h));
             }
         }
     }
-    y = y.saturating_add(1).min(body.bottom());
+    y = y.saturating_add(cb_h).min(body.bottom());
 
-    // Remaining area: Multi-column responsive node card grid (separated 2-row floating tiles)
-    let grid_area = Rect::new(x, y, w, body.bottom().saturating_sub(y));
-    let cols = if grid_area.width >= 124 {
+    // Remaining area: Multi-column responsive node card grid (separated 2-3 row floating tiles)
+    let raw_grid = Rect::new(x, y, w, body.bottom().saturating_sub(y));
+    let cols = if expanded {
+        if raw_grid.width >= 52 { 2 } else { 1 }
+    } else if raw_grid.width >= 124 {
         4
-    } else if grid_area.width >= 88 {
+    } else if raw_grid.width >= 88 {
         3
-    } else if grid_area.width >= 56 {
+    } else if raw_grid.width >= 56 {
         2
     } else {
         1
     };
     cl.last_grid_cols.set(cols);
 
-    let (card_h, v_gap): (u16, u16) = if cols == 1 && grid_area.height < 12 {
+    let (card_h, v_gap): (u16, u16) = if expanded && raw_grid.height >= 8 {
+        (3, 1)
+    } else if cols == 1 && raw_grid.height < 12 {
         (1, 0)
     } else if cols == 1 {
-        (2, u16::from(grid_area.height >= 14))
+        (2, u16::from(raw_grid.height >= 14))
     } else {
         (2, 1)
     };
     let row_stride = card_h + v_gap;
     let nodes = cl.filtered_nodes();
     let total_rows = nodes.len().div_ceil(cols);
+    let full_vis_rows = if raw_grid.height >= card_h {
+        ((raw_grid.height + v_gap) / row_stride).max(1) as usize
+    } else {
+        1
+    };
+    let need_pager = expanded && total_rows > full_vis_rows && raw_grid.height >= card_h + 3;
+    let pager_h = if need_pager { 2u16 } else { 0 };
+    let grid_area = Rect::new(
+        raw_grid.x,
+        raw_grid.y,
+        raw_grid.width,
+        raw_grid.height.saturating_sub(pager_h),
+    );
     let visible_rows = if grid_area.height >= card_h {
         ((grid_area.height + v_gap) / row_stride).max(1) as usize
     } else {
         1
     };
     let cursor_row = cl.node_cursor / cols;
-    let scroll_rows = list_offset(total_rows, cursor_row, visible_rows);
+    let scroll_rows = list_offset(cursor_row, total_rows, visible_rows);
 
     let scrollable = total_rows > visible_rows && grid_area.width >= 20 && grid_area.height >= 3;
     let grid_scrollbar = scrollable.then_some(Rect::new(
@@ -1249,6 +1644,22 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
         _ => (0, 0),
     };
 
+    let (prev_btn, next_btn, can_prev, can_next, page_text) = if need_pager {
+        let py = grid_area.bottom();
+        let btns = split_touch_buttons(Rect::new(raw_grid.x, py, raw_grid.width, pager_h), 2);
+        let page = (scroll_rows / visible_rows.max(1)) + 1;
+        let pages = total_rows.div_ceil(visible_rows.max(1)).max(1);
+        (
+            Some(btns[0]),
+            Some(btns[1]),
+            scroll_rows > 0,
+            scroll_rows + visible_rows < total_rows,
+            Some(format!("{page}/{pages}")),
+        )
+    } else {
+        (None, None, false, false, None)
+    };
+
     ProxiesGeom {
         group_bar,
         group_pills,
@@ -1276,10 +1687,15 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
         grid_total_rows: total_rows,
         visible_node_range,
         node_hits,
+        prev_btn,
+        next_btn,
+        can_prev,
+        can_next,
+        page_text,
     }
 }
 
-fn build_group_pills(bar: Rect, cl: &ClashState) -> (Vec<GroupPillHit>, bool, bool) {
+fn build_group_pills(bar: Rect, cl: &ClashState, bar_h: u16) -> (Vec<GroupPillHit>, bool, bool) {
     let groups = cl.visible_groups();
     if groups.is_empty() || bar.width < 6 {
         return (Vec::new(), false, false);
@@ -1287,7 +1703,7 @@ fn build_group_pills(bar: Rect, cl: &ClashState) -> (Vec<GroupPillHit>, bool, bo
     let active = cl.group_cursor.min(groups.len() - 1);
     let widths: Vec<u16> = groups
         .iter()
-        .map(|g| (g.name.width().min(18) + 2) as u16)
+        .map(|g| (g.name.width().min(18) + 2).max(if bar_h >= 2 { 8 } else { 0 }) as u16)
         .collect();
     let total: u16 = widths
         .iter()
@@ -1336,17 +1752,29 @@ fn build_group_pills(bar: Rect, cl: &ClashState) -> (Vec<GroupPillHit>, bool, bo
         out.push(GroupPillHit {
             group_idx: idx,
             label: groups[idx].name.clone(),
-            rect: Rect::new(x, bar.y, pw, 1),
+            rect: Rect::new(x, bar.y, pw, bar_h),
         });
         x = x.saturating_add(pw + 1);
     }
     (out, overflow_left, overflow_right)
 }
 
-fn build_profiles(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> ProfilesGeom {
+fn build_profiles(
+    body: Rect,
+    cl: &ClashState,
+    i: &I18n,
+    framed: bool,
+    density: ResolvedDensity,
+) -> ProfilesGeom {
+    let expanded = density.is_expanded() && body.height >= 14;
+    let tb_h = if expanded {
+        2u16
+    } else {
+        u16::from(body.height > 0)
+    };
     let x = body.x + 1;
     let w = body.width.saturating_sub(2);
-    let toolbar = Rect::new(x, body.y, w, u16::from(body.height > 0));
+    let toolbar = Rect::new(x, body.y, w, tb_h);
     let mut right = toolbar.right();
     let mut providers_btn = None;
     let mut import_btn = None;
@@ -1372,16 +1800,16 @@ fn build_profiles(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> Profil
             let bw = lbl.width() as u16;
             if right >= x + 10 + bw {
                 right -= bw;
-                *slot = Some(Rect::new(right, toolbar.y, bw, 1));
+                *slot = Some(Rect::new(right, toolbar.y, bw, tb_h));
                 right = right.saturating_sub(1);
             }
         }
     }
-    let filter_bar = Rect::new(x, toolbar.y, right.saturating_sub(x), toolbar.height);
+    let filter_bar = Rect::new(x, toolbar.y, right.saturating_sub(x), 1.min(toolbar.height));
 
-    let main_y = body.y.saturating_add(1).min(body.bottom());
+    let main_y = body.y.saturating_add(tb_h).min(body.bottom());
     let main_h = body.bottom().saturating_sub(main_y);
-    let (list_area, inspector_area) = if w >= 78 && main_h >= 6 {
+    let (list_area, inspector_area) = if w >= 78 && main_h >= 6 && !(expanded && w < 90) {
         let lw = (w * 56 / 100).max(38);
         let rw = w.saturating_sub(lw + 1);
         (
@@ -1393,16 +1821,25 @@ fn build_profiles(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> Profil
     };
 
     let pad = u16::from(framed);
-    let list_inner = Rect::new(
+    let raw_inner = Rect::new(
         list_area.x + pad + 1,
         list_area.y + pad,
         list_area.width.saturating_sub(pad * 2 + 2),
         list_area.height.saturating_sub(pad * 2),
     );
-    let row_height: u16 = if list_inner.height >= 8 { 3 } else { 2 };
+    let row_height: u16 = if raw_inner.height >= 8 { 3 } else { 2 };
     let profiles = cl.filtered_profiles();
+    let full_vis = (raw_inner.height / row_height).max(1) as usize;
+    let need_pager = expanded && profiles.len() > full_vis && raw_inner.height >= row_height + 3;
+    let pager_h = if need_pager { 2u16 } else { 0 };
+    let list_inner = Rect::new(
+        raw_inner.x,
+        raw_inner.y,
+        raw_inner.width,
+        raw_inner.height.saturating_sub(pager_h),
+    );
     let visible = (list_inner.height / row_height).max(1) as usize;
-    let list_scroll = list_offset(profiles.len(), cl.profile_cursor, visible);
+    let list_scroll = list_offset(cl.profile_cursor, profiles.len(), visible);
     let mut item_hits = Vec::new();
     for slot in 0..visible {
         let idx = list_scroll + slot;
@@ -1417,6 +1854,20 @@ fn build_profiles(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> Profil
             ));
         }
     }
+    let (prev_btn, next_btn, can_prev, can_next) = if need_pager {
+        let btns = split_touch_buttons(
+            Rect::new(raw_inner.x, list_inner.bottom(), raw_inner.width, pager_h),
+            2,
+        );
+        (
+            Some(btns[0]),
+            Some(btns[1]),
+            list_scroll > 0,
+            list_scroll + visible < profiles.len(),
+        )
+    } else {
+        (None, None, false, false)
+    };
 
     ProfilesGeom {
         toolbar,
@@ -1429,15 +1880,33 @@ fn build_profiles(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> Profil
         list_inner,
         item_hits,
         inspector_area,
+        prev_btn,
+        next_btn,
+        can_prev,
+        can_next,
     }
 }
 
-fn build_connections(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> ConnectionsGeom {
+fn build_connections(
+    body: Rect,
+    cl: &ClashState,
+    i: &I18n,
+    framed: bool,
+    density: ResolvedDensity,
+) -> ConnectionsGeom {
+    let expanded = density.is_expanded() && body.height >= 16;
+    let bar_h = if expanded { 2u16 } else { 1u16 };
+    let row_height = density.list_row_height();
     let x = body.x + 1;
     let w = body.width.saturating_sub(2);
     let mut y = body.y;
 
-    let toolbar = Rect::new(x, y, w, u16::from(y < body.bottom()));
+    let tb_h = if y + bar_h <= body.bottom() {
+        bar_h
+    } else {
+        u16::from(y < body.bottom())
+    };
+    let toolbar = Rect::new(x, y, w, tb_h);
     let mut right = toolbar.right();
     let mut close_all_btn = None;
     let mut sort_chip = None;
@@ -1448,49 +1917,53 @@ fn build_connections(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> Con
         let cw = ca_lbl.width() as u16;
         if right >= x + 16 + cw {
             right -= cw;
-            close_all_btn = Some(Rect::new(right, toolbar.y, cw, 1));
+            close_all_btn = Some(Rect::new(right, toolbar.y, cw, tb_h));
             right = right.saturating_sub(1);
         }
         let sort_lbl = format!(" [o] {}^ ", i.text(cl.conn_sort.label_key()));
         let sw = sort_lbl.width() as u16;
         if right >= x + 12 + sw {
             right -= sw;
-            sort_chip = Some(Rect::new(right, toolbar.y, sw, 1));
+            sort_chip = Some(Rect::new(right, toolbar.y, sw, tb_h));
             right = right.saturating_sub(1);
         }
         let scope_lbl = format!(" [a] {} ", i.text(cl.conn_scope.label_key()));
         let scw = scope_lbl.width() as u16;
         if right >= x + 8 + scw {
             right -= scw;
-            scope_chip = Some(Rect::new(right, toolbar.y, scw, 1));
+            scope_chip = Some(Rect::new(right, toolbar.y, scw, tb_h));
             right = right.saturating_sub(1);
         }
     }
-    let filter_bar = Rect::new(x, toolbar.y, right.saturating_sub(x), toolbar.height);
-    y = y.saturating_add(1).min(body.bottom());
+    let filter_bar = Rect::new(x, toolbar.y, right.saturating_sub(x), 1.min(toolbar.height));
+    y = y.saturating_add(tb_h).min(body.bottom());
 
-    // Facet filter chip strip (`All`, `TCP`, `UDP`, `Domain`, `DomainSuffix`, `GeoIP`, ...)
-    let facet_bar = Rect::new(x, y, w, u16::from(y < body.bottom()));
+    let fb_h = if y + bar_h <= body.bottom() {
+        bar_h
+    } else {
+        u16::from(y < body.bottom())
+    };
+    let facet_bar = Rect::new(x, y, w, fb_h);
     let mut facet_chips = Vec::new();
     if facet_bar.height > 0 {
         let mut fx = facet_bar.x;
         let all_lbl = format!(" {} ", i.text("clash.filter.all"));
-        let aw = all_lbl.width() as u16;
+        let aw = (all_lbl.width() as u16).max(if fb_h >= 2 { 6 } else { 0 });
         if fx + aw <= facet_bar.right() {
-            facet_chips.push((Rect::new(fx, facet_bar.y, aw, 1), None));
+            facet_chips.push((Rect::new(fx, facet_bar.y, aw, fb_h), None));
             fx += aw + 1;
         }
         for facet in cl.available_conn_facets() {
             let lbl = format!(" {facet} ");
-            let fw = lbl.width() as u16;
+            let fw = (lbl.width() as u16).max(if fb_h >= 2 { 6 } else { 0 });
             if fx + fw > facet_bar.right() {
                 break;
             }
-            facet_chips.push((Rect::new(fx, facet_bar.y, fw, 1), Some(facet)));
+            facet_chips.push((Rect::new(fx, facet_bar.y, fw, fb_h), Some(facet)));
             fx += fw + 1;
         }
     }
-    y = y.saturating_add(1).min(body.bottom());
+    y = y.saturating_add(fb_h).min(body.bottom());
 
     let main_h = body.bottom().saturating_sub(y);
     let (list_area, inspector_area) = if w >= 98 && main_h >= 6 {
@@ -1511,17 +1984,36 @@ fn build_connections(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> Con
         list_area.width.saturating_sub(pad * 2 + 2),
         u16::from(list_area.height > pad * 2 + 1),
     );
+    let raw_inner_h = list_area
+        .bottom()
+        .saturating_sub(pad)
+        .saturating_sub(table_header.y.saturating_add(table_header.height));
+    let total = cl.filtered_connections().len();
+    let full_vis = (raw_inner_h / row_height.max(1)).max(1) as usize;
+    let need_pager = expanded && total > full_vis && raw_inner_h >= row_height + 3;
+    let pager_h = if need_pager { 2u16 } else { 0 };
     let list_inner = Rect::new(
         table_header.x,
         table_header.y.saturating_add(table_header.height),
         table_header.width,
-        list_area
-            .bottom()
-            .saturating_sub(pad)
-            .saturating_sub(table_header.y.saturating_add(table_header.height)),
+        raw_inner_h.saturating_sub(pager_h),
     );
-    let total = cl.filtered_connections().len();
-    let list_scroll = list_offset(total, cl.conn_cursor, list_inner.height.max(1) as usize);
+    let vis = (list_inner.height / row_height.max(1)).max(1) as usize;
+    let list_scroll = list_offset(cl.conn_cursor, total, vis);
+    let (prev_btn, next_btn, can_prev, can_next) = if need_pager {
+        let btns = split_touch_buttons(
+            Rect::new(list_inner.x, list_inner.bottom(), list_inner.width, pager_h),
+            2,
+        );
+        (
+            Some(btns[0]),
+            Some(btns[1]),
+            list_scroll > 0,
+            list_scroll + vis < total,
+        )
+    } else {
+        (None, None, false, false)
+    };
 
     let inspector_body = if inspector_area.width >= 16 && inspector_area.height >= 4 {
         Rect::new(
@@ -1546,17 +2038,36 @@ fn build_connections(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> Con
         table_header,
         list_inner,
         list_scroll,
+        row_height,
+        prev_btn,
+        next_btn,
+        can_prev,
+        can_next,
         inspector_area,
         inspector_body,
     }
 }
 
-fn build_rules(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> RulesGeom {
+fn build_rules(
+    body: Rect,
+    cl: &ClashState,
+    i: &I18n,
+    framed: bool,
+    density: ResolvedDensity,
+) -> RulesGeom {
+    let expanded = density.is_expanded() && body.height >= 16;
+    let bar_h = if expanded { 2u16 } else { 1u16 };
+    let row_height = density.list_row_height();
     let x = body.x + 1;
     let w = body.width.saturating_sub(2);
     let mut y = body.y;
 
-    let toolbar = Rect::new(x, y, w, u16::from(y < body.bottom()));
+    let tb_h = if y + bar_h <= body.bottom() {
+        bar_h
+    } else {
+        u16::from(y < body.bottom())
+    };
+    let toolbar = Rect::new(x, y, w, tb_h);
     let mut right = toolbar.right();
     let mut providers_btn = None;
     if toolbar.height > 0 && w >= 24 {
@@ -1564,34 +2075,39 @@ fn build_rules(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> RulesGeom
         let bw = lbl.width() as u16;
         if right >= x + 10 + bw {
             right -= bw;
-            providers_btn = Some(Rect::new(right, toolbar.y, bw, 1));
+            providers_btn = Some(Rect::new(right, toolbar.y, bw, tb_h));
             right = right.saturating_sub(1);
         }
     }
-    let filter_bar = Rect::new(x, toolbar.y, right.saturating_sub(x), toolbar.height);
-    y = y.saturating_add(1).min(body.bottom());
+    let filter_bar = Rect::new(x, toolbar.y, right.saturating_sub(x), 1.min(toolbar.height));
+    y = y.saturating_add(tb_h).min(body.bottom());
 
-    let facet_bar = Rect::new(x, y, w, u16::from(y < body.bottom()));
+    let fb_h = if y + bar_h <= body.bottom() {
+        bar_h
+    } else {
+        u16::from(y < body.bottom())
+    };
+    let facet_bar = Rect::new(x, y, w, fb_h);
     let mut facet_chips = Vec::new();
     if facet_bar.height > 0 {
         let mut fx = facet_bar.x;
         let all_lbl = format!(" {} ", i.text("clash.filter.all"));
-        let aw = all_lbl.width() as u16;
+        let aw = (all_lbl.width() as u16).max(if fb_h >= 2 { 6 } else { 0 });
         if fx + aw <= facet_bar.right() {
-            facet_chips.push((Rect::new(fx, facet_bar.y, aw, 1), None));
+            facet_chips.push((Rect::new(fx, facet_bar.y, aw, fb_h), None));
             fx += aw + 1;
         }
         for facet in cl.available_rule_facets() {
             let lbl = format!(" {facet} ");
-            let fw = lbl.width() as u16;
+            let fw = (lbl.width() as u16).max(if fb_h >= 2 { 6 } else { 0 });
             if fx + fw > facet_bar.right() {
                 break;
             }
-            facet_chips.push((Rect::new(fx, facet_bar.y, fw, 1), Some(facet)));
+            facet_chips.push((Rect::new(fx, facet_bar.y, fw, fb_h), Some(facet)));
             fx += fw + 1;
         }
     }
-    y = y.saturating_add(1).min(body.bottom());
+    y = y.saturating_add(fb_h).min(body.bottom());
 
     let main_h = body.bottom().saturating_sub(y);
     let (list_area, providers_area) =
@@ -1613,17 +2129,36 @@ fn build_rules(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> RulesGeom
         list_area.width.saturating_sub(pad * 2 + 2),
         u16::from(list_area.height > pad * 2 + 1),
     );
+    let raw_inner_h = list_area
+        .bottom()
+        .saturating_sub(pad)
+        .saturating_sub(table_header.y.saturating_add(table_header.height));
+    let total = cl.filtered_rules().len();
+    let full_vis = (raw_inner_h / row_height.max(1)).max(1) as usize;
+    let need_pager = expanded && total > full_vis && raw_inner_h >= row_height + 3;
+    let pager_h = if need_pager { 2u16 } else { 0 };
     let list_inner = Rect::new(
         table_header.x,
         table_header.y.saturating_add(table_header.height),
         table_header.width,
-        list_area
-            .bottom()
-            .saturating_sub(pad)
-            .saturating_sub(table_header.y.saturating_add(table_header.height)),
+        raw_inner_h.saturating_sub(pager_h),
     );
-    let total = cl.filtered_rules().len();
-    let list_scroll = list_offset(total, cl.rule_cursor, list_inner.height.max(1) as usize);
+    let vis = (list_inner.height / row_height.max(1)).max(1) as usize;
+    let list_scroll = list_offset(cl.rule_cursor, total, vis);
+    let (prev_btn, next_btn, can_prev, can_next) = if need_pager {
+        let btns = split_touch_buttons(
+            Rect::new(list_inner.x, list_inner.bottom(), list_inner.width, pager_h),
+            2,
+        );
+        (
+            Some(btns[0]),
+            Some(btns[1]),
+            list_scroll > 0,
+            list_scroll + vis < total,
+        )
+    } else {
+        (None, None, false, false)
+    };
 
     RulesGeom {
         toolbar,
@@ -1635,14 +2170,32 @@ fn build_rules(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> RulesGeom
         table_header,
         list_inner,
         list_scroll,
+        row_height,
+        prev_btn,
+        next_btn,
+        can_prev,
+        can_next,
         providers_area,
     }
 }
 
-fn build_tools(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> ToolsGeom {
+fn build_tools(
+    body: Rect,
+    cl: &ClashState,
+    i: &I18n,
+    framed: bool,
+    density: ResolvedDensity,
+) -> ToolsGeom {
+    let expanded = density.is_expanded() && body.height >= 14;
+    let tb_h = if expanded {
+        2u16
+    } else {
+        u16::from(body.height > 0)
+    };
+    let row_height = density.list_row_height();
     let x = body.x + 1;
     let w = body.width.saturating_sub(2);
-    let toolbar = Rect::new(x, body.y, w, u16::from(body.height > 0));
+    let toolbar = Rect::new(x, body.y, w, tb_h);
     let mut right = toolbar.right();
     let mut logs_btn = None;
     if toolbar.height > 0 && w >= 24 {
@@ -1657,17 +2210,17 @@ fn build_tools(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> ToolsGeom
         let bw = lbl.width() as u16;
         if right >= x + 10 + bw {
             right -= bw;
-            logs_btn = Some(Rect::new(right, toolbar.y, bw, 1));
+            logs_btn = Some(Rect::new(right, toolbar.y, bw, tb_h));
             right = right.saturating_sub(1);
         }
     }
-    let filter_bar = Rect::new(x, toolbar.y, right.saturating_sub(x), toolbar.height);
+    let filter_bar = Rect::new(x, toolbar.y, right.saturating_sub(x), 1.min(toolbar.height));
 
-    let main_y = body.y.saturating_add(1).min(body.bottom());
+    let main_y = body.y.saturating_add(tb_h).min(body.bottom());
     let main_h = body.bottom().saturating_sub(main_y);
     let (list_area, inspector_area) = if cl.tools_log_mode {
         (Rect::default(), Rect::new(x, main_y, w, main_h))
-    } else if w >= 78 && main_h >= 6 {
+    } else if w >= 78 && main_h >= 6 && !(expanded && w < 90) {
         let lw = (w * 52 / 100).max(36);
         let rw = w.saturating_sub(lw + 1);
         (
@@ -1679,7 +2232,7 @@ fn build_tools(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> ToolsGeom
     };
 
     let pad = u16::from(framed);
-    let list_inner = if list_area.width >= 8 && list_area.height >= 3 {
+    let raw_inner = if list_area.width >= 8 && list_area.height >= 3 {
         Rect::new(
             list_area.x + pad + 1,
             list_area.y + pad,
@@ -1690,7 +2243,31 @@ fn build_tools(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> ToolsGeom
         Rect::default()
     };
     let total = cl.filtered_tools(i).len();
-    let list_scroll = list_offset(total, cl.tool_cursor, list_inner.height.max(1) as usize);
+    let full_vis = (raw_inner.height / row_height.max(1)).max(1) as usize;
+    let need_pager = expanded && total > full_vis && raw_inner.height >= row_height + 3;
+    let pager_h = if need_pager { 2u16 } else { 0 };
+    let list_inner = Rect::new(
+        raw_inner.x,
+        raw_inner.y,
+        raw_inner.width,
+        raw_inner.height.saturating_sub(pager_h),
+    );
+    let vis = (list_inner.height / row_height.max(1)).max(1) as usize;
+    let list_scroll = list_offset(cl.tool_cursor, total, vis);
+    let (prev_btn, next_btn, can_prev, can_next) = if need_pager {
+        let btns = split_touch_buttons(
+            Rect::new(raw_inner.x, list_inner.bottom(), raw_inner.width, pager_h),
+            2,
+        );
+        (
+            Some(btns[0]),
+            Some(btns[1]),
+            list_scroll > 0,
+            list_scroll + vis < total,
+        )
+    } else {
+        (None, None, false, false)
+    };
 
     let inspector_body = if inspector_area.width >= 12 && inspector_area.height >= 4 {
         Rect::new(
@@ -1710,6 +2287,11 @@ fn build_tools(body: Rect, cl: &ClashState, i: &I18n, framed: bool) -> ToolsGeom
         list_area,
         list_inner,
         list_scroll,
+        row_height,
+        prev_btn,
+        next_btn,
+        can_prev,
+        can_next,
         inspector_area,
         inspector_body,
     }
@@ -2013,14 +2595,31 @@ pub(in crate::tui) struct ClashModalGeometry {
 }
 
 impl ClashModalGeometry {
-    pub fn compute(area: Rect, modal: &ClashModal, cl: &ClashState, i: &I18n) -> Self {
+    pub fn compute(
+        area: Rect,
+        modal: &ClashModal,
+        cl: &ClashState,
+        i: &I18n,
+        density: ResolvedDensity,
+    ) -> Self {
+        let expanded = density.is_expanded();
+        let row_h = if expanded && area.height >= 24 {
+            2u16
+        } else {
+            1u16
+        };
+        let btn_h = if expanded && area.height >= 20 {
+            density.compact_btn_height()
+        } else {
+            1u16
+        };
         let outbound_rows =
             matches!(modal, ClashModal::OutboundIp { .. }).then(|| outbound_modal_rows(cl, i));
         let (target_w, target_h) = match modal {
             ClashModal::DelaySettings { .. } => (62u16, 11u16),
             ClashModal::GroupPicker { .. } => {
                 let rows = cl.visible_groups().len().clamp(3, 14) as u16;
-                (56u16, rows + 5)
+                (56u16, rows * row_h + 5)
             }
             ClashModal::Providers { show_rules, .. } => {
                 let count = if *show_rules {
@@ -2029,11 +2628,11 @@ impl ClashModalGeometry {
                     cl.snapshot.proxy_providers.len()
                 };
                 let rows = count.clamp(3, 12) as u16;
-                (66u16, rows + 7)
+                (66u16, rows * row_h + 6 + btn_h)
             }
             ClashModal::OutboundIp { .. } => {
                 let content_rows = outbound_rows.as_ref().map_or(14, Vec::len).clamp(8, 22) as u16;
-                (64u16, content_rows + 5)
+                (64u16, content_rows + 4 + btn_h)
             }
             ClashModal::ServiceStatus { manage, .. } => {
                 let count = if *manage {
@@ -2042,9 +2641,9 @@ impl ClashModalGeometry {
                     cl.enabled_services().len()
                 };
                 let rows = count.clamp(5, 13) as u16;
-                (70u16, rows + 6)
+                (70u16, rows * row_h + 5 + btn_h)
             }
-            ClashModal::Confirm { .. } => (56u16, 9u16),
+            ClashModal::Confirm { .. } => (56u16, 8u16 + btn_h),
         };
         let w = target_w
             .min(area.width.saturating_sub(2))
@@ -2079,37 +2678,51 @@ impl ClashModalGeometry {
         match modal {
             ClashModal::GroupPicker { cursor } => {
                 let total = cl.visible_groups().len();
-                let vis = inner.height.saturating_sub(1).max(1) as usize;
-                let scroll = list_offset(total, *cursor, vis);
+                let list_h = inner.height.saturating_sub(1).max(1);
+                let rh = if list_h >= row_h * 3 { row_h } else { 1 };
+                let vis = (list_h / rh).max(1) as usize;
+                let scroll = list_offset(*cursor, total, vis);
                 for slot in 0..vis {
                     let idx = scroll + slot;
                     if idx >= total {
                         break;
                     }
                     item_rows.push((
-                        Rect::new(inner.x, inner.y + slot as u16, inner.width, 1),
+                        Rect::new(inner.x, inner.y + slot as u16 * rh, inner.width, rh),
                         idx,
                     ));
                 }
             }
             ClashModal::Providers { show_rules, cursor } => {
-                let p_lbl = format!(
-                    " {} ({}) ",
-                    i.text("clash.modal.proxy_providers"),
-                    cl.snapshot.proxy_providers.len()
-                );
-                let r_lbl = format!(
-                    " {} ({}) ",
-                    i.text("clash.modal.rule_providers"),
-                    cl.snapshot.rule_providers.len()
-                );
-                let pw = (p_lbl.width() as u16).min(inner.width / 2);
-                let rw = (r_lbl.width() as u16).min(inner.width.saturating_sub(pw + 1));
-                if inner.height > 0 && pw > 0 {
-                    subtab_proxy = Some(Rect::new(inner.x, inner.y, pw, 1));
-                }
-                if inner.height > 0 && rw > 0 {
-                    subtab_rules = Some(Rect::new(inner.x + pw + 1, inner.y, rw, 1));
+                let sub_h = if expanded && inner.height >= 8 {
+                    btn_h
+                } else {
+                    1
+                };
+                if expanded && sub_h >= 2 && inner.width >= 20 {
+                    let btns =
+                        split_touch_buttons(Rect::new(inner.x, inner.y, inner.width, sub_h), 2);
+                    subtab_proxy = Some(btns[0]);
+                    subtab_rules = Some(btns[1]);
+                } else {
+                    let p_lbl = format!(
+                        " {} ({}) ",
+                        i.text("clash.modal.proxy_providers"),
+                        cl.snapshot.proxy_providers.len()
+                    );
+                    let r_lbl = format!(
+                        " {} ({}) ",
+                        i.text("clash.modal.rule_providers"),
+                        cl.snapshot.rule_providers.len()
+                    );
+                    let pw = (p_lbl.width() as u16).min(inner.width / 2);
+                    let rw = (r_lbl.width() as u16).min(inner.width.saturating_sub(pw + 1));
+                    if inner.height > 0 && pw > 0 {
+                        subtab_proxy = Some(Rect::new(inner.x, inner.y, pw, 1));
+                    }
+                    if inner.height > 0 && rw > 0 {
+                        subtab_rules = Some(Rect::new(inner.x + pw + 1, inner.y, rw, 1));
+                    }
                 }
 
                 let total = if *show_rules {
@@ -2117,22 +2730,25 @@ impl ClashModalGeometry {
                 } else {
                     cl.snapshot.proxy_providers.len()
                 };
-                let start_y = inner.y + 2;
-                let vis = inner.bottom().saturating_sub(start_y) as usize;
-                let scroll = list_offset(total, *cursor, vis.max(1));
+                let start_y = inner.y + sub_h + 1;
+                let list_h = inner.bottom().saturating_sub(start_y);
+                let rh = if list_h >= row_h * 3 { row_h } else { 1 };
+                let vis = (list_h / rh) as usize;
+                let scroll = list_offset(*cursor, total, vis.max(1));
                 for slot in 0..vis {
                     let idx = scroll + slot;
                     if idx >= total {
                         break;
                     }
                     item_rows.push((
-                        Rect::new(inner.x, start_y + slot as u16, inner.width, 1),
+                        Rect::new(inner.x, start_y + slot as u16 * rh, inner.width, rh),
                         idx,
                     ));
                 }
             }
             ClashModal::OutboundIp { scroll } => {
-                let by = box_rect.bottom().saturating_sub(2);
+                let eff_btn_h = if box_rect.height >= 12 { btn_h } else { 1 };
+                let by = box_rect.bottom().saturating_sub(1 + eff_btn_h);
                 let body_y = box_rect.y + 1;
                 let body_h = by.saturating_sub(body_y + 1);
                 outbound_body = Rect::new(inner.x, body_y, inner.width, body_h);
@@ -2158,32 +2774,50 @@ impl ClashModalGeometry {
                 }
 
                 if by > box_rect.y + 1 && inner.width >= 16 {
-                    let mut bx = inner.x;
-                    let max_r = inner.right();
-                    let r_lbl = format!(" [r] {} ", i.text("clash.outbound.retry"));
-                    let rw = r_lbl.width() as u16;
-                    if bx + rw <= max_r {
-                        outbound_refresh_btn = Some(Rect::new(bx, by, rw, 1));
-                        bx = bx.saturating_add(rw + 1);
-                    }
-                    if cl.exit_probe.is_some() {
-                        let c_lbl = format!(" [1] {} ", i.text("clash.outbound.copy_ip"));
-                        let cw = c_lbl.width() as u16;
-                        if bx + cw <= max_r {
-                            outbound_copy_btn = Some(Rect::new(bx, by, cw, 1));
-                            bx = bx.saturating_add(cw + 1);
+                    if expanded && eff_btn_h >= 2 {
+                        let has_copy = cl.exit_probe.is_some();
+                        let count = if has_copy { 4 } else { 3 };
+                        let btns = split_touch_buttons(
+                            Rect::new(inner.x, by, inner.width, eff_btn_h),
+                            count,
+                        );
+                        outbound_refresh_btn = btns.first().copied();
+                        if has_copy {
+                            outbound_copy_btn = btns.get(1).copied();
+                            outbound_hide_btn = btns.get(2).copied();
+                            outbound_close_btn = btns.get(3).copied();
+                        } else {
+                            outbound_hide_btn = btns.get(1).copied();
+                            outbound_close_btn = btns.get(2).copied();
                         }
-                    }
-                    let h_lbl = format!(" [h] {} ", i.text("clash.outbound.hide_ip"));
-                    let hw = h_lbl.width() as u16;
-                    if bx + hw <= max_r {
-                        outbound_hide_btn = Some(Rect::new(bx, by, hw, 1));
-                        bx = bx.saturating_add(hw + 1);
-                    }
-                    let close_lbl = format!(" [Esc] {} ", i.text("key.close"));
-                    let clw = close_lbl.width() as u16;
-                    if max_r >= bx + clw {
-                        outbound_close_btn = Some(Rect::new(max_r - clw, by, clw, 1));
+                    } else {
+                        let mut bx = inner.x;
+                        let max_r = inner.right();
+                        let r_lbl = format!(" [r] {} ", i.text("clash.outbound.retry"));
+                        let rw = r_lbl.width() as u16;
+                        if bx + rw <= max_r {
+                            outbound_refresh_btn = Some(Rect::new(bx, by, rw, 1));
+                            bx = bx.saturating_add(rw + 1);
+                        }
+                        if cl.exit_probe.is_some() {
+                            let c_lbl = format!(" [1] {} ", i.text("clash.outbound.copy_ip"));
+                            let cw = c_lbl.width() as u16;
+                            if bx + cw <= max_r {
+                                outbound_copy_btn = Some(Rect::new(bx, by, cw, 1));
+                                bx = bx.saturating_add(cw + 1);
+                            }
+                        }
+                        let h_lbl = format!(" [h] {} ", i.text("clash.outbound.hide_ip"));
+                        let hw = h_lbl.width() as u16;
+                        if bx + hw <= max_r {
+                            outbound_hide_btn = Some(Rect::new(bx, by, hw, 1));
+                            bx = bx.saturating_add(hw + 1);
+                        }
+                        let close_lbl = format!(" [Esc] {} ", i.text("key.close"));
+                        let clw = close_lbl.width() as u16;
+                        if max_r >= bx + clw {
+                            outbound_close_btn = Some(Rect::new(max_r - clw, by, clw, 1));
+                        }
                     }
                 }
             }
@@ -2193,7 +2827,8 @@ impl ClashModalGeometry {
                 } else {
                     cl.enabled_services()
                 };
-                let by = box_rect.bottom().saturating_sub(2);
+                let eff_btn_h = if box_rect.height >= 12 { btn_h } else { 1 };
+                let by = box_rect.bottom().saturating_sub(1 + eff_btn_h);
                 let list_y = box_rect.y + 1;
                 let has_summary = by >= list_y + 4;
                 let list_bottom = if has_summary {
@@ -2202,95 +2837,127 @@ impl ClashModalGeometry {
                 } else {
                     by
                 };
-                let vis = list_bottom.saturating_sub(list_y) as usize;
+                let list_h = list_bottom.saturating_sub(list_y);
+                let rh = if list_h >= row_h * 4 { row_h } else { 1 };
+                let vis = (list_h / rh) as usize;
                 let total = targets.len();
                 let clamped_cur = if total == 0 {
                     0
                 } else {
                     (*cursor).min(total - 1)
                 };
-                let scroll = list_offset(total, clamped_cur, vis.max(1));
+                let scroll = list_offset(clamped_cur, total, vis.max(1));
                 for slot in 0..vis {
                     let idx = scroll + slot;
                     if idx >= total {
                         break;
                     }
                     item_rows.push((
-                        Rect::new(inner.x, list_y + slot as u16, inner.width, 1),
+                        Rect::new(inner.x, list_y + slot as u16 * rh, inner.width, rh),
                         idx,
                     ));
                 }
 
-                if by > box_rect.y + 1 && inner.width >= 16 {
-                    let mut bx = inner.x;
-                    let max_r = inner.right();
-                    let primary_lbl = if *manage {
-                        format!(" [Space] {} ", i.text("clash.service.toggle"))
-                    } else {
-                        format!(" [Enter] {} ", i.text("clash.service.check_one"))
-                    };
-                    let pw = primary_lbl.width() as u16;
-                    if bx + pw <= max_r {
-                        service_check_btn = Some(Rect::new(bx, by, pw, 1));
-                        bx = bx.saturating_add(pw + 1);
-                    }
-                    let all_lbl = if *manage {
-                        format!(" [r] {} ", i.text("clash.service.reset"))
-                    } else {
-                        format!(" [a] {} ", i.text("clash.service.check_all"))
-                    };
-                    let aw = all_lbl.width() as u16;
-                    if bx + aw <= max_r {
-                        service_check_all_btn = Some(Rect::new(bx, by, aw, 1));
-                        bx = bx.saturating_add(aw + 1);
-                    }
-                    let manage_lbl = if *manage {
-                        format!(" [m] {} ", i.text("clash.service.back"))
-                    } else {
-                        format!(" [m] {} ", i.text("clash.service.manage"))
-                    };
-                    let mw = manage_lbl.width() as u16;
-                    if bx + mw <= max_r {
-                        service_manage_btn = Some(Rect::new(bx, by, mw, 1));
-                        bx = bx.saturating_add(mw + 1);
-                    }
-                    if !*manage
-                        && let Some(&focused_target) = targets.get(clamped_cur)
-                        && cl
-                            .service_entry(focused_target)
+                let show_copy_ip = !*manage
+                    && targets.get(clamped_cur).is_some_and(|&focused_target| {
+                        cl.service_entry(focused_target)
                             .and_then(|e| e.result.as_ref())
                             .and_then(|r| r.ip.as_deref())
                             .is_some()
-                    {
-                        let cp_lbl = format!(" [y] {} ", i.text("clash.outbound.copy_ip"));
-                        let cpw = cp_lbl.width() as u16;
-                        if bx + cpw <= max_r {
-                            service_copy_ip_btn = Some(Rect::new(bx, by, cpw, 1));
-                            bx = bx.saturating_add(cpw + 1);
+                    });
+
+                if by > box_rect.y + 1 && inner.width >= 16 {
+                    if expanded && eff_btn_h >= 2 {
+                        let count = if show_copy_ip && inner.width >= 56 {
+                            5
+                        } else {
+                            4
+                        };
+                        let btns = split_touch_buttons(
+                            Rect::new(inner.x, by, inner.width, eff_btn_h),
+                            count,
+                        );
+                        service_check_btn = btns.first().copied();
+                        service_check_all_btn = btns.get(1).copied();
+                        service_manage_btn = btns.get(2).copied();
+                        if count == 5 {
+                            service_copy_ip_btn = btns.get(3).copied();
+                            service_close_btn = btns.get(4).copied();
+                        } else {
+                            service_close_btn = btns.get(3).copied();
                         }
-                    }
-                    let close_lbl = format!(" [Esc] {} ", i.text("key.close"));
-                    let clw = close_lbl.width() as u16;
-                    if max_r >= bx + clw {
-                        service_close_btn = Some(Rect::new(max_r - clw, by, clw, 1));
+                    } else {
+                        let mut bx = inner.x;
+                        let max_r = inner.right();
+                        let primary_lbl = if *manage {
+                            format!(" [Space] {} ", i.text("clash.service.toggle"))
+                        } else {
+                            format!(" [Enter] {} ", i.text("clash.service.check_one"))
+                        };
+                        let pw = primary_lbl.width() as u16;
+                        if bx + pw <= max_r {
+                            service_check_btn = Some(Rect::new(bx, by, pw, 1));
+                            bx = bx.saturating_add(pw + 1);
+                        }
+                        let all_lbl = if *manage {
+                            format!(" [r] {} ", i.text("clash.service.reset"))
+                        } else {
+                            format!(" [a] {} ", i.text("clash.service.check_all"))
+                        };
+                        let aw = all_lbl.width() as u16;
+                        if bx + aw <= max_r {
+                            service_check_all_btn = Some(Rect::new(bx, by, aw, 1));
+                            bx = bx.saturating_add(aw + 1);
+                        }
+                        let manage_lbl = if *manage {
+                            format!(" [m] {} ", i.text("clash.service.back"))
+                        } else {
+                            format!(" [m] {} ", i.text("clash.service.manage"))
+                        };
+                        let mw = manage_lbl.width() as u16;
+                        if bx + mw <= max_r {
+                            service_manage_btn = Some(Rect::new(bx, by, mw, 1));
+                            bx = bx.saturating_add(mw + 1);
+                        }
+                        if show_copy_ip {
+                            let cp_lbl = format!(" [y] {} ", i.text("clash.outbound.copy_ip"));
+                            let cpw = cp_lbl.width() as u16;
+                            if bx + cpw <= max_r {
+                                service_copy_ip_btn = Some(Rect::new(bx, by, cpw, 1));
+                                bx = bx.saturating_add(cpw + 1);
+                            }
+                        }
+                        let close_lbl = format!(" [Esc] {} ", i.text("key.close"));
+                        let clw = close_lbl.width() as u16;
+                        if max_r >= bx + clw {
+                            service_close_btn = Some(Rect::new(max_r - clw, by, clw, 1));
+                        }
                     }
                 }
             }
             ClashModal::Confirm { .. } => {
-                let by = box_rect.bottom().saturating_sub(2);
-                let btn_w = 12u16.min(inner.width / 2);
-                confirm_yes = Some(Rect::new(
-                    inner.x + inner.width.saturating_sub(btn_w * 2 + 2),
-                    by,
-                    btn_w,
-                    1,
-                ));
-                confirm_no = Some(Rect::new(
-                    inner.x + inner.width.saturating_sub(btn_w),
-                    by,
-                    btn_w,
-                    1,
-                ));
+                let eff_btn_h = if box_rect.height >= 9 { btn_h } else { 1 };
+                let by = box_rect.bottom().saturating_sub(1 + eff_btn_h);
+                if expanded && eff_btn_h >= 2 {
+                    let btns =
+                        split_touch_buttons(Rect::new(inner.x, by, inner.width, eff_btn_h), 2);
+                    confirm_yes = btns.first().copied();
+                    confirm_no = btns.get(1).copied();
+                } else {
+                    let btn_w = 12u16.min(inner.width / 2);
+                    confirm_yes = Some(Rect::new(
+                        inner.x + inner.width.saturating_sub(btn_w * 2 + 2),
+                        by,
+                        btn_w,
+                        1,
+                    ));
+                    confirm_no = Some(Rect::new(
+                        inner.x + inner.width.saturating_sub(btn_w),
+                        by,
+                        btn_w,
+                        1,
+                    ));
+                }
             }
             ClashModal::DelaySettings { .. } => {
                 if inner.height >= 2 {

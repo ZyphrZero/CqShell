@@ -28,7 +28,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
     let theme = &app.theme.active;
     let i = &app.ctx.i18n;
     let ascii = theme.flags.ascii;
-    let geom = DockerModalGeometry::compute(area, modal);
+    let geom = DockerModalGeometry::compute(area, modal, app.resolved_density(area));
 
     fx::apply_shadow(frame.buffer_mut(), geom.modal, area, theme);
     tokens::draw_surface_card(
@@ -141,7 +141,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
                 );
             }
             if let Some(err) = error {
-                draw_modal_error(buf, geom.modal, err, theme, bg);
+                draw_modal_error(buf, geom.modal, geom.submit_btn, err, theme, bg);
             }
         }
         DockerModal::CreateNetwork {
@@ -201,7 +201,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
                 );
             }
             if let Some(err) = error {
-                draw_modal_error(buf, geom.modal, err, theme, bg);
+                draw_modal_error(buf, geom.modal, geom.submit_btn, err, theme, bg);
             }
         }
         DockerModal::ExecForm {
@@ -221,7 +221,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
                 draw_input_field(buf, *row, lbl, val, *field == idx, theme, bg);
             }
             if let Some(err) = error {
-                draw_modal_error(buf, geom.modal, err, theme, bg);
+                draw_modal_error(buf, geom.modal, geom.submit_btn, err, theme, bg);
             }
         }
         DockerModal::PruneWizard {
@@ -443,11 +443,14 @@ fn draw_input_field(
 fn draw_modal_error(
     buf: &mut ratatui::buffer::Buffer,
     modal: Rect,
+    submit_btn: Option<Rect>,
     err: &str,
     theme: &crate::theme::Theme,
     bg: Color,
 ) {
-    let y = modal.bottom().saturating_sub(3);
+    let y = submit_btn
+        .map(|b| b.y.saturating_sub(1))
+        .unwrap_or_else(|| modal.bottom().saturating_sub(3));
     if y > modal.y + 1 {
         buf.set_stringn(
             modal.x + 2,

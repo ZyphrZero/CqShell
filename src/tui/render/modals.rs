@@ -38,7 +38,8 @@ pub(super) fn draw_palette(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
     let i = &app.ctx.i18n;
     let specs = actions::specs_slice();
     let results = palette::search(&pal.query.text, specs, i, &app.category_order, &app.records);
-    let geom = CommandPaletteGeometry::compute(area, &results, pal.cursor);
+    let geom =
+        CommandPaletteGeometry::compute(area, &results, pal.cursor, app.resolved_density(area));
 
     let elapsed = app.now.saturating_duration_since(app.started);
     let reduced = app.reduced_motion();
@@ -155,21 +156,15 @@ pub(super) fn draw_palette(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
         }
     } else {
         let sel_row_idx = results.row_of(pal.cursor);
-        let list_h = geom.list.height as usize;
         let hi_style = Style::default()
             .fg(tokens::selected_accent(theme))
             .add_modifier(Modifier::BOLD);
 
-        for (offset, row) in results
-            .rows
-            .iter()
-            .skip(geom.scroll)
-            .take(list_h)
-            .enumerate()
-        {
-            let abs_idx = geom.scroll + offset;
-            let y = geom.list.y + offset as u16;
-            let row_rect = Rect::new(geom.list.x, y, geom.list.width, 1);
+        for &(row_rect, abs_idx) in &geom.row_rects {
+            let Some(row) = results.rows.get(abs_idx) else {
+                continue;
+            };
+            let y = row_rect.y;
 
             match row {
                 PaletteRow::Header(title) => {
@@ -199,18 +194,20 @@ pub(super) fn draw_palette(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
                     };
                     {
                         let buf = frame.buffer_mut();
-                        for col in row_rect.left()..row_rect.right() {
-                            buf[(col, y)].set_symbol(" ").set_bg(row_bg);
-                        }
-                        if active {
-                            buf[(row_rect.x, y)]
-                                .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
-                                .set_style(
-                                    Style::default()
-                                        .fg(tokens::selected_accent(theme))
-                                        .bg(row_bg)
-                                        .add_modifier(Modifier::BOLD),
-                                );
+                        for ry in row_rect.top()..row_rect.bottom() {
+                            for col in row_rect.left()..row_rect.right() {
+                                buf[(col, ry)].set_symbol(" ").set_bg(row_bg);
+                            }
+                            if active {
+                                buf[(row_rect.x, ry)]
+                                    .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
+                                    .set_style(
+                                        Style::default()
+                                            .fg(tokens::selected_accent(theme))
+                                            .bg(row_bg)
+                                            .add_modifier(Modifier::BOLD),
+                                    );
+                            }
                         }
                     }
 
@@ -328,9 +325,28 @@ pub(super) fn draw_palette(app: &App, frame: &mut Frame, area: Rect, alpha: f64)
         }
     }
 
+    if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+        tokens::draw_pager_buttons(
+            frame.buffer_mut(),
+            geom.prev_btn,
+            geom.next_btn,
+            geom.can_prev,
+            geom.can_next,
+            None,
+            app.hover,
+            theme,
+            i,
+            bg,
+        );
+    }
+
     // Bottom palette hints
     let hint_y = geom.modal.bottom().saturating_sub(2);
-    if hint_y > geom.list.y {
+    let content_bottom = geom
+        .prev_btn
+        .or(geom.next_btn)
+        .map_or(geom.list.bottom(), Rect::bottom);
+    if hint_y >= content_bottom && hint_y > geom.list.y {
         let hint_w = geom.modal.width.saturating_sub(4);
         let hints = tokens::fit_keycaps(
             theme,
@@ -469,6 +485,23 @@ pub(super) fn draw_form(app: &App, frame: &mut Frame, area: Rect, form: &Form, a
                 let choice = field.choices[*ci];
                 let selected = form.values[idx].text == choice;
                 let hovered = app.hover.is_some_and(|p| chip_rect.contains(p));
+                if chip_rect.height >= 2 {
+                    tokens::draw_touch_button(
+                        buf,
+                        *chip_rect,
+                        choice,
+                        None,
+                        if selected {
+                            tokens::TouchBtnKind::Primary
+                        } else {
+                            tokens::TouchBtnKind::Secondary
+                        },
+                        hovered,
+                        theme,
+                        bg,
+                    );
+                    continue;
+                }
                 let (c_fg, c_bg) = if selected {
                     (
                         tokens::color(theme, Role::OnAccent),
@@ -550,6 +583,23 @@ pub(super) fn draw_form(app: &App, frame: &mut Frame, area: Rect, form: &Form, a
                     let choice = field.choices[*ci];
                     let selected = form.values[idx].text.eq_ignore_ascii_case(choice);
                     let hovered = app.hover.is_some_and(|p| chip_rect.contains(p));
+                    if chip_rect.height >= 2 {
+                        tokens::draw_touch_button(
+                            buf,
+                            *chip_rect,
+                            choice,
+                            None,
+                            if selected {
+                                tokens::TouchBtnKind::Primary
+                            } else {
+                                tokens::TouchBtnKind::Secondary
+                            },
+                            hovered,
+                            theme,
+                            bg,
+                        );
+                        continue;
+                    }
                     let (c_fg, c_bg) = if selected {
                         (
                             tokens::color(theme, Role::OnAccent),
@@ -696,7 +746,7 @@ pub(super) fn draw_form(app: &App, frame: &mut Frame, area: Rect, form: &Form, a
 
     // Hint bar
     let hint_y = geom.modal.bottom().saturating_sub(2);
-    if hint_y > geom.buttons[0].y {
+    if hint_y >= geom.buttons[0].bottom() && hint_y > geom.buttons[0].y {
         let hint_w = geom.modal.width.saturating_sub(4);
         let hints = tokens::fit_keycaps(
             theme,
@@ -725,7 +775,12 @@ pub(super) fn draw_picker(app: &App, frame: &mut Frame, area: Rect, form: &Form,
     let i = &app.ctx.i18n;
     let choices = form.choices(form.index);
     let matches = picker.matches(choices);
-    let geom = PickerGeometry::compute(area, matches.len(), picker.cursor);
+    let geom = PickerGeometry::compute(
+        area,
+        matches.len(),
+        picker.cursor,
+        app.resolved_density(area),
+    );
 
     let elapsed = app.now.saturating_duration_since(app.started);
     let reduced = app.reduced_motion();
@@ -792,32 +847,31 @@ pub(super) fn draw_picker(app: &App, frame: &mut Frame, area: Rect, form: &Form,
         bg,
     );
 
-    for (offset, choice) in matches
-        .iter()
-        .skip(geom.scroll)
-        .take(geom.list.height as usize)
-        .enumerate()
-    {
+    let rh = geom.row_height.max(1);
+    let vis = (geom.list.height / rh) as usize;
+    for (offset, choice) in matches.iter().skip(geom.scroll).take(vis).enumerate() {
         let idx = geom.scroll + offset;
-        let y = geom.list.y + offset as u16;
-        let row_rect = Rect::new(geom.list.x, y, geom.list.width, 1);
+        let y = geom.list.y + offset as u16 * rh;
+        let row_rect = Rect::new(geom.list.x, y, geom.list.width, rh);
         let active = idx == picker.cursor;
         let row_bg = if active {
             tokens::color(theme, Role::Selection)
         } else {
             bg
         };
-        for col in row_rect.left()..row_rect.right() {
-            buf[(col, y)].set_symbol(" ").set_bg(row_bg);
-        }
-        if active {
-            buf[(row_rect.x, y)]
-                .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
-                .set_style(
-                    Style::default()
-                        .fg(tokens::selected_accent(theme))
-                        .bg(row_bg),
-                );
+        for ry in row_rect.top()..row_rect.bottom() {
+            for col in row_rect.left()..row_rect.right() {
+                buf[(col, ry)].set_symbol(" ").set_bg(row_bg);
+            }
+            if active {
+                buf[(row_rect.x, ry)]
+                    .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
+                    .set_style(
+                        Style::default()
+                            .fg(tokens::selected_accent(theme))
+                            .bg(row_bg),
+                    );
+            }
         }
         let mut text = choice.value.clone();
         if !choice.detail.is_empty() {
@@ -840,6 +894,21 @@ pub(super) fn draw_picker(app: &App, frame: &mut Frame, area: Rect, form: &Form,
                     tokens::color(theme, Role::Text1)
                 })
                 .bg(row_bg),
+        );
+    }
+
+    if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+        tokens::draw_pager_buttons(
+            buf,
+            geom.prev_btn,
+            geom.next_btn,
+            geom.can_prev,
+            geom.can_next,
+            None,
+            app.hover,
+            theme,
+            i,
+            bg,
         );
     }
 
@@ -890,7 +959,7 @@ pub(super) fn draw_confirmation(app: &App, frame: &mut Frame, area: Rect, alpha:
     };
     let theme = &app.theme.active;
     let i = &app.ctx.i18n;
-    let geom = ConfirmationGeometry::compute(area, confirm, i);
+    let geom = ConfirmationGeometry::compute(area, confirm, i, app.resolved_density(area));
 
     fx::apply_shadow(frame.buffer_mut(), geom.modal, area, theme);
     let accent_role = if confirm.danger {
@@ -968,7 +1037,7 @@ pub(super) fn draw_confirmation(app: &App, frame: &mut Frame, area: Rect, alpha:
     );
 
     let hint_y = geom.modal.bottom().saturating_sub(2);
-    if hint_y > geom.buttons[0].y {
+    if hint_y >= geom.buttons[0].bottom() && hint_y > geom.buttons[0].y {
         let hint_w = geom.modal.width.saturating_sub(4);
         let hints = tokens::fit_keycaps(
             theme,
@@ -1405,6 +1474,17 @@ fn draw_button(
     }
     let theme = &app.theme.active;
     let hovered = app.hover.is_some_and(|p| rect.contains(p));
+    if rect.height >= 2 {
+        let kind = if focused {
+            tokens::TouchBtnKind::Primary
+        } else if primary {
+            tokens::TouchBtnKind::Active
+        } else {
+            tokens::TouchBtnKind::Secondary
+        };
+        tokens::draw_touch_button(buf, rect, label, None, kind, hovered, theme, base_bg);
+        return;
+    }
     let (fg_col, bg_col) = if focused {
         (
             tokens::color(theme, Role::OnAccent),
@@ -1893,6 +1973,7 @@ pub(in crate::tui) fn socks_secret_max_scroll(app: &App, area: Rect) -> u16 {
         &modal.creds,
         &app.ctx.i18n,
         app.theme.active.flags.ascii,
+        app.resolved_density(area),
     );
     let lines = build_socks_secret_lines(app, modal, geom.body.width as usize);
     lines.len().saturating_sub(geom.body.height as usize) as u16
@@ -1913,6 +1994,16 @@ fn draw_secret_chip(
     let theme = &app.theme.active;
     let ascii = theme.flags.ascii;
     let hovered = app.hover.is_some_and(|p| rect.contains(p));
+    if rect.height >= 2 {
+        let lbl = format!("[{key}] {label}");
+        let kind = if primary {
+            tokens::TouchBtnKind::Primary
+        } else {
+            tokens::TouchBtnKind::Secondary
+        };
+        tokens::draw_touch_button(buf, rect, &lbl, None, kind, hovered, theme, base_bg);
+        return;
+    }
     let (fg_col, bg_col) = if hovered {
         (
             tokens::color(theme, Role::OnAccent),
@@ -1965,7 +2056,13 @@ pub(super) fn draw_socks_secret(app: &App, frame: &mut Frame, area: Rect, alpha:
     let theme = &app.theme.active;
     let ascii = theme.flags.ascii;
     let i = &app.ctx.i18n;
-    let geom = layout::SocksSecretGeometry::compute(area, &modal_state.creds, i, ascii);
+    let geom = layout::SocksSecretGeometry::compute(
+        area,
+        &modal_state.creds,
+        i,
+        ascii,
+        app.resolved_density(area),
+    );
     let modal = geom.modal;
 
     fx::apply_shadow(frame.buffer_mut(), modal, area, theme);

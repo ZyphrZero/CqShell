@@ -27,6 +27,9 @@ pub struct Preferences {
     /// Disable transition/shimmer animations for weak SSH links or reduced motion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reduced_motion: Option<bool>,
+    /// UI touch / layout density preference (`None` or `"auto"`, `"compact"`, `"touch"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_density: Option<String>,
     /// Remember user's sidebar collapsed preference on wide/medium viewports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidebar_collapsed: Option<bool>,
@@ -203,6 +206,9 @@ mod tests {
         let detect_background = prop::option::of(any::<bool>());
         let transparent_bg = prop::option::of(any::<bool>());
         let reduced_motion = prop::option::of(any::<bool>());
+        let ui_density = prop::option::of(
+            prop_oneof![Just("auto"), Just("compact"), Just("touch")].prop_map(String::from),
+        );
         let sidebar_collapsed = prop::option::of(any::<bool>());
         let github_proxy_enabled = prop::option::of(any::<bool>());
         let github_proxy = prop::option::of(
@@ -236,6 +242,7 @@ mod tests {
             ),
             (
                 reduced_motion,
+                ui_density,
                 sidebar_collapsed,
                 github_proxy_enabled,
                 github_proxy,
@@ -258,6 +265,7 @@ mod tests {
                     ),
                     (
                         reduced_motion,
+                        ui_density,
                         sidebar_collapsed,
                         github_proxy_enabled,
                         github_proxy,
@@ -275,6 +283,7 @@ mod tests {
                     detect_background,
                     transparent_bg,
                     reduced_motion,
+                    ui_density,
                     sidebar_collapsed,
                     github_proxy_enabled,
                     github_proxy,
@@ -305,6 +314,7 @@ mod tests {
             "detect_background = \"yes\"\n",
             "github_proxy_enabled = \"on\"\n",
             "github_proxy = 42\n",
+            "ui_density = true\n",
         ] {
             let error = read_text(text).unwrap_err();
             assert_eq!(error.key, "error.config", "{text}");
@@ -335,6 +345,7 @@ mod tests {
                 detect_background: None,
                 transparent_bg: None,
                 reduced_motion: None,
+                ui_density: None,
                 sidebar_collapsed: None,
                 github_proxy_enabled: None,
                 github_proxy: None,

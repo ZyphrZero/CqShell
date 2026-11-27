@@ -14,7 +14,7 @@ use crate::{
     },
     tui::{
         input::InputBuffer,
-        layout::LayoutRegions,
+        layout::{LayoutRegions, ThumbAction, hit_best, hit_opt, hit_rect},
         palette,
         state::{App, Effect, NavTarget, Tone},
     },
@@ -1623,6 +1623,101 @@ impl App {
         }
     }
 
+    pub(in crate::tui) fn clash_thumb_action(&mut self, action: ThumbAction) -> Result<Effect> {
+        let idle = self.worker.is_none();
+        match action {
+            ThumbAction::ClashNextTab => Ok(self.cycle_clash_tab(true)),
+            ThumbAction::ClashCycleMode => {
+                let next = match self
+                    .clash
+                    .snapshot
+                    .summary
+                    .mode
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "rule" => "global",
+                    "global" => "direct",
+                    _ => "rule",
+                };
+                self.clash.busy_hint = Some(next.to_owned());
+                Ok(Effect::ClashCmd(ClashMonitorCmd::SetMode {
+                    mode: next.to_owned(),
+                }))
+            }
+            ThumbAction::ClashPrimary => match self.clash.tab {
+                ClashTab::Overview => self.clash_thumb_action(ThumbAction::ClashCycleMode),
+                ClashTab::Proxies => {
+                    if let Some(group) = self.clash.current_group() {
+                        let g = group.name.clone();
+                        if self.clash.testing_groups.insert(g.clone()) {
+                            return Ok(Effect::ClashCmd(ClashMonitorCmd::TestGroupDelay {
+                                group: g,
+                                url: self.clash.delay_url.clone(),
+                                timeout_ms: self.clash.delay_timeout_ms,
+                            }));
+                        }
+                    }
+                    Ok(Effect::None)
+                }
+                ClashTab::Profiles => {
+                    if let Some(prof) = self.clash.selected_profile()
+                        && !prof.is_local
+                    {
+                        let name = prof.name.clone();
+                        if !self.clash.updating_all_profiles
+                            && self.clash.busy_profiles.insert(name.clone())
+                        {
+                            return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateProfile { name }));
+                        }
+                        return Ok(Effect::None);
+                    }
+                    if !self.clash.updating_all_profiles && self.clash.busy_profiles.is_empty() {
+                        self.clash.updating_all_profiles = true;
+                        return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateAllProfiles));
+                    }
+                    Ok(Effect::None)
+                }
+                ClashTab::Connections | ClashTab::Rules => Ok(Effect::ClashRefresh),
+                ClashTab::Tools => {
+                    self.clash.tools_log_mode = !self.clash.tools_log_mode;
+                    if self.clash.tools_log_mode {
+                        self.clash.log_scroll = 0;
+                        self.clash.log_loading = true;
+                        return Ok(Effect::ClashCmd(ClashMonitorCmd::FetchLogs));
+                    }
+                    Ok(Effect::None)
+                }
+            },
+            ThumbAction::ClashSecondary => match self.clash.tab {
+                ClashTab::Overview => Ok(self.open_service_status_modal(None)),
+                ClashTab::Proxies => Ok(self.clash_select_fastest_node()),
+                ClashTab::Profiles if idle => self.clash_trigger_action("clash.sub.add"),
+                ClashTab::Connections if !self.clash.snapshot.connections.is_empty() => {
+                    self.clash.modal = Some(ClashModal::Confirm {
+                        title: self.ctx.i18n.text("clash.confirm.title").to_owned(),
+                        message: self
+                            .ctx
+                            .i18n
+                            .text("clash.confirm.close_all_conns")
+                            .to_owned(),
+                        danger: true,
+                        accept: false,
+                        action: ClashConfirmAction::CloseAllConnections,
+                    });
+                    Ok(Effect::None)
+                }
+                ClashTab::Rules => {
+                    self.clash.filtering = true;
+                    Ok(Effect::None)
+                }
+                ClashTab::Tools => Ok(Effect::ClashRefresh),
+                _ => Ok(Effect::None),
+            },
+            _ => Ok(Effect::None),
+        }
+    }
+
     pub(in crate::tui) fn clash_modal_mouse(
         &mut self,
         event: MouseEvent,
@@ -1692,154 +1787,139 @@ impl App {
         let Some(modal) = self.clash.modal.clone() else {
             return Ok(Effect::None);
         };
-        let geom = ClashModalGeometry::compute(area, &modal, &self.clash, &self.ctx.i18n);
+        let density = self.resolved_density(area);
+        let slop = density.slop_enabled();
+        let geom = ClashModalGeometry::compute(area, &modal, &self.clash, &self.ctx.i18n, density);
         if !geom.contains(pos) {
             self.clash.modal = None;
             return Ok(Effect::None);
         }
         match modal {
             ClashModal::GroupPicker { .. } => {
-                for (rect, idx) in geom.item_rows {
-                    if rect.contains(pos) {
-                        self.clash.select_group_index(idx);
-                        self.clash.modal = None;
-                        break;
-                    }
+                if let Some(idx) = hit_best(geom.item_rows.iter().copied(), pos, slop) {
+                    self.clash.select_group_index(idx);
+                    self.clash.modal = None;
                 }
             }
             ClashModal::Providers { show_rules, .. } => {
-                if geom.subtab_proxy.is_some_and(|r| r.contains(pos)) {
+                let mut tab_hits = Vec::new();
+                if let Some(r) = geom.subtab_proxy {
+                    tab_hits.push((r, false));
+                }
+                if let Some(r) = geom.subtab_rules {
+                    tab_hits.push((r, true));
+                }
+                if let Some(next_rules) = hit_best(tab_hits, pos, slop) {
                     if let Some(ClashModal::Providers {
                         show_rules: sr,
                         cursor,
                     }) = self.clash.modal.as_mut()
                     {
-                        *sr = false;
+                        *sr = next_rules;
                         *cursor = 0;
                     }
                     return Ok(Effect::None);
                 }
-                if geom.subtab_rules.is_some_and(|r| r.contains(pos)) {
-                    if let Some(ClashModal::Providers {
-                        show_rules: sr,
-                        cursor,
-                    }) = self.clash.modal.as_mut()
-                    {
-                        *sr = true;
-                        *cursor = 0;
+                if let Some(idx) = hit_best(geom.item_rows.iter().copied(), pos, slop) {
+                    if let Some(ClashModal::Providers { cursor, .. }) = self.clash.modal.as_mut() {
+                        *cursor = idx;
                     }
-                    return Ok(Effect::None);
-                }
-                for (rect, idx) in geom.item_rows {
-                    if rect.contains(pos) {
-                        if let Some(ClashModal::Providers { cursor, .. }) =
-                            self.clash.modal.as_mut()
-                        {
-                            *cursor = idx;
-                        }
-                        if show_rules {
-                            if let Some(rp) = self.clash.snapshot.rule_providers.get(idx) {
-                                return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateRuleProvider {
-                                    name: rp.name.clone(),
-                                }));
-                            }
-                        } else if let Some(pp) = self.clash.snapshot.proxy_providers.get(idx) {
-                            return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateProxyProvider {
-                                name: pp.name.clone(),
+                    if show_rules {
+                        if let Some(rp) = self.clash.snapshot.rule_providers.get(idx) {
+                            return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateRuleProvider {
+                                name: rp.name.clone(),
                             }));
                         }
+                    } else if let Some(pp) = self.clash.snapshot.proxy_providers.get(idx) {
+                        return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateProxyProvider {
+                            name: pp.name.clone(),
+                        }));
                     }
                 }
             }
             ClashModal::OutboundIp { .. } => {
-                if geom.outbound_close_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.modal = None;
-                    return Ok(Effect::None);
+                let mut btns = Vec::new();
+                if let Some(r) = geom.outbound_close_btn {
+                    btns.push((r, 0u8));
                 }
-                if geom.outbound_refresh_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.exit_probing = true;
-                    self.clash.exit_probe_error = None;
-                    return Ok(Effect::ClashCmd(ClashMonitorCmd::ProbeExit));
+                if let Some(r) = geom.outbound_refresh_btn {
+                    btns.push((r, 1u8));
                 }
-                if geom.outbound_copy_btn.is_some_and(|r| r.contains(pos)) {
-                    return Ok(self.execute_outbound_row_action(OutboundRowAction::CopyIp));
+                if let Some(r) = geom.outbound_copy_btn {
+                    btns.push((r, 2u8));
                 }
-                if geom.outbound_hide_btn.is_some_and(|r| r.contains(pos)) {
-                    return Ok(self.execute_outbound_row_action(OutboundRowAction::ToggleHideIp));
+                if let Some(r) = geom.outbound_hide_btn {
+                    btns.push((r, 3u8));
                 }
-                for (rect, action) in geom.outbound_row_hits {
-                    if rect.contains(pos) {
-                        return Ok(self.execute_outbound_row_action(action));
+                match hit_best(btns, pos, slop) {
+                    Some(0) => {
+                        self.clash.modal = None;
+                        return Ok(Effect::None);
                     }
+                    Some(1) => {
+                        self.clash.exit_probing = true;
+                        self.clash.exit_probe_error = None;
+                        return Ok(Effect::ClashCmd(ClashMonitorCmd::ProbeExit));
+                    }
+                    Some(2) => {
+                        return Ok(self.execute_outbound_row_action(OutboundRowAction::CopyIp));
+                    }
+                    Some(3) => {
+                        return Ok(
+                            self.execute_outbound_row_action(OutboundRowAction::ToggleHideIp)
+                        );
+                    }
+                    _ => {}
+                }
+                if let Some(action) = hit_best(geom.outbound_row_hits.iter().copied(), pos, false) {
+                    return Ok(self.execute_outbound_row_action(action));
                 }
             }
             ClashModal::ServiceStatus { cursor, manage } => {
-                if geom.service_close_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.modal = None;
-                    return Ok(Effect::None);
+                let mut btns = Vec::new();
+                if let Some(r) = geom.service_close_btn {
+                    btns.push((r, 0u8));
                 }
-                if geom.service_manage_btn.is_some_and(|r| r.contains(pos)) {
-                    let ordered = self.clash.ordered_services();
-                    let enabled = self.clash.enabled_services();
-                    let focused = if manage {
-                        ordered.get(cursor).copied()
-                    } else {
-                        enabled.get(cursor).copied()
-                    };
-                    let next_manage = !manage;
-                    let next_list = if next_manage { &ordered } else { &enabled };
-                    let next_cur = focused
-                        .and_then(|t| next_list.iter().position(|&x| x == t))
-                        .unwrap_or(0);
-                    self.clash.modal = Some(ClashModal::ServiceStatus {
-                        cursor: next_cur,
-                        manage: next_manage,
-                    });
-                    return Ok(Effect::None);
+                if let Some(r) = geom.service_manage_btn {
+                    btns.push((r, 1u8));
                 }
-                if geom.service_check_btn.is_some_and(|r| r.contains(pos)) {
-                    if manage {
-                        let ordered = self.clash.ordered_services();
-                        if let Some(&target) = ordered.get(cursor) {
-                            if self.clash.toggle_service_enabled(target) {
-                                return Ok(self.sync_service_prefs());
-                            }
-                            self.clash_toast_key("clash.toast.service_keep_one", Tone::Warning);
-                        }
+                if let Some(r) = geom.service_check_btn {
+                    btns.push((r, 2u8));
+                }
+                if let Some(r) = geom.service_check_all_btn {
+                    btns.push((r, 3u8));
+                }
+                if !manage && let Some(r) = geom.service_copy_ip_btn {
+                    btns.push((r, 4u8));
+                }
+                match hit_best(btns, pos, slop) {
+                    Some(0) => {
+                        self.clash.modal = None;
                         return Ok(Effect::None);
                     }
-                    let enabled = self.clash.enabled_services();
-                    if let Some(&target) = enabled.get(cursor) {
-                        return Ok(self.trigger_service_check(vec![target], true));
-                    }
-                    return Ok(Effect::None);
-                }
-                if geom.service_check_all_btn.is_some_and(|r| r.contains(pos)) {
-                    if manage {
-                        self.clash.reset_service_prefs();
+                    Some(1) => {
+                        let ordered = self.clash.ordered_services();
+                        let enabled = self.clash.enabled_services();
+                        let focused = if manage {
+                            ordered.get(cursor).copied()
+                        } else {
+                            enabled.get(cursor).copied()
+                        };
+                        let next_manage = !manage;
+                        let next_list = if next_manage { &ordered } else { &enabled };
+                        let next_cur = focused
+                            .and_then(|t| next_list.iter().position(|&x| x == t))
+                            .unwrap_or(0);
                         self.clash.modal = Some(ClashModal::ServiceStatus {
-                            cursor: 0,
-                            manage: true,
+                            cursor: next_cur,
+                            manage: next_manage,
                         });
-                        self.clash_toast_key("clash.toast.service_prefs_reset", Tone::Info);
-                        return Ok(self.sync_service_prefs());
+                        return Ok(Effect::None);
                     }
-                    let enabled = self.clash.enabled_services();
-                    return Ok(self.trigger_service_check(enabled, true));
-                }
-                if !manage && geom.service_copy_ip_btn.is_some_and(|r| r.contains(pos)) {
-                    return Ok(self.copy_focused_service_ip(cursor));
-                }
-                for (rect, idx) in geom.item_rows {
-                    if rect.contains(pos) {
-                        if let Some(ClashModal::ServiceStatus { cursor: c, .. }) =
-                            self.clash.modal.as_mut()
-                        {
-                            *c = idx;
-                        }
+                    Some(2) => {
                         if manage {
                             let ordered = self.clash.ordered_services();
-                            if let Some(&target) = ordered.get(idx) {
+                            if let Some(&target) = ordered.get(cursor) {
                                 if self.clash.toggle_service_enabled(target) {
                                     return Ok(self.sync_service_prefs());
                                 }
@@ -1848,30 +1928,81 @@ impl App {
                             return Ok(Effect::None);
                         }
                         let enabled = self.clash.enabled_services();
-                        if let Some(&target) = enabled.get(idx) {
+                        if let Some(&target) = enabled.get(cursor) {
                             return Ok(self.trigger_service_check(vec![target], true));
                         }
                         return Ok(Effect::None);
                     }
+                    Some(3) => {
+                        if manage {
+                            self.clash.reset_service_prefs();
+                            self.clash.modal = Some(ClashModal::ServiceStatus {
+                                cursor: 0,
+                                manage: true,
+                            });
+                            self.clash_toast_key("clash.toast.service_prefs_reset", Tone::Info);
+                            return Ok(self.sync_service_prefs());
+                        }
+                        let enabled = self.clash.enabled_services();
+                        return Ok(self.trigger_service_check(enabled, true));
+                    }
+                    Some(4) => {
+                        return Ok(self.copy_focused_service_ip(cursor));
+                    }
+                    _ => {}
+                }
+                if let Some(idx) = hit_best(geom.item_rows.iter().copied(), pos, slop) {
+                    if let Some(ClashModal::ServiceStatus { cursor: c, .. }) =
+                        self.clash.modal.as_mut()
+                    {
+                        *c = idx;
+                    }
+                    if manage {
+                        let ordered = self.clash.ordered_services();
+                        if let Some(&target) = ordered.get(idx) {
+                            if self.clash.toggle_service_enabled(target) {
+                                return Ok(self.sync_service_prefs());
+                            }
+                            self.clash_toast_key("clash.toast.service_keep_one", Tone::Warning);
+                        }
+                        return Ok(Effect::None);
+                    }
+                    let enabled = self.clash.enabled_services();
+                    if let Some(&target) = enabled.get(idx) {
+                        return Ok(self.trigger_service_check(vec![target], true));
+                    }
+                    return Ok(Effect::None);
                 }
             }
             ClashModal::Confirm { .. } => {
-                if geom.confirm_yes.is_some_and(|r| r.contains(pos)) {
-                    return Ok(self.execute_clash_confirm());
+                let mut btns = Vec::new();
+                if let Some(r) = geom.confirm_yes {
+                    btns.push((r, true));
                 }
-                if geom.confirm_no.is_some_and(|r| r.contains(pos)) {
-                    self.clash.modal = None;
+                if let Some(r) = geom.confirm_no {
+                    btns.push((r, false));
+                }
+                match hit_best(btns, pos, slop) {
+                    Some(true) => return Ok(self.execute_clash_confirm()),
+                    Some(false) => {
+                        self.clash.modal = None;
+                    }
+                    None => {}
                 }
             }
             ClashModal::DelaySettings { .. } => {
-                for (idx, rect) in geom.field_rects.iter().enumerate() {
-                    if rect.contains(pos)
-                        && let Some(ClashModal::DelaySettings { active_field, .. }) =
-                            self.clash.modal.as_mut()
-                    {
-                        *active_field = idx;
-                        break;
-                    }
+                if let Some(idx) = hit_best(
+                    geom.field_rects
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .map(|(i, r)| (r, i)),
+                    pos,
+                    slop,
+                ) && let Some(ClashModal::DelaySettings { active_field, .. }) =
+                    self.clash.modal.as_mut()
+                {
+                    *active_field = idx;
                 }
             }
         }
@@ -1886,6 +2017,7 @@ impl App {
         let Some(geom) = &regions.clash else {
             return Ok(Effect::None);
         };
+        let slop = regions.density.slop_enabled();
         let pos = Position::new(event.column, event.row);
         let right_click = match event.kind {
             MouseEventKind::Moved => {
@@ -1900,6 +2032,27 @@ impl App {
                     self.clash.cycle_group(!up);
                     return Ok(Effect::None);
                 }
+                if let ClashBodyGeom::Overview(ov) = &geom.body {
+                    if ov.overview_max_scroll > 0 {
+                        if up {
+                            self.clash.overview_scroll =
+                                self.clash.overview_scroll.saturating_sub(1);
+                        } else {
+                            self.clash.overview_scroll =
+                                (self.clash.overview_scroll + 1).min(ov.overview_max_scroll);
+                        }
+                    } else if ov.groups_card.contains(pos) || ov.group_can_prev || ov.group_can_next
+                    {
+                        if up {
+                            self.clash.overview_group_page =
+                                self.clash.overview_group_page.saturating_sub(1);
+                        } else if ov.group_can_next {
+                            self.clash.overview_group_page =
+                                self.clash.overview_group_page.saturating_add(1);
+                        }
+                    }
+                    return Ok(Effect::None);
+                }
                 return Ok(self.clash_scroll(up));
             }
             MouseEventKind::Down(MouseButton::Left) => false,
@@ -1909,14 +2062,36 @@ impl App {
 
         // Top tab bar & focus button (left-click only)
         if !right_click {
-            for pill in &geom.tab_pills {
-                if pill.rect.contains(pos) {
-                    return Ok(self.switch_clash_tab(pill.tab));
-                }
+            #[derive(Clone, Copy)]
+            enum TopHit {
+                Prev,
+                Next,
+                Tab(ClashTab),
+                Focus,
             }
-            if geom.focus_btn.is_some_and(|r| r.contains(pos)) {
-                self.clash.fullscreen = !self.clash.fullscreen;
-                return Ok(Effect::None);
+            let mut top_hits: Vec<(Rect, TopHit)> = Vec::new();
+            if let Some(r) = geom.tab_prev_hit {
+                top_hits.push((r, TopHit::Prev));
+            }
+            if let Some(r) = geom.tab_next_hit {
+                top_hits.push((r, TopHit::Next));
+            }
+            for pill in &geom.tab_pills {
+                top_hits.push((pill.rect, TopHit::Tab(pill.tab)));
+            }
+            if let Some(r) = geom.focus_btn {
+                top_hits.push((r, TopHit::Focus));
+            }
+            if let Some(hit) = hit_best(top_hits, pos, slop) {
+                return match hit {
+                    TopHit::Prev => Ok(self.cycle_clash_tab(false)),
+                    TopHit::Next => Ok(self.cycle_clash_tab(true)),
+                    TopHit::Tab(tab) => Ok(self.switch_clash_tab(tab)),
+                    TopHit::Focus => {
+                        self.clash.fullscreen = !self.clash.fullscreen;
+                        Ok(Effect::None)
+                    }
+                };
             }
         } else if !matches!(geom.body, ClashBodyGeom::Proxies(_)) {
             return Ok(Effect::None);
@@ -1925,130 +2100,277 @@ impl App {
         let idle = self.worker.is_none();
         match &geom.body {
             ClashBodyGeom::Unavailable(unavail) => {
-                if idle && unavail.cta.is_some_and(|r| r.contains(pos)) {
-                    return self.clash_trigger_unavailable_cta();
+                let mut hits = Vec::new();
+                if idle && let Some(r) = unavail.cta {
+                    hits.push((r, 0u8));
                 }
                 if idle
                     && self.clash.busy_hint.is_none()
-                    && unavail.secondary_cta.is_some_and(|r| r.contains(pos))
+                    && let Some(r) = unavail.secondary_cta
                 {
-                    return self.clash_trigger_action("clash.controller.configure");
+                    hits.push((r, 1u8));
+                }
+                match hit_best(hits, pos, slop) {
+                    Some(0) => return self.clash_trigger_unavailable_cta(),
+                    Some(1) => return self.clash_trigger_action("clash.controller.configure"),
+                    _ => {}
                 }
             }
             ClashBodyGeom::TrafficFullscreen(tf) => {
-                if tf.close_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.traffic_fullscreen = false;
-                    return Ok(Effect::None);
+                let mut hits = Vec::new();
+                if let Some(r) = tf.close_btn {
+                    hits.push((r, 0u8));
                 }
-                if tf.mode_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.traffic_mode = self.clash.traffic_mode.next();
-                    return Ok(Effect::None);
+                if let Some(r) = tf.mode_chip {
+                    hits.push((r, 1u8));
                 }
-                if tf.window_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.traffic_window = self.clash.traffic_window.next();
-                    return Ok(Effect::None);
+                if let Some(r) = tf.window_chip {
+                    hits.push((r, 2u8));
                 }
-                if tf.scale_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.traffic_scale = self.clash.traffic_scale.toggle();
-                    return Ok(Effect::None);
+                if let Some(r) = tf.scale_chip {
+                    hits.push((r, 3u8));
                 }
-                if tf.pause_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.toggle_traffic_pause();
-                    return Ok(Effect::None);
+                if let Some(r) = tf.pause_chip {
+                    hits.push((r, 4u8));
                 }
-                if tf.breakdown_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.traffic_breakdown = self.clash.traffic_breakdown.next();
-                    return Ok(Effect::None);
+                if let Some(r) = tf.breakdown_chip {
+                    hits.push((r, 5u8));
+                }
+                match hit_best(hits, pos, slop) {
+                    Some(0) => self.clash.traffic_fullscreen = false,
+                    Some(1) => self.clash.traffic_mode = self.clash.traffic_mode.next(),
+                    Some(2) => self.clash.traffic_window = self.clash.traffic_window.next(),
+                    Some(3) => self.clash.traffic_scale = self.clash.traffic_scale.toggle(),
+                    Some(4) => self.clash.toggle_traffic_pause(),
+                    Some(5) => self.clash.traffic_breakdown = self.clash.traffic_breakdown.next(),
+                    _ => {}
                 }
             }
             ClashBodyGeom::Overview(ov) => {
-                if ov.traffic_mode_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.traffic_mode = self.clash.traffic_mode.next();
-                    return Ok(Effect::None);
+                #[derive(Clone, Copy)]
+                enum OvBtn {
+                    DeckPrev,
+                    DeckNext,
+                    GroupPrev,
+                    GroupNext,
+                    TrafficMode,
+                    TrafficWindow,
+                    TrafficScale,
+                    TrafficPause,
+                    TrafficExpand,
+                    OutboundBadge,
+                    OutboundDetail,
+                    StartStop,
+                    Reload,
+                    Mode(&'static str),
+                    ProfileSwitch,
+                    ProfileUpdate,
+                    ServiceCheck,
+                    SocksSecret,
+                    WebUi,
+                    ExitProbe,
                 }
-                if ov.traffic_window_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.traffic_window = self.clash.traffic_window.next();
-                    return Ok(Effect::None);
-                }
-                if ov.traffic_scale_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.traffic_scale = self.clash.traffic_scale.toggle();
-                    return Ok(Effect::None);
-                }
-                if ov.traffic_pause_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.toggle_traffic_pause();
-                    return Ok(Effect::None);
-                }
-                if ov.traffic_expand_btn.is_some_and(|r| r.contains(pos))
-                    || ov.traffic_plot.contains(pos)
-                    || ov.traffic_side.contains(pos)
+                let mut btns: Vec<(Rect, OvBtn)> = Vec::new();
+                if ov.overview_can_prev
+                    && let Some(r) = ov.overview_prev_btn
                 {
+                    btns.push((r, OvBtn::DeckPrev));
+                }
+                if ov.overview_can_next
+                    && let Some(r) = ov.overview_next_btn
+                {
+                    btns.push((r, OvBtn::DeckNext));
+                }
+                if ov.group_can_prev
+                    && let Some(r) = ov.group_prev_btn
+                {
+                    btns.push((r, OvBtn::GroupPrev));
+                }
+                if ov.group_can_next
+                    && let Some(r) = ov.group_next_btn
+                {
+                    btns.push((r, OvBtn::GroupNext));
+                }
+                if let Some(r) = ov.traffic_mode_chip {
+                    btns.push((r, OvBtn::TrafficMode));
+                }
+                if let Some(r) = ov.traffic_window_chip {
+                    btns.push((r, OvBtn::TrafficWindow));
+                }
+                if let Some(r) = ov.traffic_scale_chip {
+                    btns.push((r, OvBtn::TrafficScale));
+                }
+                if let Some(r) = ov.traffic_pause_chip {
+                    btns.push((r, OvBtn::TrafficPause));
+                }
+                if let Some(r) = ov.traffic_expand_btn {
+                    btns.push((r, OvBtn::TrafficExpand));
+                }
+                if let Some(r) = ov.outbound_badge_hit {
+                    btns.push((r, OvBtn::OutboundBadge));
+                }
+                if let Some(r) = ov.outbound_ip_hit {
+                    btns.push((r, OvBtn::OutboundDetail));
+                }
+                if let Some(r) = ov.outbound_detail_btn {
+                    btns.push((r, OvBtn::OutboundDetail));
+                }
+                if let Some(r) = ov.start_stop_btn {
+                    btns.push((r, OvBtn::StartStop));
+                }
+                if let Some(r) = ov.reload_btn {
+                    btns.push((r, OvBtn::Reload));
+                }
+                for &(rect, mode) in &ov.mode_pills {
+                    btns.push((rect, OvBtn::Mode(mode)));
+                }
+                if let Some(r) = ov.profile_switch_btn {
+                    btns.push((r, OvBtn::ProfileSwitch));
+                }
+                if let Some(r) = ov.profile_update_btn {
+                    btns.push((r, OvBtn::ProfileUpdate));
+                }
+                if let Some(r) = ov.service_check_btn {
+                    btns.push((r, OvBtn::ServiceCheck));
+                }
+                if let Some(r) = ov.socks_secret_btn {
+                    btns.push((r, OvBtn::SocksSecret));
+                }
+                if let Some(r) = ov.webui_btn {
+                    btns.push((r, OvBtn::WebUi));
+                }
+                if let Some(r) = ov.exit_probe_btn {
+                    btns.push((r, OvBtn::ExitProbe));
+                }
+
+                if let Some(hit) = hit_best(btns, pos, slop) {
+                    return match hit {
+                        OvBtn::DeckPrev => {
+                            self.clash.overview_scroll =
+                                self.clash.overview_scroll.saturating_sub(1);
+                            Ok(Effect::None)
+                        }
+                        OvBtn::DeckNext => {
+                            self.clash.overview_scroll =
+                                (self.clash.overview_scroll + 1).min(ov.overview_max_scroll);
+                            Ok(Effect::None)
+                        }
+                        OvBtn::GroupPrev => {
+                            self.clash.overview_group_page =
+                                self.clash.overview_group_page.saturating_sub(1);
+                            Ok(Effect::None)
+                        }
+                        OvBtn::GroupNext => {
+                            self.clash.overview_group_page =
+                                self.clash.overview_group_page.saturating_add(1);
+                            Ok(Effect::None)
+                        }
+                        OvBtn::TrafficMode => {
+                            self.clash.traffic_mode = self.clash.traffic_mode.next();
+                            Ok(Effect::None)
+                        }
+                        OvBtn::TrafficWindow => {
+                            self.clash.traffic_window = self.clash.traffic_window.next();
+                            Ok(Effect::None)
+                        }
+                        OvBtn::TrafficScale => {
+                            self.clash.traffic_scale = self.clash.traffic_scale.toggle();
+                            Ok(Effect::None)
+                        }
+                        OvBtn::TrafficPause => {
+                            self.clash.toggle_traffic_pause();
+                            Ok(Effect::None)
+                        }
+                        OvBtn::TrafficExpand => {
+                            self.clash.traffic_fullscreen = true;
+                            Ok(Effect::None)
+                        }
+                        OvBtn::OutboundBadge | OvBtn::ExitProbe => {
+                            self.clash.exit_probing = true;
+                            self.clash.exit_probe_error = None;
+                            Ok(Effect::ClashCmd(ClashMonitorCmd::ProbeExit))
+                        }
+                        OvBtn::OutboundDetail => Ok(self.open_outbound_ip_modal()),
+                        OvBtn::StartStop if idle => self.clash_trigger_action("clash.stop"),
+                        OvBtn::Reload if idle => self.clash_trigger_action("clash.reload"),
+                        OvBtn::Mode(mode) => Ok(Effect::ClashCmd(ClashMonitorCmd::SetMode {
+                            mode: mode.to_owned(),
+                        })),
+                        OvBtn::ProfileSwitch => {
+                            self.clash.set_tab(ClashTab::Profiles);
+                            Ok(Effect::None)
+                        }
+                        OvBtn::ProfileUpdate => {
+                            if let Some(prof) = self.clash.snapshot.active_profile()
+                                && !prof.is_local
+                            {
+                                let name = prof.name.clone();
+                                if !self.clash.updating_all_profiles
+                                    && self.clash.busy_profiles.insert(name.clone())
+                                {
+                                    return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateProfile {
+                                        name,
+                                    }));
+                                }
+                            }
+                            Ok(Effect::None)
+                        }
+                        OvBtn::ServiceCheck => Ok(self.open_service_status_modal(None)),
+                        OvBtn::SocksSecret => self.open_socks_secret_modal(),
+                        OvBtn::WebUi => self.clash_trigger_webui(idle),
+                        OvBtn::StartStop | OvBtn::Reload => Ok(Effect::None),
+                    };
+                }
+
+                // Prevent near-miss taps on a card's button strip from falling through to
+                // whole-card navigation in touch mode.
+                if slop {
+                    let near_any_btn = [
+                        ov.overview_prev_btn,
+                        ov.overview_next_btn,
+                        ov.group_prev_btn,
+                        ov.group_next_btn,
+                        ov.traffic_mode_chip,
+                        ov.traffic_window_chip,
+                        ov.traffic_scale_chip,
+                        ov.traffic_pause_chip,
+                        ov.traffic_expand_btn,
+                        ov.outbound_detail_btn,
+                        ov.start_stop_btn,
+                        ov.reload_btn,
+                        ov.profile_switch_btn,
+                        ov.profile_update_btn,
+                        ov.service_check_btn,
+                        ov.socks_secret_btn,
+                        ov.webui_btn,
+                        ov.exit_probe_btn,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .chain(ov.mode_pills.iter().map(|(r, _)| *r))
+                    .any(|r| {
+                        pos.y >= r.y.saturating_sub(1)
+                            && pos.y <= r.bottom()
+                            && pos.x >= r.x.saturating_sub(1)
+                            && pos.x <= r.right()
+                    });
+                    if near_any_btn {
+                        return Ok(Effect::None);
+                    }
+                }
+
+                if ov.traffic_plot.contains(pos) || ov.traffic_side.contains(pos) {
                     self.clash.traffic_fullscreen = true;
                     return Ok(Effect::None);
                 }
-                if ov.outbound_badge_hit.is_some_and(|r| r.contains(pos)) {
-                    self.clash.exit_probing = true;
-                    self.clash.exit_probe_error = None;
-                    return Ok(Effect::ClashCmd(ClashMonitorCmd::ProbeExit));
+                if let Some(target) = hit_best(ov.service_cell_hits.iter().copied(), pos, slop) {
+                    return Ok(self.open_service_status_modal(Some(target)));
                 }
-                if ov.outbound_ip_hit.is_some_and(|r| r.contains(pos))
-                    || ov.outbound_detail_btn.is_some_and(|r| r.contains(pos))
-                {
-                    return Ok(self.open_outbound_ip_modal());
-                }
-                if idle && ov.start_stop_btn.is_some_and(|r| r.contains(pos)) {
-                    return self.clash_trigger_action("clash.stop");
-                }
-                if idle && ov.reload_btn.is_some_and(|r| r.contains(pos)) {
-                    return self.clash_trigger_action("clash.reload");
-                }
-                for &(rect, mode) in &ov.mode_pills {
-                    if rect.contains(pos) {
-                        return Ok(Effect::ClashCmd(ClashMonitorCmd::SetMode {
-                            mode: mode.to_owned(),
-                        }));
-                    }
-                }
-                if ov.profile_switch_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.set_tab(ClashTab::Profiles);
+                if let Some(g_idx) = hit_best(ov.group_card_hits.iter().copied(), pos, slop) {
+                    self.clash.overview_group_cursor = g_idx;
+                    self.clash.set_tab(ClashTab::Proxies);
+                    self.clash.select_group_index(g_idx);
                     return Ok(Effect::None);
-                }
-                if ov.profile_update_btn.is_some_and(|r| r.contains(pos))
-                    && let Some(prof) = self.clash.snapshot.active_profile()
-                    && !prof.is_local
-                {
-                    let name = prof.name.clone();
-                    if !self.clash.updating_all_profiles
-                        && self.clash.busy_profiles.insert(name.clone())
-                    {
-                        return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateProfile { name }));
-                    }
-                }
-                if ov.service_check_btn.is_some_and(|r| r.contains(pos)) {
-                    return Ok(self.open_service_status_modal(None));
-                }
-                for &(rect, target) in &ov.service_cell_hits {
-                    if rect.contains(pos) {
-                        return Ok(self.open_service_status_modal(Some(target)));
-                    }
-                }
-                if ov.socks_secret_btn.is_some_and(|r| r.contains(pos)) {
-                    return self.open_socks_secret_modal();
-                }
-                if ov.webui_btn.is_some_and(|r| r.contains(pos)) {
-                    return self.clash_trigger_webui(idle);
-                }
-                if ov.exit_probe_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.exit_probing = true;
-                    self.clash.exit_probe_error = None;
-                    return Ok(Effect::ClashCmd(ClashMonitorCmd::ProbeExit));
-                }
-                for &(rect, g_idx) in &ov.group_card_hits {
-                    if rect.contains(pos) {
-                        self.clash.overview_group_cursor = g_idx;
-                        self.clash.set_tab(ClashTab::Proxies);
-                        self.clash.select_group_index(g_idx);
-                        return Ok(Effect::None);
-                    }
                 }
                 if ov.connections_card.contains(pos) {
                     self.clash.set_tab(ClashTab::Connections);
@@ -2061,76 +2383,158 @@ impl App {
             }
             ClashBodyGeom::Proxies(px) => {
                 if !right_click {
-                    if px.group_prev_hit.is_some_and(|r| r.contains(pos)) {
-                        self.clash.cycle_group(false);
-                        return Ok(Effect::None);
+                    #[derive(Clone, Copy)]
+                    enum PxBtn {
+                        GroupPrev,
+                        GroupNext,
+                        Group(usize),
+                        GroupPicker,
+                        Test,
+                        Hide,
+                        Providers,
+                        Unfix,
+                        Ping,
+                        Fastest,
+                        Locate,
+                        DelayUrl,
+                        PagePrev,
+                        PageNext,
                     }
-                    if px.group_next_hit.is_some_and(|r| r.contains(pos)) {
-                        self.clash.cycle_group(true);
-                        return Ok(Effect::None);
+                    let mut btns = Vec::new();
+                    if let Some(r) = px.group_prev_hit {
+                        btns.push((r, PxBtn::GroupPrev));
+                    }
+                    if let Some(r) = px.group_next_hit {
+                        btns.push((r, PxBtn::GroupNext));
                     }
                     for pill in &px.group_pills {
-                        if pill.rect.contains(pos) {
-                            self.clash.select_group_index(pill.group_idx);
-                            return Ok(Effect::None);
-                        }
+                        btns.push((pill.rect, PxBtn::Group(pill.group_idx)));
                     }
-                    if px.group_picker_btn.is_some_and(|r| r.contains(pos)) {
-                        self.clash.modal = Some(ClashModal::GroupPicker {
-                            cursor: self.clash.group_cursor,
-                        });
-                        return Ok(Effect::None);
+                    if let Some(r) = px.group_picker_btn {
+                        btns.push((r, PxBtn::GroupPicker));
                     }
-                    if px.test_btn.is_some_and(|r| r.contains(pos))
-                        && let Some(group) = self.clash.current_group()
+                    if let Some(r) = px.test_btn {
+                        btns.push((r, PxBtn::Test));
+                    }
+                    if let Some(r) = px.hide_chip {
+                        btns.push((r, PxBtn::Hide));
+                    }
+                    if let Some(r) = px.providers_btn {
+                        btns.push((r, PxBtn::Providers));
+                    }
+                    if let Some(r) = px.unfix_btn {
+                        btns.push((r, PxBtn::Unfix));
+                    }
+                    if let Some(r) = px.ping_btn {
+                        btns.push((r, PxBtn::Ping));
+                    }
+                    if let Some(r) = px.fastest_btn {
+                        btns.push((r, PxBtn::Fastest));
+                    }
+                    if let Some(r) = px.locate_btn {
+                        btns.push((r, PxBtn::Locate));
+                    }
+                    if let Some(r) = px.delay_url_btn {
+                        btns.push((r, PxBtn::DelayUrl));
+                    }
+                    if px.can_prev
+                        && let Some(r) = px.prev_btn
                     {
-                        let g = group.name.clone();
-                        if self.clash.testing_groups.insert(g.clone()) {
-                            return Ok(Effect::ClashCmd(ClashMonitorCmd::TestGroupDelay {
-                                group: g,
-                                url: self.clash.delay_url.clone(),
-                                timeout_ms: self.clash.delay_timeout_ms,
-                            }));
-                        }
+                        btns.push((r, PxBtn::PagePrev));
                     }
-                    if px.hide_chip.is_some_and(|r| r.contains(pos)) {
-                        self.clash.hide_timeout = !self.clash.hide_timeout;
-                        self.clash.clamp_cursors();
-                        return Ok(Effect::None);
+                    if px.can_next
+                        && let Some(r) = px.next_btn
+                    {
+                        btns.push((r, PxBtn::PageNext));
                     }
-                    if px.providers_btn.is_some_and(|r| r.contains(pos)) {
-                        self.clash.modal = Some(ClashModal::Providers {
-                            show_rules: false,
-                            cursor: 0,
-                        });
-                        return Ok(Effect::None);
-                    }
-                    if px.unfix_btn.is_some_and(|r| r.contains(pos)) {
-                        return Ok(self.clash_unfix_current_group());
-                    }
-                    if px.ping_btn.is_some_and(|r| r.contains(pos)) {
-                        return Ok(self.clash_ping_current_node());
-                    }
-                    if px.fastest_btn.is_some_and(|r| r.contains(pos)) {
-                        return Ok(self.clash_select_fastest_node());
-                    }
-                    if px.locate_btn.is_some_and(|r| r.contains(pos)) {
-                        if !self.clash.locate_active_node() {
-                            self.clash_toast_key("clash.toast.locate_miss", Tone::Info);
-                        }
-                        return Ok(Effect::None);
-                    }
-                    if px.delay_url_btn.is_some_and(|r| r.contains(pos)) {
-                        self.clash.modal = Some(ClashModal::DelaySettings {
-                            url: InputBuffer::new(self.clash.delay_url.clone()),
-                            timeout: InputBuffer::new(self.clash.delay_timeout_ms.to_string()),
-                            active_field: 0,
-                            error: None,
-                        });
-                        return Ok(Effect::None);
+                    if let Some(hit) = hit_best(btns, pos, slop) {
+                        return match hit {
+                            PxBtn::GroupPrev => {
+                                self.clash.cycle_group(false);
+                                Ok(Effect::None)
+                            }
+                            PxBtn::GroupNext => {
+                                self.clash.cycle_group(true);
+                                Ok(Effect::None)
+                            }
+                            PxBtn::Group(idx) => {
+                                self.clash.select_group_index(idx);
+                                Ok(Effect::None)
+                            }
+                            PxBtn::GroupPicker => {
+                                self.clash.modal = Some(ClashModal::GroupPicker {
+                                    cursor: self.clash.group_cursor,
+                                });
+                                Ok(Effect::None)
+                            }
+                            PxBtn::Test => {
+                                if let Some(group) = self.clash.current_group() {
+                                    let g = group.name.clone();
+                                    if self.clash.testing_groups.insert(g.clone()) {
+                                        return Ok(Effect::ClashCmd(
+                                            ClashMonitorCmd::TestGroupDelay {
+                                                group: g,
+                                                url: self.clash.delay_url.clone(),
+                                                timeout_ms: self.clash.delay_timeout_ms,
+                                            },
+                                        ));
+                                    }
+                                }
+                                Ok(Effect::None)
+                            }
+                            PxBtn::Hide => {
+                                self.clash.hide_timeout = !self.clash.hide_timeout;
+                                self.clash.clamp_cursors();
+                                Ok(Effect::None)
+                            }
+                            PxBtn::Providers => {
+                                self.clash.modal = Some(ClashModal::Providers {
+                                    show_rules: false,
+                                    cursor: 0,
+                                });
+                                Ok(Effect::None)
+                            }
+                            PxBtn::Unfix => Ok(self.clash_unfix_current_group()),
+                            PxBtn::Ping => Ok(self.clash_ping_current_node()),
+                            PxBtn::Fastest => Ok(self.clash_select_fastest_node()),
+                            PxBtn::Locate => {
+                                if !self.clash.locate_active_node() {
+                                    self.clash_toast_key("clash.toast.locate_miss", Tone::Info);
+                                }
+                                Ok(Effect::None)
+                            }
+                            PxBtn::DelayUrl => {
+                                self.clash.modal = Some(ClashModal::DelaySettings {
+                                    url: InputBuffer::new(self.clash.delay_url.clone()),
+                                    timeout: InputBuffer::new(
+                                        self.clash.delay_timeout_ms.to_string(),
+                                    ),
+                                    active_field: 0,
+                                    error: None,
+                                });
+                                Ok(Effect::None)
+                            }
+                            PxBtn::PagePrev => {
+                                let cols = self.clash.last_grid_cols.get().max(1);
+                                let step = cols * px.grid_visible_rows.max(1);
+                                self.clash.node_cursor =
+                                    self.clash.node_cursor.saturating_sub(step);
+                                Ok(Effect::None)
+                            }
+                            PxBtn::PageNext => {
+                                let len = self.clash.filtered_nodes().len();
+                                if len > 0 {
+                                    let cols = self.clash.last_grid_cols.get().max(1);
+                                    let step = cols * px.grid_visible_rows.max(1);
+                                    self.clash.node_cursor =
+                                        (self.clash.node_cursor + step).min(len - 1);
+                                }
+                                Ok(Effect::None)
+                            }
+                        };
                     }
                 }
-                if px.sort_chip.is_some_and(|r| r.contains(pos)) {
+                if hit_opt(px.sort_chip, pos, slop) {
                     if right_click {
                         self.clash.proxy_sort_asc = !self.clash.proxy_sort_asc;
                     } else {
@@ -2140,89 +2544,169 @@ impl App {
                     self.clash.clamp_cursors();
                     return Ok(Effect::None);
                 }
-                for &(rect, idx) in &px.node_hits {
-                    if rect.contains(pos) {
-                        self.clash.node_cursor = idx;
-                        if right_click
-                            || proxy_card_delay_hit(rect).is_some_and(|d| d.contains(pos))
-                        {
-                            return Ok(self.clash_ping_current_node());
-                        }
-                        return Ok(self.clash_select_current_node());
+                if let Some((rect, idx)) = hit_best(
+                    px.node_hits.iter().copied().map(|(r, i)| (r, (r, i))),
+                    pos,
+                    slop,
+                ) {
+                    self.clash.node_cursor = idx;
+                    if right_click
+                        || proxy_card_delay_hit(rect).is_some_and(|d| hit_rect(d, pos, false))
+                    {
+                        return Ok(self.clash_ping_current_node());
                     }
+                    return Ok(self.clash_select_current_node());
                 }
             }
             ClashBodyGeom::Profiles(pf) => {
-                if pf.update_all_btn.is_some_and(|r| r.contains(pos))
-                    && !self.clash.updating_all_profiles
-                    && self.clash.busy_profiles.is_empty()
+                let mut btns = Vec::new();
+                if let Some(r) = pf.update_all_btn {
+                    btns.push((r, 0u8));
+                }
+                if idle && let Some(r) = pf.add_btn {
+                    btns.push((r, 1u8));
+                }
+                if idle && let Some(r) = pf.import_btn {
+                    btns.push((r, 2u8));
+                }
+                if let Some(r) = pf.providers_btn {
+                    btns.push((r, 3u8));
+                }
+                if pf.can_prev
+                    && let Some(r) = pf.prev_btn
                 {
-                    self.clash.updating_all_profiles = true;
-                    return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateAllProfiles));
+                    btns.push((r, 4u8));
                 }
-                if idle && pf.add_btn.is_some_and(|r| r.contains(pos)) {
-                    return self.clash_trigger_action("clash.sub.add");
+                if pf.can_next
+                    && let Some(r) = pf.next_btn
+                {
+                    btns.push((r, 5u8));
                 }
-                if idle && pf.import_btn.is_some_and(|r| r.contains(pos)) {
-                    return self.clash_trigger_action("clash.sub.import");
-                }
-                if pf.providers_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.modal = Some(ClashModal::Providers {
-                        show_rules: false,
-                        cursor: 0,
-                    });
-                    return Ok(Effect::None);
-                }
-                for &(rect, idx) in &pf.item_hits {
-                    if rect.contains(pos) {
-                        let already = self.clash.profile_cursor == idx;
-                        self.clash.profile_cursor = idx;
-                        if already && let Some(prof) = self.clash.selected_profile() {
-                            return Ok(Effect::ClashCmd(ClashMonitorCmd::SwitchProfile {
-                                name: prof.name.clone(),
-                            }));
+                match hit_best(btns, pos, slop) {
+                    Some(0) => {
+                        if !self.clash.updating_all_profiles && self.clash.busy_profiles.is_empty()
+                        {
+                            self.clash.updating_all_profiles = true;
+                            return Ok(Effect::ClashCmd(ClashMonitorCmd::UpdateAllProfiles));
                         }
                         return Ok(Effect::None);
                     }
+                    Some(1) => return self.clash_trigger_action("clash.sub.add"),
+                    Some(2) => return self.clash_trigger_action("clash.sub.import"),
+                    Some(3) => {
+                        self.clash.modal = Some(ClashModal::Providers {
+                            show_rules: false,
+                            cursor: 0,
+                        });
+                        return Ok(Effect::None);
+                    }
+                    Some(4) => {
+                        let step = pf.item_hits.len().max(1);
+                        self.clash.profile_cursor = self.clash.profile_cursor.saturating_sub(step);
+                        return Ok(Effect::None);
+                    }
+                    Some(5) => {
+                        let len = self.clash.filtered_profiles().len();
+                        if len > 0 {
+                            let step = pf.item_hits.len().max(1);
+                            self.clash.profile_cursor =
+                                (self.clash.profile_cursor + step).min(len - 1);
+                        }
+                        return Ok(Effect::None);
+                    }
+                    _ => {}
+                }
+                if let Some(idx) = hit_best(pf.item_hits.iter().copied(), pos, slop) {
+                    let already = self.clash.profile_cursor == idx;
+                    self.clash.profile_cursor = idx;
+                    if already && let Some(prof) = self.clash.selected_profile() {
+                        return Ok(Effect::ClashCmd(ClashMonitorCmd::SwitchProfile {
+                            name: prof.name.clone(),
+                        }));
+                    }
+                    return Ok(Effect::None);
                 }
             }
             ClashBodyGeom::Connections(cn) => {
-                if cn.scope_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.conn_scope = self.clash.conn_scope.next();
-                    self.clash.conn_facet = None;
-                    self.clash.clamp_cursors();
-                    return Ok(Effect::None);
+                let mut btns = Vec::new();
+                if let Some(r) = cn.scope_chip {
+                    btns.push((r, 0u8));
                 }
-                if cn.sort_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.conn_sort = self.clash.conn_sort.next();
-                    self.clash.clamp_cursors();
-                    return Ok(Effect::None);
+                if let Some(r) = cn.sort_chip {
+                    btns.push((r, 1u8));
                 }
-                if cn.close_all_btn.is_some_and(|r| r.contains(pos))
-                    && !self.clash.snapshot.connections.is_empty()
+                if let Some(r) = cn.close_all_btn {
+                    btns.push((r, 2u8));
+                }
+                if cn.can_prev
+                    && let Some(r) = cn.prev_btn
                 {
-                    self.clash.modal = Some(ClashModal::Confirm {
-                        title: self.ctx.i18n.text("clash.confirm.title").to_owned(),
-                        message: self
-                            .ctx
-                            .i18n
-                            .text("clash.confirm.close_all_conns")
-                            .to_owned(),
-                        danger: true,
-                        accept: false,
-                        action: ClashConfirmAction::CloseAllConnections,
-                    });
-                    return Ok(Effect::None);
+                    btns.push((r, 3u8));
                 }
-                for (rect, facet) in &cn.facet_chips {
-                    if rect.contains(pos) {
-                        self.clash.conn_facet = facet.clone();
+                if cn.can_next
+                    && let Some(r) = cn.next_btn
+                {
+                    btns.push((r, 4u8));
+                }
+                match hit_best(btns, pos, slop) {
+                    Some(0) => {
+                        self.clash.conn_scope = self.clash.conn_scope.next();
+                        self.clash.conn_facet = None;
                         self.clash.clamp_cursors();
                         return Ok(Effect::None);
                     }
+                    Some(1) => {
+                        self.clash.conn_sort = self.clash.conn_sort.next();
+                        self.clash.clamp_cursors();
+                        return Ok(Effect::None);
+                    }
+                    Some(2) if !self.clash.snapshot.connections.is_empty() => {
+                        self.clash.modal = Some(ClashModal::Confirm {
+                            title: self.ctx.i18n.text("clash.confirm.title").to_owned(),
+                            message: self
+                                .ctx
+                                .i18n
+                                .text("clash.confirm.close_all_conns")
+                                .to_owned(),
+                            danger: true,
+                            accept: false,
+                            action: ClashConfirmAction::CloseAllConnections,
+                        });
+                        return Ok(Effect::None);
+                    }
+                    Some(3) => {
+                        let step = (cn.list_inner.height / cn.row_height.max(1)).max(1) as usize;
+                        self.clash.conn_cursor = self.clash.conn_cursor.saturating_sub(step);
+                        self.clash.conn_inspector_scroll = 0;
+                        return Ok(Effect::None);
+                    }
+                    Some(4) => {
+                        let len = self.clash.filtered_connections().len();
+                        if len > 0 {
+                            let step =
+                                (cn.list_inner.height / cn.row_height.max(1)).max(1) as usize;
+                            self.clash.conn_cursor = (self.clash.conn_cursor + step).min(len - 1);
+                            self.clash.conn_inspector_scroll = 0;
+                        }
+                        return Ok(Effect::None);
+                    }
+                    _ => {}
+                }
+                if let Some(f_idx) = hit_best(
+                    cn.facet_chips
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, (r, _))| (*r, idx)),
+                    pos,
+                    slop,
+                ) {
+                    self.clash.conn_facet = cn.facet_chips[f_idx].1.clone();
+                    self.clash.clamp_cursors();
+                    return Ok(Effect::None);
                 }
                 if cn.list_inner.contains(pos) {
-                    let row = pos.y.saturating_sub(cn.list_inner.y) as usize;
+                    let row =
+                        (pos.y.saturating_sub(cn.list_inner.y) / cn.row_height.max(1)) as usize;
                     let idx = cn.list_scroll + row;
                     if idx < self.clash.filtered_connections().len() {
                         self.clash.conn_cursor = idx;
@@ -2231,22 +2715,59 @@ impl App {
                 }
             }
             ClashBodyGeom::Rules(rl) => {
-                if rl.providers_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.modal = Some(ClashModal::Providers {
-                        show_rules: true,
-                        cursor: 0,
-                    });
-                    return Ok(Effect::None);
+                let mut btns = Vec::new();
+                if let Some(r) = rl.providers_btn {
+                    btns.push((r, 0u8));
                 }
-                for (rect, facet) in &rl.facet_chips {
-                    if rect.contains(pos) {
-                        self.clash.rule_facet = facet.clone();
-                        self.clash.clamp_cursors();
+                if rl.can_prev
+                    && let Some(r) = rl.prev_btn
+                {
+                    btns.push((r, 1u8));
+                }
+                if rl.can_next
+                    && let Some(r) = rl.next_btn
+                {
+                    btns.push((r, 2u8));
+                }
+                match hit_best(btns, pos, slop) {
+                    Some(0) => {
+                        self.clash.modal = Some(ClashModal::Providers {
+                            show_rules: true,
+                            cursor: 0,
+                        });
                         return Ok(Effect::None);
                     }
+                    Some(1) => {
+                        let step = (rl.list_inner.height / rl.row_height.max(1)).max(1) as usize;
+                        self.clash.rule_cursor = self.clash.rule_cursor.saturating_sub(step);
+                        return Ok(Effect::None);
+                    }
+                    Some(2) => {
+                        let len = self.clash.filtered_rules().len();
+                        if len > 0 {
+                            let step =
+                                (rl.list_inner.height / rl.row_height.max(1)).max(1) as usize;
+                            self.clash.rule_cursor = (self.clash.rule_cursor + step).min(len - 1);
+                        }
+                        return Ok(Effect::None);
+                    }
+                    _ => {}
+                }
+                if let Some(f_idx) = hit_best(
+                    rl.facet_chips
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, (r, _))| (*r, idx)),
+                    pos,
+                    slop,
+                ) {
+                    self.clash.rule_facet = rl.facet_chips[f_idx].1.clone();
+                    self.clash.clamp_cursors();
+                    return Ok(Effect::None);
                 }
                 if rl.list_inner.contains(pos) {
-                    let row = pos.y.saturating_sub(rl.list_inner.y) as usize;
+                    let row =
+                        (pos.y.saturating_sub(rl.list_inner.y) / rl.row_height.max(1)) as usize;
                     let idx = rl.list_scroll + row;
                     if idx < self.clash.filtered_rules().len() {
                         self.clash.rule_cursor = idx;
@@ -2254,16 +2775,60 @@ impl App {
                 }
             }
             ClashBodyGeom::Tools(tl) => {
-                if tl.logs_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.tools_log_mode = !self.clash.tools_log_mode;
-                    if self.clash.tools_log_mode {
-                        self.clash.log_loading = true;
-                        return Ok(Effect::ClashCmd(ClashMonitorCmd::FetchLogs));
+                let mut btns = Vec::new();
+                if let Some(r) = tl.logs_btn {
+                    btns.push((r, 0u8));
+                }
+                if tl.can_prev
+                    && let Some(r) = tl.prev_btn
+                {
+                    btns.push((r, 1u8));
+                }
+                if tl.can_next
+                    && let Some(r) = tl.next_btn
+                {
+                    btns.push((r, 2u8));
+                }
+                match hit_best(btns, pos, slop) {
+                    Some(0) => {
+                        self.clash.tools_log_mode = !self.clash.tools_log_mode;
+                        if self.clash.tools_log_mode {
+                            self.clash.log_loading = true;
+                            return Ok(Effect::ClashCmd(ClashMonitorCmd::FetchLogs));
+                        }
+                        return Ok(Effect::None);
                     }
-                    return Ok(Effect::None);
+                    Some(1) => {
+                        if self.clash.tools_log_mode {
+                            self.clash.log_scroll = self.clash.log_scroll.saturating_sub(10);
+                        } else {
+                            let step =
+                                (tl.list_inner.height / tl.row_height.max(1)).max(1) as usize;
+                            self.clash.tool_cursor = self.clash.tool_cursor.saturating_sub(step);
+                        }
+                        return Ok(Effect::None);
+                    }
+                    Some(2) => {
+                        if self.clash.tools_log_mode {
+                            let max_s = self.clash.max_log_scroll.get();
+                            self.clash.log_scroll =
+                                self.clash.log_scroll.saturating_add(10).min(max_s);
+                        } else {
+                            let len = self.clash.filtered_tools(&self.ctx.i18n).len();
+                            if len > 0 {
+                                let step =
+                                    (tl.list_inner.height / tl.row_height.max(1)).max(1) as usize;
+                                self.clash.tool_cursor =
+                                    (self.clash.tool_cursor + step).min(len - 1);
+                            }
+                        }
+                        return Ok(Effect::None);
+                    }
+                    _ => {}
                 }
                 if !self.clash.tools_log_mode && tl.list_inner.contains(pos) {
-                    let row = pos.y.saturating_sub(tl.list_inner.y) as usize;
+                    let row =
+                        (pos.y.saturating_sub(tl.list_inner.y) / tl.row_height.max(1)) as usize;
                     let idx = tl.list_scroll + row;
                     let tools = self.clash.filtered_tools(&self.ctx.i18n);
                     if let Some(item) = tools.get(idx) {

@@ -37,6 +37,21 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     draw_services_card(app, frame, geom);
     draw_connections_preview(app, frame, geom.connections_card);
     draw_groups_preview(app, frame, geom);
+    if geom.overview_prev_btn.is_some() || geom.overview_next_btn.is_some() {
+        let bg = surface_bg(&app.theme.active, Role::Surface);
+        tokens::draw_pager_buttons(
+            frame.buffer_mut(),
+            geom.overview_prev_btn,
+            geom.overview_next_btn,
+            geom.overview_can_prev,
+            geom.overview_can_next,
+            geom.overview_page_text.as_deref(),
+            app.hover,
+            &app.theme.active,
+            &app.ctx.i18n,
+            bg,
+        );
+    }
 }
 
 fn draw_status_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
@@ -119,7 +134,11 @@ fn draw_status_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
             .add_modifier(Modifier::BOLD),
     );
 
-    let btn_y = card.bottom().saturating_sub(2);
+    let btn_y = geom
+        .start_stop_btn
+        .or(geom.reload_btn)
+        .or(geom.outbound_detail_btn)
+        .map_or(card.bottom().saturating_sub(2), |r| r.y);
     let panel_label = match (&sum.panel_name, &sum.panel_version) {
         (Some(name), Some(ver)) if !ver.is_empty() => format!("{name} {ver}"),
         (Some(name), _) => name.clone(),
@@ -444,24 +463,27 @@ fn draw_mode_bar(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     let i = &app.ctx.i18n;
     let cl = &app.clash;
     let ascii = theme.flags.ascii;
-    if bar.height >= 3 {
-        tokens::draw_surface_card_fx(
-            frame,
-            bar,
-            theme,
-            Role::SurfaceAlt,
-            Role::Border,
-            false,
-            app.now.saturating_duration_since(app.started),
-            app.reduced_motion(),
-        );
-    }
     let bg = surface_bg(theme, Role::SurfaceAlt);
     let buf = frame.buffer_mut();
-    let py = if bar.height >= 3 { bar.y + 1 } else { bar.y };
-    if bar.height < 3 {
-        fill_rect_bg(buf, bar, bg);
+
+    if bar.height >= 2 {
+        fill_rect_bg(buf, bar, surface_bg(theme, Role::Surface));
+        let active_mode = cl.snapshot.summary.mode.to_ascii_lowercase();
+        for &(rect, mode_id) in &geom.mode_pills {
+            let key = match mode_id {
+                "rule" => "clash.mode.rule",
+                "global" => "clash.mode.global",
+                _ => "clash.mode.direct",
+            };
+            let active = active_mode == mode_id;
+            let hov = app.hover.is_some_and(|p| rect.contains(p));
+            draw_pill_chip(buf, rect, i.text(key), active, hov, theme, bg);
+        }
+        return;
     }
+
+    let py = bar.y;
+    fill_rect_bg(buf, bar, bg);
 
     if bar.width >= 48 {
         buf.set_stringn(
@@ -553,10 +575,19 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     let sep = tokens::glyph(theme, Glyph::Separator);
 
     if let Some(prof) = cl.snapshot.active_profile() {
-        let name_budget = geom
-            .profile_update_btn
-            .map(|r| r.x.saturating_sub(ix + 1) as usize)
-            .unwrap_or(iw);
+        let buttons_at_bottom = geom.profile_switch_btn.is_some_and(|r| r.y > card.y + 1);
+        let btn_top_y = geom
+            .profile_switch_btn
+            .or(geom.profile_update_btn)
+            .filter(|r| r.y > card.y + 1)
+            .map_or(card.bottom().saturating_sub(1), |r| r.y);
+        let name_budget = if buttons_at_bottom {
+            iw
+        } else {
+            geom.profile_update_btn
+                .map(|r| r.x.saturating_sub(ix + 1) as usize)
+                .unwrap_or(iw)
+        };
         buf.set_stringn(
             ix,
             card.y + 1,
@@ -693,7 +724,7 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
             }
         }
 
-        if card.height >= 5 {
+        if card.height >= 5 && card.y + 3 < btn_top_y {
             if let Some((info, _)) = &effective_quota {
                 if info.total > 0 {
                     let fill_role = draw_overview_quota_row(
@@ -704,7 +735,7 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
                         theme,
                         bg,
                     );
-                    if card.height >= 6 {
+                    if card.height >= 6 && card.y + 4 < btn_top_y {
                         draw_progress_bar(
                             buf,
                             Rect::new(ix, card.y + 4, iw as u16, 1),
@@ -1040,7 +1071,12 @@ fn draw_services_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     );
 
     // Lines 2-3: Clickable pinned service status grid (FlClash-style)
-    let btn_y = card.bottom().saturating_sub(2);
+    let btn_y = geom
+        .service_check_btn
+        .or(geom.exit_probe_btn)
+        .or(geom.socks_secret_btn)
+        .or(geom.webui_btn)
+        .map_or(card.bottom().saturating_sub(2), |r| r.y);
     if !geom.service_cell_hits.is_empty() {
         for &(cell, target) in &geom.service_cell_hits {
             let hov = app.hover.is_some_and(|p| cell.contains(p));
@@ -1383,9 +1419,8 @@ fn draw_groups_preview(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
             })
             .bg(cell_bg)
             .add_modifier(Modifier::BOLD);
-        buf.set_stringn(rect.x, rect.y, bar, 1, bar_style);
-        if rect.height >= 2 {
-            buf.set_stringn(rect.x, rect.y + 1, bar, 1, bar_style);
+        for ry in rect.top()..rect.bottom() {
+            buf.set_stringn(rect.x, ry, bar, 1, bar_style);
         }
 
         let delay_badge = cl
@@ -1460,6 +1495,30 @@ fn draw_groups_preview(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
             clip_ascii_safe(&now_text, cw, ascii),
             cw,
             now_style,
+        );
+        if rect.height >= 3 && !focused && !hovered && !ascii {
+            let sep_y = rect.bottom() - 1;
+            let sep_style = ratatui::style::Style::default()
+                .fg(tokens::color(theme, Role::Rule))
+                .bg(bg);
+            for col in (rect.x + 1)..rect.right() {
+                buf[(col, sep_y)].set_symbol("┄").set_style(sep_style);
+            }
+        }
+    }
+
+    if geom.group_prev_btn.is_some() || geom.group_next_btn.is_some() {
+        tokens::draw_pager_buttons(
+            buf,
+            geom.group_prev_btn,
+            geom.group_next_btn,
+            geom.group_can_prev,
+            geom.group_can_next,
+            geom.group_page_text.as_deref(),
+            app.hover,
+            theme,
+            i,
+            bg,
         );
     }
 }

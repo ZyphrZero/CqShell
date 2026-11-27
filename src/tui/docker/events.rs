@@ -12,7 +12,7 @@ use crate::{
         model::{ContainerState, DockerAvailability, DockerTab},
     },
     tui::{
-        layout::LayoutRegions,
+        layout::{LayoutRegions, ThumbAction, hit_best, hit_opt},
         palette,
         state::{App, Effect, NavTarget, Task, Tone},
     },
@@ -1147,17 +1147,47 @@ impl App {
         }
     }
 
+    pub(in crate::tui) fn docker_thumb_action(&mut self, action: ThumbAction) -> Result<Effect> {
+        let idle = self.worker.is_none();
+        match action {
+            ThumbAction::DockerNextTab => {
+                let next = (self.docker.tab.index() + 1) % DockerTab::ALL.len();
+                self.docker.set_tab(DockerTab::from_index(next));
+                Ok(Effect::None)
+            }
+            ThumbAction::DockerPrimary if idle => match self.docker.tab {
+                DockerTab::Containers | DockerTab::Compose => self.docker_quick_start_stop(),
+                DockerTab::Images => {
+                    self.docker.modal = Some(DockerModal::pull_default());
+                    Ok(Effect::None)
+                }
+                DockerTab::Networks => {
+                    self.docker.modal = Some(DockerModal::network_default());
+                    Ok(Effect::None)
+                }
+                DockerTab::Volumes | DockerTab::Daemon => self.docker_activate_enter(),
+            },
+            ThumbAction::DockerLogs => {
+                self.docker_key(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE))
+            }
+            ThumbAction::DockerRefresh => Ok(Effect::DockerRefresh),
+            _ => Ok(Effect::None),
+        }
+    }
+
     pub(in crate::tui) fn docker_modal_mouse(
         &mut self,
         event: MouseEvent,
         area: Rect,
     ) -> Result<Effect> {
         let point: Position = (event.column, event.row).into();
+        let density = self.resolved_density(area);
+        let slop = density.slop_enabled();
         let geom = {
             let Some(modal) = &self.docker.modal else {
                 return Ok(Effect::None);
             };
-            DockerModalGeometry::compute(area, modal)
+            DockerModalGeometry::compute(area, modal, density)
         };
         if !matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             return Ok(Effect::None);
@@ -1166,14 +1196,28 @@ impl App {
             self.docker.modal = None;
             return Ok(Effect::None);
         }
-        if geom.cancel_btn.is_some_and(|r| r.contains(point)) {
-            self.docker.modal = None;
-            return Ok(Effect::None);
+        let mut btns = Vec::new();
+        if let Some(r) = geom.cancel_btn {
+            btns.push((r, false));
         }
-        if geom.submit_btn.is_some_and(|r| r.contains(point)) {
-            return self.docker_modal_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        if let Some(r) = geom.submit_btn {
+            btns.push((r, true));
         }
-        if let Some(idx) = geom.rows.iter().position(|r| r.contains(point)) {
+        match hit_best(btns, point, slop) {
+            Some(false) => {
+                self.docker.modal = None;
+                return Ok(Effect::None);
+            }
+            Some(true) => {
+                return self.docker_modal_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            }
+            None => {}
+        }
+        if let Some(idx) = hit_best(
+            geom.rows.iter().copied().enumerate().map(|(i, r)| (r, i)),
+            point,
+            slop,
+        ) {
             match self.docker.modal.as_mut() {
                 Some(DockerModal::ActionMenu { items, cursor, .. }) => {
                     if let Some(chosen) = items.get(idx).cloned() {
@@ -1210,6 +1254,7 @@ impl App {
         let Some(dk_geom) = &regions.docker else {
             return Ok(Effect::None);
         };
+        let slop = regions.density.slop_enabled();
         let point: Position = (event.column, event.row).into();
         let idle = self.worker.is_none();
 
@@ -1243,35 +1288,106 @@ impl App {
                     self.docker.filtering = true;
                     return Ok(Effect::None);
                 }
-                if dk_geom.focus_btn.is_some_and(|r| r.contains(point)) {
-                    self.docker.fullscreen = !self.docker.fullscreen;
-                    self.docker.focus_inspector = false;
+                #[derive(Clone, Copy)]
+                enum TopHit {
+                    Prev,
+                    Next,
+                    Tab(DockerTab),
+                    Focus,
+                }
+                let mut top_hits: Vec<(Rect, TopHit)> = Vec::new();
+                if let Some(r) = dk_geom.tab_prev_hit {
+                    top_hits.push((r, TopHit::Prev));
+                }
+                if let Some(r) = dk_geom.tab_next_hit {
+                    top_hits.push((r, TopHit::Next));
+                }
+                for pill in &dk_geom.tab_pills {
+                    top_hits.push((pill.rect, TopHit::Tab(pill.tab)));
+                }
+                if let Some(r) = dk_geom.focus_btn {
+                    top_hits.push((r, TopHit::Focus));
+                }
+                if let Some(hit) = hit_best(top_hits, point, slop) {
+                    match hit {
+                        TopHit::Prev => {
+                            let idx = (self.docker.tab.index() + DockerTab::ALL.len() - 1)
+                                % DockerTab::ALL.len();
+                            self.docker.set_tab(DockerTab::from_index(idx));
+                        }
+                        TopHit::Next => {
+                            let idx = (self.docker.tab.index() + 1) % DockerTab::ALL.len();
+                            self.docker.set_tab(DockerTab::from_index(idx));
+                        }
+                        TopHit::Tab(tab) => self.docker.set_tab(tab),
+                        TopHit::Focus => {
+                            self.docker.fullscreen = !self.docker.fullscreen;
+                            self.docker.focus_inspector = false;
+                        }
+                    }
                     return Ok(Effect::None);
                 }
-                if let Some(tab) = dk_geom.tab_at(point) {
-                    self.docker.set_tab(tab);
-                    return Ok(Effect::None);
-                }
-                if idle && dk_geom.empty_cta.is_some_and(|r| r.contains(point)) {
+                if idle && hit_opt(dk_geom.empty_cta, point, slop) {
                     return self.docker_activate_enter();
                 }
-                if dk_geom.scope_chip.is_some_and(|r| r.contains(point)) {
-                    return self.docker_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+                let mut list_btns = Vec::new();
+                if let Some(r) = dk_geom.scope_chip {
+                    list_btns.push((r, 0u8));
                 }
-                if dk_geom.sort_chip.is_some_and(|r| r.contains(point)) {
-                    self.docker.cycle_sort();
-                    return Ok(Effect::None);
+                if let Some(r) = dk_geom.sort_chip {
+                    list_btns.push((r, 1u8));
                 }
-                if dk_geom.project_chip.is_some_and(|r| r.contains(point)) {
-                    self.docker.project_filter = None;
-                    self.docker.clamp_cursors();
-                    return Ok(Effect::None);
+                if let Some(r) = dk_geom.project_chip {
+                    list_btns.push((r, 2u8));
+                }
+                if dk_geom.can_prev
+                    && let Some(r) = dk_geom.prev_btn
+                {
+                    list_btns.push((r, 3u8));
+                }
+                if dk_geom.can_next
+                    && let Some(r) = dk_geom.next_btn
+                {
+                    list_btns.push((r, 4u8));
+                }
+                match hit_best(list_btns, point, slop) {
+                    Some(0) => {
+                        return self
+                            .docker_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+                    }
+                    Some(1) => {
+                        self.docker.cycle_sort();
+                        return Ok(Effect::None);
+                    }
+                    Some(2) => {
+                        self.docker.project_filter = None;
+                        self.docker.clamp_cursors();
+                        return Ok(Effect::None);
+                    }
+                    Some(3) => {
+                        let step =
+                            (dk_geom.list_inner.height / dk_geom.row_height.max(1)).max(1) as usize;
+                        let next = self.docker.cursor().saturating_sub(step);
+                        self.docker.set_cursor(next);
+                        return Ok(Effect::None);
+                    }
+                    Some(4) => {
+                        let total = self.docker.visible_count();
+                        if total > 0 {
+                            let step = (dk_geom.list_inner.height / dk_geom.row_height.max(1))
+                                .max(1) as usize;
+                            let next = (self.docker.cursor() + step).min(total - 1);
+                            self.docker.set_cursor(next);
+                        }
+                        return Ok(Effect::None);
+                    }
+                    _ => {}
                 }
                 if let Some(col_idx) = dk_geom.col_at(point) {
                     self.docker.sort_by_column(col_idx);
                     return Ok(Effect::None);
                 }
-                if let Some(sub_idx) = dk_geom.sub_pill_at(point) {
+                if let Some(sub_idx) = dk_geom.sub_pill_at(point, slop) {
                     match self.docker.tab {
                         DockerTab::Containers => {
                             self.docker.container_sub = ContainerSubTab::from_index(sub_idx);
@@ -1287,7 +1403,7 @@ impl App {
                     self.docker.inspector_scroll = 0;
                     return Ok(Effect::None);
                 }
-                if idle && let Some(kind) = dk_geom.quick_btn_at(point) {
+                if idle && let Some(kind) = dk_geom.quick_btn_at(point, slop) {
                     return match kind {
                         QuickBtnKind::StartStop => self.docker_quick_start_stop(),
                         QuickBtnKind::Restart => self.docker_quick_restart_or_up(),
@@ -1338,13 +1454,14 @@ impl App {
                 }
                 let total = self.docker.visible_count();
                 if let Some((idx, in_checkbox)) = dk_geom.row_at(point, total) {
+                    let already = self.docker.cursor() == idx;
                     let is_double = self.is_double_click(point);
                     self.docker.set_cursor(idx);
                     if in_checkbox
                         && !matches!(self.docker.tab, DockerTab::Compose | DockerTab::Daemon)
                     {
                         self.docker.toggle_multi_select();
-                    } else if is_double && idle {
+                    } else if (is_double || (slop && already)) && idle {
                         return self.docker_activate_enter();
                     }
                     return Ok(Effect::None);

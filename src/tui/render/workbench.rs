@@ -151,6 +151,25 @@ fn draw_action_list(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, grou
         for pill in &geom.section_pills {
             let is_active = pill.tab == active_tab;
             let is_hovered = app.hover.is_some_and(|p| pill.rect.contains(p));
+            if pill.rect.height >= 2 {
+                let sub = show_counts.then(|| pill.count.to_string());
+                let kind = if is_active {
+                    tokens::TouchBtnKind::Active
+                } else {
+                    tokens::TouchBtnKind::Secondary
+                };
+                tokens::draw_touch_button(
+                    buf,
+                    pill.rect,
+                    &pill.label,
+                    sub.as_deref(),
+                    kind,
+                    is_hovered,
+                    theme,
+                    bg,
+                );
+                continue;
+            }
             let text_body = if show_counts {
                 format!("{} {}", pill.label, pill.count)
             } else {
@@ -258,10 +277,11 @@ fn draw_action_list(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, grou
     let scroll = geom.list_scroll;
     let visible_h = inner.height as usize;
 
-    for (offset, row) in rows.iter().skip(scroll).take(visible_h).enumerate() {
-        let visual_idx = scroll + offset;
-        let y = inner.y + offset as u16;
-        let row_rect = Rect::new(inner.x, y, inner.width, 1);
+    for &(row_rect, visual_idx) in &geom.visual_rows {
+        let Some(row) = rows.get(visual_idx) else {
+            continue;
+        };
+        let y = row_rect.y;
 
         match row {
             Row::Spacer => {}
@@ -330,18 +350,20 @@ fn draw_action_list(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, grou
                 } else {
                     bg
                 };
-                for col in row_rect.left()..row_rect.right() {
-                    buf[(col, y)].set_symbol(" ").set_bg(row_bg);
-                }
-                if active {
-                    buf[(row_rect.x, y)]
-                        .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
-                        .set_style(
-                            Style::default()
-                                .fg(tokens::selected_accent(theme))
-                                .bg(row_bg)
-                                .add_modifier(Modifier::BOLD),
-                        );
+                for ry in row_rect.top()..row_rect.bottom() {
+                    for col in row_rect.left()..row_rect.right() {
+                        buf[(col, ry)].set_symbol(" ").set_bg(row_bg);
+                    }
+                    if active {
+                        buf[(row_rect.x, ry)]
+                            .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
+                            .set_style(
+                                Style::default()
+                                    .fg(tokens::selected_accent(theme))
+                                    .bg(row_bg)
+                                    .add_modifier(Modifier::BOLD),
+                            );
+                    }
                 }
                 let text = format!(
                     "{} {}",
@@ -387,23 +409,25 @@ fn draw_action_list(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, grou
                 // Indent child items under section headers in All view with a clear vertical guide.
                 let indent = if grouped_all { 2u16 } else { 0u16 };
                 let bar_x = row_rect.x + indent;
-                for col in bar_x..row_rect.right() {
-                    buf[(col, y)].set_symbol(" ").set_bg(row_bg);
-                }
-                if active {
-                    buf[(bar_x, y)]
-                        .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
-                        .set_style(
-                            Style::default()
-                                .fg(tokens::animated_selected_accent(theme, elapsed, reduced))
-                                .bg(row_bg)
-                                .add_modifier(Modifier::BOLD),
-                        );
-                } else if grouped_all {
-                    let rail = if theme.flags.ascii { "|" } else { "│" };
-                    buf[(bar_x, y)]
-                        .set_symbol(rail)
-                        .set_style(tokens::fg(theme, Role::Rule).bg(row_bg));
+                for ry in row_rect.top()..row_rect.bottom() {
+                    for col in bar_x..row_rect.right() {
+                        buf[(col, ry)].set_symbol(" ").set_bg(row_bg);
+                    }
+                    if active {
+                        buf[(bar_x, ry)]
+                            .set_symbol(tokens::glyph(theme, Glyph::ActiveBar))
+                            .set_style(
+                                Style::default()
+                                    .fg(tokens::animated_selected_accent(theme, elapsed, reduced))
+                                    .bg(row_bg)
+                                    .add_modifier(Modifier::BOLD),
+                            );
+                    } else if grouped_all {
+                        let rail = if theme.flags.ascii { "|" } else { "│" };
+                        buf[(bar_x, ry)]
+                            .set_symbol(rail)
+                            .set_style(tokens::fg(theme, Role::Rule).bg(row_bg));
+                    }
                 }
 
                 // Right-aligned live preview tag or optimization parameter summary
@@ -523,12 +547,51 @@ fn draw_action_list(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, grou
                             .add_modifier(Modifier::BOLD),
                     );
                 }
+
+                // Second row of 2-row touch item shows concise action summary for easy visual scanning
+                if row_rect.height >= 2 {
+                    let desc_budget = row_rect.right().saturating_sub(label_start_x + 1) as usize;
+                    if desc_budget >= 6 {
+                        let desc = clip_ascii_safe(
+                            i.text(&spec.description()),
+                            desc_budget,
+                            theme.flags.ascii,
+                        );
+                        let desc_fg = if active && theme.flags.solid_selection {
+                            tokens::selected_fg(theme)
+                        } else {
+                            tokens::color(theme, Role::Text3)
+                        };
+                        buf.set_stringn(
+                            label_start_x,
+                            y + 1,
+                            &desc,
+                            desc_budget,
+                            Style::default().fg(desc_fg).bg(row_bg),
+                        );
+                    }
+                }
             }
         }
     }
 
+    if geom.prev_btn.is_some() || geom.next_btn.is_some() {
+        tokens::draw_pager_buttons(
+            buf,
+            geom.prev_btn,
+            geom.next_btn,
+            geom.can_prev,
+            geom.can_next,
+            geom.page_text.as_deref(),
+            app.hover,
+            theme,
+            i,
+            bg,
+        );
+    }
+
     // Subtle scroll indicator on right edge if rows overflow
-    if rows.len() > visible_h && visible_h >= 3 {
+    if rows.len() > geom.visual_rows.len() && visible_h >= 3 {
         let thumb_h = ((visible_h * visible_h) / rows.len()).max(1);
         let max_scroll = rows.len() - visible_h;
         let thumb_pos = (scroll * (visible_h - thumb_h))
@@ -854,9 +917,8 @@ fn draw_inspector(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, group:
     let cmd_end_line = cmd_start_line + cmd_rows.len();
 
     // Precompute command strip screen rect (accounting for body height & scroll) so hover/click works
-    let body_h_est = inner
-        .height
-        .saturating_sub(if geom.inspector_cta.is_some() { 2 } else { 0 });
+    let cta_reserve = geom.inspector_cta.map_or(0, |r| r.height + 1);
+    let body_h_est = inner.height.saturating_sub(cta_reserve);
     let total_est = cmd_end_line + usize::from(!geom.stacked) * 2;
     let scroll_est = app.inspector_scroll.min(
         total_est
@@ -940,7 +1002,7 @@ fn draw_inspector(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, group:
 
     let body_h = inner
         .height
-        .saturating_sub(if geom.inspector_cta.is_some() { 2 } else { 0 });
+        .saturating_sub(geom.inspector_cta.map_or(0, |r| r.height + 1));
     let max_scroll = lines
         .len()
         .saturating_sub(body_h as usize)
@@ -982,7 +1044,15 @@ fn draw_inspector(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry, group:
         let hovered = app.hover.is_some_and(|p| cta_rect.contains(p));
         let available = app.available(&spec).is_ok();
         let buf = frame.buffer_mut();
-        if theme.flags.ascii {
+        if cta_rect.height >= 2 {
+            let lbl = format!("{} {action_hint}", tokens::glyph(theme, Glyph::Enter));
+            let kind = if available {
+                tokens::TouchBtnKind::Primary
+            } else {
+                tokens::TouchBtnKind::Secondary
+            };
+            tokens::draw_touch_button(buf, cta_rect, &lbl, None, kind, hovered, theme, bg);
+        } else if theme.flags.ascii {
             let cta = format!("[ {} {action_hint} ]", tokens::glyph(theme, Glyph::Enter));
             let style = if available {
                 Style::default().add_modifier(Modifier::BOLD | Modifier::REVERSED)
@@ -1048,6 +1118,20 @@ fn draw_inspector_copy_btn(
     let theme = &app.theme.active;
     let lbl = app.ctx.i18n.text("key.copy_cmd");
     let hovered = app.hover.is_some_and(|p| rect.contains(p));
+    if rect.height >= 2 {
+        let label = format!("c {lbl}");
+        tokens::draw_touch_button(
+            buf,
+            rect,
+            &label,
+            None,
+            tokens::TouchBtnKind::Secondary,
+            hovered,
+            theme,
+            base_bg,
+        );
+        return;
+    }
     if theme.flags.ascii {
         let text = format!("[c {lbl}]");
         buf.set_stringn(
@@ -1200,14 +1284,14 @@ fn draw_optimization_plan(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry
             ]));
         }
     }
-    let body_h =
-        inner
-            .height
-            .saturating_sub(if !jobs.is_empty() && geom.inspector_copy_btn.is_some() {
-                2
-            } else {
-                0
-            });
+    let cta_reserve = if !jobs.is_empty() {
+        geom.inspector_cta
+            .or(geom.inspector_copy_btn)
+            .map_or(0, |r| r.height + 1)
+    } else {
+        0
+    };
+    let body_h = inner.height.saturating_sub(cta_reserve);
     let body_rect = Rect::new(inner.x, inner.y, inner.width, body_h);
     let sel_rows: Vec<SelectableRow> = lines
         .iter()
@@ -1236,7 +1320,19 @@ fn draw_optimization_plan(app: &App, frame: &mut Frame, geom: &WorkbenchGeometry
             let action_hint = i.text("key.run_checklist");
             let hovered = app.hover.is_some_and(|p| cta_rect.contains(p));
             let buf = frame.buffer_mut();
-            if theme.flags.ascii {
+            if cta_rect.height >= 2 {
+                let lbl = format!("{} {action_hint}", tokens::glyph(theme, Glyph::Enter));
+                tokens::draw_touch_button(
+                    buf,
+                    cta_rect,
+                    &lbl,
+                    None,
+                    tokens::TouchBtnKind::Primary,
+                    hovered,
+                    theme,
+                    bg,
+                );
+            } else if theme.flags.ascii {
                 let cta = format!("[ {} {action_hint} ]", tokens::glyph(theme, Glyph::Enter));
                 buf.set_stringn(
                     cta_rect.x,

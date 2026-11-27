@@ -39,7 +39,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, modal_alpha
     let i = &app.ctx.i18n;
     let cl = &app.clash;
     let ascii = theme.flags.ascii;
-    let geom = ClashModalGeometry::compute(area, modal, cl, i);
+    let geom = ClashModalGeometry::compute(area, modal, cl, i, app.resolved_density(area));
 
     fx::apply_shadow(frame.buffer_mut(), geom.box_rect, area, theme);
     tokens::draw_surface_card_fx(
@@ -962,25 +962,46 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, modal_alpha
             }
             if let Some(yes_rect) = geom.confirm_yes {
                 let lbl = format!(" {} ", i.text("key.confirm"));
-                let role = if *danger && *accept {
-                    Role::Danger
-                } else {
-                    Role::Accent
-                };
-                if *accept {
-                    fill_rect_bg(buf, yes_rect, tokens::color(theme, role));
-                    buf.set_stringn(
-                        yes_rect.x,
-                        yes_rect.y,
-                        clip_ascii_safe(&lbl, yes_rect.width as usize, ascii),
-                        yes_rect.width as usize,
-                        Style::default()
-                            .fg(tokens::color(theme, Role::OnAccent))
-                            .bg(tokens::color(theme, role))
-                            .add_modifier(Modifier::BOLD),
+                if yes_rect.height >= 2 {
+                    let kind = if *danger {
+                        tokens::TouchBtnKind::Danger
+                    } else if *accept {
+                        tokens::TouchBtnKind::Primary
+                    } else {
+                        tokens::TouchBtnKind::Secondary
+                    };
+                    let hov = app.hover.is_some_and(|p| yes_rect.contains(p));
+                    tokens::draw_touch_button(
+                        buf,
+                        yes_rect,
+                        lbl.trim(),
+                        None,
+                        kind,
+                        hov,
+                        theme,
+                        bg,
                     );
                 } else {
-                    draw_pill_chip(buf, yes_rect, &lbl, false, false, theme, bg);
+                    let role = if *danger && *accept {
+                        Role::Danger
+                    } else {
+                        Role::Accent
+                    };
+                    if *accept {
+                        fill_rect_bg(buf, yes_rect, tokens::color(theme, role));
+                        buf.set_stringn(
+                            yes_rect.x,
+                            yes_rect.y,
+                            clip_ascii_safe(&lbl, yes_rect.width as usize, ascii),
+                            yes_rect.width as usize,
+                            Style::default()
+                                .fg(tokens::color(theme, Role::OnAccent))
+                                .bg(tokens::color(theme, role))
+                                .add_modifier(Modifier::BOLD),
+                        );
+                    } else {
+                        draw_pill_chip(buf, yes_rect, &lbl, false, false, theme, bg);
+                    }
                 }
             }
             if let Some(no_rect) = geom.confirm_no {
