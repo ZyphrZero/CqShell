@@ -148,6 +148,34 @@ const SECTIONS: &[(&str, &[Section])] = &[
             ("all", &["tools.install"]),
         ],
     ),
+    (
+        "ai",
+        &[
+            (
+                "tools",
+                &[
+                    "ai.pi.install",
+                    "ai.claude.install",
+                    "ai.codex.install",
+                    "ai.status",
+                ],
+            ),
+            (
+                "mcp",
+                &[
+                    "ai.mcp.status",
+                    "ai.mcp.install",
+                    "ai.mcp.uninstall",
+                    "ai.mcp.configure",
+                    "ai.mcp.token.rotate",
+                    "ai.mcp.token.set",
+                    "ai.mcp.service.status",
+                    "ai.mcp.service.install",
+                    "ai.mcp.service.remove",
+                ],
+            ),
+        ],
+    ),
 ];
 
 /// The Sections of `group` in display order, or `None` for an ungrouped category.
@@ -194,7 +222,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             listed,
-            BTreeSet::from(["system", "clash", "network", "docker", "tools"]),
+            BTreeSet::from(["system", "clash", "network", "docker", "tools", "ai"]),
             "the other categories stay ungrouped"
         );
         let i18n = I18n::load(Some("en-US"), None).unwrap();

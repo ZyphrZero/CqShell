@@ -1677,6 +1677,292 @@
   },
   {
     "available": true,
+    "description": "Show redacted Streamable HTTP endpoint, policy mode, Bearer token fingerprint, systemd state, and detected local AI client registrations.",
+    "group": "ai",
+    "id": "ai.mcp.status",
+    "interactive": false,
+    "label": "MCP server & client status",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Atomically merge CqShell's MCP entry into Claude Code (~/.claude.json), Codex CLI (~/.codex/config.toml), Cursor (~/.cursor/mcp.json), or a custom JSON file with backup.",
+    "group": "ai",
+    "id": "ai.mcp.install",
+    "interactive": false,
+    "label": "Install MCP into local AI client",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "claude",
+          "codex",
+          "cursor",
+          "file"
+        ],
+        "default": "claude",
+        "name": "mcp_client",
+        "required": true
+      },
+      {
+        "choices": [
+          "local_stdio",
+          "http",
+          "ssh_stdio"
+        ],
+        "default": "local_stdio",
+        "name": "mcp_transport",
+        "required": true
+      },
+      {
+        "choices": [
+          "read_only",
+          "standard",
+          "allow_danger"
+        ],
+        "default": "read_only",
+        "name": "mcp_policy",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "cqs",
+        "name": "mcp_name",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_target_file",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Remove only CqShell's named MCP entry from Claude Code, Codex CLI, Cursor, or a custom JSON file while keeping all other settings intact.",
+    "group": "ai",
+    "id": "ai.mcp.uninstall",
+    "interactive": false,
+    "label": "Uninstall MCP from local AI client",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "claude",
+          "codex",
+          "cursor",
+          "file"
+        ],
+        "default": "claude",
+        "name": "mcp_client",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "cqs",
+        "name": "mcp_name",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_target_file",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Configure Streamable HTTP listen address, port, endpoint path, Bearer auth (mandatory on non-loopback), permission policy, public HTTPS URL, and SSH target.",
+    "group": "ai",
+    "id": "ai.mcp.configure",
+    "interactive": false,
+    "label": "Configure remote HTTP MCP",
+    "mutates": true,
+    "parameters": [
+      {
+        "allow_custom": true,
+        "choices": [
+          "127.0.0.1",
+          "0.0.0.0",
+          "::1",
+          "::"
+        ],
+        "default": "127.0.0.1",
+        "name": "mcp_listen",
+        "required": true
+      },
+      {
+        "allow_custom": true,
+        "choices": [
+          "18765",
+          "18080",
+          "8765"
+        ],
+        "default": "18765",
+        "name": "mcp_port",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "/mcp",
+        "name": "mcp_path",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "mcp_auth",
+        "required": true
+      },
+      {
+        "choices": [
+          "read_only",
+          "standard",
+          "allow_danger"
+        ],
+        "default": "read_only",
+        "name": "mcp_policy",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_public_url",
+        "required": false
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_ssh_target",
+        "required": false
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_allow_groups",
+        "required": false
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_deny_actions",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Generate a new high-entropy Bearer token into the 0600 mcp.token file without echoing plaintext; running HTTP servers pick it up immediately.",
+    "group": "ai",
+    "id": "ai.mcp.token.rotate",
+    "interactive": false,
+    "label": "Rotate MCP Bearer token",
+    "mutates": true,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Import a custom Bearer token (24-256 printable ASCII chars) from a chmod 0600 file into mcp.token without exposing it in arguments or logs.",
+    "group": "ai",
+    "id": "ai.mcp.token.set",
+    "interactive": false,
+    "label": "Set MCP token from private file",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "secret_file",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Inspect the CqShell-managed cqs-mcp.service systemd unit state in user or system scope.",
+    "group": "ai",
+    "id": "ai.mcp.service.status",
+    "interactive": false,
+    "label": "MCP systemd service status",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [
+          "user",
+          "system"
+        ],
+        "default": "user",
+        "name": "service_scope",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Install, enable, and start cqs-mcp.service (UMask=0077, reads 0600 mcp.token directly); system scope requires root.",
+    "group": "ai",
+    "id": "ai.mcp.service.install",
+    "interactive": false,
+    "label": "Install & start MCP systemd service",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "user",
+          "system"
+        ],
+        "default": "user",
+        "name": "service_scope",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "Stop, disable, and remove the CqShell-managed cqs-mcp.service unit while keeping saved configuration and token files.",
+    "group": "ai",
+    "id": "ai.mcp.service.remove",
+    "interactive": false,
+    "label": "Remove MCP systemd service",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "user",
+          "system"
+        ],
+        "default": "user",
+        "name": "service_scope",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "Install zsh and a checksum-verified Starship release. Keep the login shell unchanged.",
     "group": "terminal",
     "id": "terminal.install",

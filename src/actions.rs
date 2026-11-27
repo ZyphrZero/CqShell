@@ -84,6 +84,15 @@ pub enum Kind {
     ToolInstall(&'static str),
     AiInstall(ops::ai::Tool),
     AiStatus,
+    AiMcpStatus,
+    AiMcpInstall,
+    AiMcpUninstall,
+    AiMcpConfigure,
+    AiMcpTokenRotate,
+    AiMcpTokenSet,
+    AiMcpServiceStatus,
+    AiMcpServiceInstall,
+    AiMcpServiceRemove,
     TerminalInstall,
     TerminalPreview,
     TerminalApply,
@@ -193,7 +202,30 @@ impl Spec {
     pub fn requires_platform(&self) -> bool {
         !matches!(
             self.kind,
-            Kind::GithubProxy | Kind::TerminalPreview | Kind::SelfUpdateCheck | Kind::SelfUpdate
+            Kind::GithubProxy
+                | Kind::TerminalPreview
+                | Kind::SelfUpdateCheck
+                | Kind::SelfUpdate
+                | Kind::AiMcpStatus
+                | Kind::AiMcpInstall
+                | Kind::AiMcpUninstall
+                | Kind::AiMcpConfigure
+                | Kind::AiMcpTokenRotate
+                | Kind::AiMcpTokenSet
+        )
+    }
+    /// Whether this action mutates MCP server/client control-plane configuration, secrets, or
+    /// service ownership (blocked from self-invocation over MCP to prevent privilege escalation).
+    pub fn is_mcp_control_mutation(&self) -> bool {
+        matches!(
+            self.kind,
+            Kind::AiMcpInstall
+                | Kind::AiMcpUninstall
+                | Kind::AiMcpConfigure
+                | Kind::AiMcpTokenRotate
+                | Kind::AiMcpTokenSet
+                | Kind::AiMcpServiceInstall
+                | Kind::AiMcpServiceRemove
         )
     }
     /// Whether this action can complete in a headless non-interactive session (JSON CLI / MCP).
@@ -323,9 +355,49 @@ impl Spec {
                 }
                 path.is_absolute() && !crate::storage::has_relative_segment(path)
             }
-            Kind::ClashSecretSet | Kind::ClashSocksAuthSet => {
+            Kind::ClashSecretSet | Kind::ClashSocksAuthSet | Kind::AiMcpTokenSet => {
                 let path = Path::new(&p["secret_file"]);
                 path.is_absolute() && !crate::storage::has_relative_segment(path)
+            }
+            Kind::AiMcpInstall => {
+                crate::mcp::install::InstallTarget::parse(
+                    &p["mcp_client"],
+                    (!p["mcp_target_file"].is_empty()).then_some(p["mcp_target_file"].as_str()),
+                )?;
+                crate::mcp::config::TransportMode::parse(&p["mcp_transport"])?;
+                crate::mcp::config::PolicyMode::parse(&p["mcp_policy"])?;
+                crate::mcp::config::validate_server_name(&p["mcp_name"])?;
+                true
+            }
+            Kind::AiMcpUninstall => {
+                crate::mcp::install::InstallTarget::parse(
+                    &p["mcp_client"],
+                    (!p["mcp_target_file"].is_empty()).then_some(p["mcp_target_file"].as_str()),
+                )?;
+                crate::mcp::config::validate_server_name(&p["mcp_name"])?;
+                true
+            }
+            Kind::AiMcpConfigure => {
+                let (listen, _) = crate::mcp::config::normalize_listen(&p["mcp_listen"])?;
+                let port = crate::mcp::config::validate_port(&p["mcp_port"])?;
+                let endpoint_path = crate::mcp::config::validate_endpoint_path(&p["mcp_path"])?;
+                let policy_mode = crate::mcp::config::PolicyMode::parse(&p["mcp_policy"])?;
+                let public_url = crate::mcp::config::validate_public_url(&p["mcp_public_url"])?;
+                let ssh_target = crate::mcp::config::validate_ssh_target(&p["mcp_ssh_target"])?;
+                let candidate = crate::mcp::config::McpHttpConfig {
+                    listen,
+                    port,
+                    endpoint_path,
+                    auth_enabled: p["mcp_auth"] == "on",
+                    public_url,
+                    ssh_target,
+                    policy_mode,
+                    allow_groups: crate::mcp::config::parse_csv_list(&p["mcp_allow_groups"]),
+                    deny_actions: crate::mcp::config::parse_csv_list(&p["mcp_deny_actions"]),
+                    ..crate::mcp::config::McpHttpConfig::default()
+                };
+                candidate.validate()?;
+                true
             }
             Kind::ClashSocksConfigure => {
                 ops::clash::socks::validate_form(
@@ -426,6 +498,11 @@ const REVERSIBLE: &[&str] = &[
     "clash.socks.auth.set",
     "clash.tun.configure",
     "clash.service.install",
+    "ai.mcp.install",
+    "ai.mcp.uninstall",
+    "ai.mcp.configure",
+    "ai.mcp.token.set",
+    "ai.mcp.service.install",
 ];
 
 static SPECS_CACHE: OnceLock<Vec<Spec>> = OnceLock::new();
@@ -1234,6 +1311,153 @@ fn build_specs() -> Vec<Spec> {
     }
     add("ai.status", "ai", AiStatus, false, false, false, vec![]);
     add(
+        "ai.mcp.status",
+        "ai",
+        AiMcpStatus,
+        false,
+        false,
+        false,
+        vec![],
+    );
+    add(
+        "ai.mcp.install",
+        "ai",
+        AiMcpInstall,
+        false,
+        true,
+        false,
+        vec![
+            field(
+                "mcp_client",
+                "claude",
+                &["claude", "codex", "cursor", "file"],
+                true,
+            ),
+            field(
+                "mcp_transport",
+                "local_stdio",
+                &["local_stdio", "http", "ssh_stdio"],
+                true,
+            ),
+            field(
+                "mcp_policy",
+                "read_only",
+                &["read_only", "standard", "allow_danger"],
+                true,
+            ),
+            field(
+                "mcp_name",
+                crate::mcp::config::DEFAULT_SERVER_NAME,
+                &[],
+                true,
+            ),
+            field("mcp_target_file", "", &[], false),
+        ],
+    );
+    add(
+        "ai.mcp.uninstall",
+        "ai",
+        AiMcpUninstall,
+        false,
+        true,
+        false,
+        vec![
+            field(
+                "mcp_client",
+                "claude",
+                &["claude", "codex", "cursor", "file"],
+                true,
+            ),
+            field(
+                "mcp_name",
+                crate::mcp::config::DEFAULT_SERVER_NAME,
+                &[],
+                true,
+            ),
+            field("mcp_target_file", "", &[], false),
+        ],
+    );
+    add(
+        "ai.mcp.configure",
+        "ai",
+        AiMcpConfigure,
+        false,
+        true,
+        false,
+        vec![
+            Field {
+                allow_custom: true,
+                ..field(
+                    "mcp_listen",
+                    crate::mcp::config::DEFAULT_LISTEN,
+                    &["127.0.0.1", "0.0.0.0", "::1", "::"],
+                    true,
+                )
+            },
+            Field {
+                allow_custom: true,
+                ..field("mcp_port", "18765", &["18765", "18080", "8765"], true)
+            },
+            field("mcp_path", crate::mcp::config::DEFAULT_PATH, &[], true),
+            field("mcp_auth", "on", &["on", "off"], true),
+            field(
+                "mcp_policy",
+                "read_only",
+                &["read_only", "standard", "allow_danger"],
+                true,
+            ),
+            field("mcp_public_url", "", &[], false),
+            field("mcp_ssh_target", "", &[], false),
+            field("mcp_allow_groups", "", &[], false),
+            field("mcp_deny_actions", "", &[], false),
+        ],
+    );
+    add(
+        "ai.mcp.token.rotate",
+        "ai",
+        AiMcpTokenRotate,
+        false,
+        true,
+        false,
+        vec![],
+    );
+    add(
+        "ai.mcp.token.set",
+        "ai",
+        AiMcpTokenSet,
+        false,
+        true,
+        false,
+        vec![field("secret_file", "", &[], true)],
+    );
+    add(
+        "ai.mcp.service.status",
+        "ai",
+        AiMcpServiceStatus,
+        false,
+        false,
+        false,
+        vec![field("service_scope", "user", &["user", "system"], true)],
+    );
+    add(
+        "ai.mcp.service.install",
+        "ai",
+        AiMcpServiceInstall,
+        false,
+        true,
+        false,
+        vec![field("service_scope", "user", &["user", "system"], true)],
+    );
+    add(
+        "ai.mcp.service.remove",
+        "ai",
+        AiMcpServiceRemove,
+        false,
+        true,
+        false,
+        vec![field("service_scope", "user", &["user", "system"], true)],
+    );
+    add(
         "terminal.install",
         "terminal",
         TerminalInstall,
@@ -1529,6 +1753,7 @@ fn is_danger_generic(kind: Kind) -> bool {
             | Kind::ClashMixinReset
             | Kind::ClashPanelRemove
             | Kind::ClashServiceRemove
+            | Kind::AiMcpServiceRemove
     )
 }
 
@@ -1557,10 +1782,7 @@ pub fn execute_reviewed(ctx: &Context, spec: &Spec, supplied: &Parameters) -> Re
 
 fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Result<()> {
     let p = spec.parameters(supplied)?;
-    if !matches!(
-        spec.kind,
-        Kind::GithubProxy | Kind::TerminalPreview | Kind::SelfUpdateCheck | Kind::SelfUpdate
-    ) {
+    if spec.requires_platform() {
         ctx.platform()?;
     }
     if spec.root {
@@ -1709,6 +1931,38 @@ fn run(ctx: &Context, spec: &Spec, supplied: &Parameters, prompt: Prompt) -> Res
         ToolInstall(package) => ops::tools::packages(ctx, package),
         AiInstall(tool) => ops::ai::install(ctx, tool),
         AiStatus => ops::ai::status(ctx),
+        AiMcpStatus => crate::mcp::config::action_status(ctx),
+        AiMcpInstall => crate::mcp::install::action_install(
+            ctx,
+            &p["mcp_client"],
+            &p["mcp_transport"],
+            &p["mcp_policy"],
+            &p["mcp_name"],
+            &p["mcp_target_file"],
+        ),
+        AiMcpUninstall => crate::mcp::install::action_uninstall(
+            ctx,
+            &p["mcp_client"],
+            &p["mcp_name"],
+            &p["mcp_target_file"],
+        ),
+        AiMcpConfigure => crate::mcp::config::action_configure(
+            ctx,
+            &p["mcp_listen"],
+            &p["mcp_port"],
+            &p["mcp_path"],
+            p["mcp_auth"] == "on",
+            &p["mcp_policy"],
+            &p["mcp_public_url"],
+            &p["mcp_ssh_target"],
+            &p["mcp_allow_groups"],
+            &p["mcp_deny_actions"],
+        ),
+        AiMcpTokenRotate => crate::mcp::config::action_token_rotate(ctx),
+        AiMcpTokenSet => crate::mcp::config::action_token_set(ctx, &p["secret_file"]),
+        AiMcpServiceStatus => crate::mcp::service::status(ctx, &p["service_scope"]),
+        AiMcpServiceInstall => crate::mcp::service::install(ctx, &p["service_scope"]),
+        AiMcpServiceRemove => crate::mcp::service::remove(ctx, &p["service_scope"]),
         TerminalInstall => ops::tools::terminal_install(ctx),
         TerminalPreview => ops::terminal::preview(
             ctx,
@@ -1964,6 +2218,11 @@ mod tests {
             "clash.socks.auth.set",
             "clash.tun.configure",
             "clash.service.install",
+            "ai.mcp.install",
+            "ai.mcp.uninstall",
+            "ai.mcp.configure",
+            "ai.mcp.token.set",
+            "ai.mcp.service.install",
         ];
         let expected = |spec: &Spec, prompt: Prompt| {
             let entry = match prompt {

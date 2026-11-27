@@ -1677,6 +1677,292 @@
   },
   {
     "available": true,
+    "description": "查看脱敏后的 Streamable HTTP 监听端点、权限策略、Bearer 密钥指纹、systemd 服务状态及本机已检测到的 AI 客户端注册情况。",
+    "group": "ai",
+    "id": "ai.mcp.status",
+    "interactive": false,
+    "label": "MCP 服务与客户端状态",
+    "mutates": false,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "原子增量合并 CqShell MCP 配置到 Claude Code（~/.claude.json）、Codex CLI（~/.codex/config.toml）、Cursor（~/.cursor/mcp.json）或自定义 JSON 文件，并自动留存修改前备份。",
+    "group": "ai",
+    "id": "ai.mcp.install",
+    "interactive": false,
+    "label": "安装 MCP 到本机 AI 客户端",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "claude",
+          "codex",
+          "cursor",
+          "file"
+        ],
+        "default": "claude",
+        "name": "mcp_client",
+        "required": true
+      },
+      {
+        "choices": [
+          "local_stdio",
+          "http",
+          "ssh_stdio"
+        ],
+        "default": "local_stdio",
+        "name": "mcp_transport",
+        "required": true
+      },
+      {
+        "choices": [
+          "read_only",
+          "standard",
+          "allow_danger"
+        ],
+        "default": "read_only",
+        "name": "mcp_policy",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "cqs",
+        "name": "mcp_name",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_target_file",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "仅从 Claude Code、Codex CLI、Cursor 或自定义 JSON 文件中移除指定的 CqShell MCP 条目，保留所有其他服务器与配置。",
+    "group": "ai",
+    "id": "ai.mcp.uninstall",
+    "interactive": false,
+    "label": "从本机 AI 客户端卸载 MCP",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "claude",
+          "codex",
+          "cursor",
+          "file"
+        ],
+        "default": "claude",
+        "name": "mcp_client",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "cqs",
+        "name": "mcp_name",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_target_file",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "配置 Streamable HTTP 监听地址、端口、路径、Bearer 鉴权（非回环强制开启）、权限级别、外部 HTTPS 反代地址与 SSH 目标。",
+    "group": "ai",
+    "id": "ai.mcp.configure",
+    "interactive": false,
+    "label": "配置远程 HTTP MCP 服务",
+    "mutates": true,
+    "parameters": [
+      {
+        "allow_custom": true,
+        "choices": [
+          "127.0.0.1",
+          "0.0.0.0",
+          "::1",
+          "::"
+        ],
+        "default": "127.0.0.1",
+        "name": "mcp_listen",
+        "required": true
+      },
+      {
+        "allow_custom": true,
+        "choices": [
+          "18765",
+          "18080",
+          "8765"
+        ],
+        "default": "18765",
+        "name": "mcp_port",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "/mcp",
+        "name": "mcp_path",
+        "required": true
+      },
+      {
+        "choices": [
+          "on",
+          "off"
+        ],
+        "default": "on",
+        "name": "mcp_auth",
+        "required": true
+      },
+      {
+        "choices": [
+          "read_only",
+          "standard",
+          "allow_danger"
+        ],
+        "default": "read_only",
+        "name": "mcp_policy",
+        "required": true
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_public_url",
+        "required": false
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_ssh_target",
+        "required": false
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_allow_groups",
+        "required": false
+      },
+      {
+        "choices": [],
+        "default": "",
+        "name": "mcp_deny_actions",
+        "required": false
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "重新生成高熵 Bearer 密钥并原子写入 0600 权限的 mcp.token（日志不回显明文），运行中的 HTTP 服务立即热切换并作废旧密钥。",
+    "group": "ai",
+    "id": "ai.mcp.token.rotate",
+    "interactive": false,
+    "label": "轮换 MCP Bearer 密钥",
+    "mutates": true,
+    "parameters": [],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "从 chmod 0600 私有文件读取自定义 Bearer 密钥（24-256 位可见 ASCII 字符）写入 mcp.token，避免密钥暴露在命令行参数与日志中。",
+    "group": "ai",
+    "id": "ai.mcp.token.set",
+    "interactive": false,
+    "label": "从私有文件导入 MCP 密钥",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [],
+        "default": "",
+        "name": "secret_file",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "查看指定作用域（user / system）下由 CqShell 托管的 cqs-mcp.service 运行与开机自启状态。",
+    "group": "ai",
+    "id": "ai.mcp.service.status",
+    "interactive": false,
+    "label": "MCP systemd 服务状态",
+    "mutates": false,
+    "parameters": [
+      {
+        "choices": [
+          "user",
+          "system"
+        ],
+        "default": "user",
+        "name": "service_scope",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "写入并启用启动 cqs-mcp.service（UMask=0077，直接读取 0600 mcp.token，不经命令行传密钥）；system 作用域需要 root 权限。",
+    "group": "ai",
+    "id": "ai.mcp.service.install",
+    "interactive": false,
+    "label": "安装并启动 MCP systemd 服务",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "user",
+          "system"
+        ],
+        "default": "user",
+        "name": "service_scope",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
+    "description": "停止、禁用并移除 CqShell 托管的 cqs-mcp.service 单元，保留已保存的配置与密钥文件。",
+    "group": "ai",
+    "id": "ai.mcp.service.remove",
+    "interactive": false,
+    "label": "卸载 MCP systemd 服务",
+    "mutates": true,
+    "parameters": [
+      {
+        "choices": [
+          "user",
+          "system"
+        ],
+        "default": "user",
+        "name": "service_scope",
+        "required": true
+      }
+    ],
+    "root": false,
+    "unavailable_reason": null
+  },
+  {
+    "available": true,
     "description": "安装 zsh 和经过摘要校验的 Starship，保持登录 Shell 不变。",
     "group": "terminal",
     "id": "terminal.install",

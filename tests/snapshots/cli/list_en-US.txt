@@ -240,6 +240,45 @@ ai.codex.install       Install / update Codex CLI
   Download the complete official Codex Linux binary package with its helper programs and resources. Verify SHA-256 and the version. No Node.js/npm required. Default entrypoint: ~/.local/bin/codex; respects CODEX_INSTALL_DIR.
 ai.status              Agent tool versions
   Check common user installation directories and PATH for Pi, Claude Code and Codex, then read --version. Distinguish missing commands from execution failures. Does not sign in.
+ai.mcp.status          MCP server & client status
+  Show redacted Streamable HTTP endpoint, policy mode, Bearer token fingerprint, systemd state, and detected local AI client registrations.
+ai.mcp.install         Install MCP into local AI client
+  Atomically merge CqShell's MCP entry into Claude Code (~/.claude.json), Codex CLI (~/.codex/config.toml), Cursor (~/.cursor/mcp.json), or a custom JSON file with backup.
+  mcp_client=claude ["claude", "codex", "cursor", "file"]
+  mcp_transport=local_stdio ["local_stdio", "http", "ssh_stdio"]
+  mcp_policy=read_only ["read_only", "standard", "allow_danger"]
+  mcp_name=cqs []
+  mcp_target_file= []
+ai.mcp.uninstall       Uninstall MCP from local AI client
+  Remove only CqShell's named MCP entry from Claude Code, Codex CLI, Cursor, or a custom JSON file while keeping all other settings intact.
+  mcp_client=claude ["claude", "codex", "cursor", "file"]
+  mcp_name=cqs []
+  mcp_target_file= []
+ai.mcp.configure       Configure remote HTTP MCP
+  Configure Streamable HTTP listen address, port, endpoint path, Bearer auth (mandatory on non-loopback), permission policy, public HTTPS URL, and SSH target.
+  mcp_listen=127.0.0.1 ["127.0.0.1", "0.0.0.0", "::1", "::"]
+  mcp_port=18765 ["18765", "18080", "8765"]
+  mcp_path=/mcp []
+  mcp_auth=on ["on", "off"]
+  mcp_policy=read_only ["read_only", "standard", "allow_danger"]
+  mcp_public_url= []
+  mcp_ssh_target= []
+  mcp_allow_groups= []
+  mcp_deny_actions= []
+ai.mcp.token.rotate    Rotate MCP Bearer token
+  Generate a new high-entropy Bearer token into the 0600 mcp.token file without echoing plaintext; running HTTP servers pick it up immediately.
+ai.mcp.token.set       Set MCP token from private file
+  Import a custom Bearer token (24-256 printable ASCII chars) from a chmod 0600 file into mcp.token without exposing it in arguments or logs.
+  secret_file= []
+ai.mcp.service.status  MCP systemd service status
+  Inspect the CqShell-managed cqs-mcp.service systemd unit state in user or system scope.
+  service_scope=user ["user", "system"]
+ai.mcp.service.install Install & start MCP systemd service
+  Install, enable, and start cqs-mcp.service (UMask=0077, reads 0600 mcp.token directly); system scope requires root.
+  service_scope=user ["user", "system"]
+ai.mcp.service.remove  Remove MCP systemd service
+  Stop, disable, and remove the CqShell-managed cqs-mcp.service unit while keeping saved configuration and token files.
+  service_scope=user ["user", "system"]
 terminal.install       Install zsh / Starship
   Install zsh and a checksum-verified Starship release. Keep the login shell unchanged.
 terminal.preview       Preview prompt styles

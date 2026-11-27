@@ -6,7 +6,11 @@
 //! Protocol invariant: `stdout` receives strictly one JSON-RPC 2.0 object per line. All CqShell
 //! action execution runs through `Context::captured(...)` so logs never leak into `stdout`.
 
+pub mod config;
+pub mod http;
+pub mod install;
 pub mod resources;
+pub mod service;
 pub mod tools;
 
 use crate::{
@@ -76,6 +80,19 @@ impl McpServer {
             initialized: false,
             protocol_version: LATEST_PROTOCOL_VERSION.to_owned(),
         })
+    }
+
+    pub fn restore_session(&mut self, initialized: bool, protocol_version: String) {
+        self.initialized = initialized;
+        self.protocol_version = protocol_version;
+    }
+
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
+    }
+
+    pub fn protocol_version(&self) -> &str {
+        &self.protocol_version
     }
 
     /// Runs the blocking stdio transport loop until EOF or cancellation signal.

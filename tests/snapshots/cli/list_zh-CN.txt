@@ -240,6 +240,45 @@ ai.codex.install       安装 / 更新 Codex CLI
   直接下载 Codex 官方完整 Linux 二进制包，包含运行所需的辅助程序与资源，校验 SHA-256 和版本。无需 Node.js/npm；默认入口为 ~/.local/bin/codex，遵循 CODEX_INSTALL_DIR。
 ai.status              查看 Agent 工具版本
   检查 Pi、Claude Code、Codex 的常见用户安装目录及 PATH，读取 --version。缺失与执行失败分别显示；不执行登录。
+ai.mcp.status          MCP 服务与客户端状态
+  查看脱敏后的 Streamable HTTP 监听端点、权限策略、Bearer 密钥指纹、systemd 服务状态及本机已检测到的 AI 客户端注册情况。
+ai.mcp.install         安装 MCP 到本机 AI 客户端
+  原子增量合并 CqShell MCP 配置到 Claude Code（~/.claude.json）、Codex CLI（~/.codex/config.toml）、Cursor（~/.cursor/mcp.json）或自定义 JSON 文件，并自动留存修改前备份。
+  mcp_client=claude ["claude", "codex", "cursor", "file"]
+  mcp_transport=local_stdio ["local_stdio", "http", "ssh_stdio"]
+  mcp_policy=read_only ["read_only", "standard", "allow_danger"]
+  mcp_name=cqs []
+  mcp_target_file= []
+ai.mcp.uninstall       从本机 AI 客户端卸载 MCP
+  仅从 Claude Code、Codex CLI、Cursor 或自定义 JSON 文件中移除指定的 CqShell MCP 条目，保留所有其他服务器与配置。
+  mcp_client=claude ["claude", "codex", "cursor", "file"]
+  mcp_name=cqs []
+  mcp_target_file= []
+ai.mcp.configure       配置远程 HTTP MCP 服务
+  配置 Streamable HTTP 监听地址、端口、路径、Bearer 鉴权（非回环强制开启）、权限级别、外部 HTTPS 反代地址与 SSH 目标。
+  mcp_listen=127.0.0.1 ["127.0.0.1", "0.0.0.0", "::1", "::"]
+  mcp_port=18765 ["18765", "18080", "8765"]
+  mcp_path=/mcp []
+  mcp_auth=on ["on", "off"]
+  mcp_policy=read_only ["read_only", "standard", "allow_danger"]
+  mcp_public_url= []
+  mcp_ssh_target= []
+  mcp_allow_groups= []
+  mcp_deny_actions= []
+ai.mcp.token.rotate    轮换 MCP Bearer 密钥
+  重新生成高熵 Bearer 密钥并原子写入 0600 权限的 mcp.token（日志不回显明文），运行中的 HTTP 服务立即热切换并作废旧密钥。
+ai.mcp.token.set       从私有文件导入 MCP 密钥
+  从 chmod 0600 私有文件读取自定义 Bearer 密钥（24-256 位可见 ASCII 字符）写入 mcp.token，避免密钥暴露在命令行参数与日志中。
+  secret_file= []
+ai.mcp.service.status  MCP systemd 服务状态
+  查看指定作用域（user / system）下由 CqShell 托管的 cqs-mcp.service 运行与开机自启状态。
+  service_scope=user ["user", "system"]
+ai.mcp.service.install 安装并启动 MCP systemd 服务
+  写入并启用启动 cqs-mcp.service（UMask=0077，直接读取 0600 mcp.token，不经命令行传密钥）；system 作用域需要 root 权限。
+  service_scope=user ["user", "system"]
+ai.mcp.service.remove  卸载 MCP systemd 服务
+  停止、禁用并移除 CqShell 托管的 cqs-mcp.service 单元，保留已保存的配置与密钥文件。
+  service_scope=user ["user", "system"]
 terminal.install       安装 zsh / Starship
   安装 zsh 和经过摘要校验的 Starship，保持登录 Shell 不变。
 terminal.preview       预览终端提示符

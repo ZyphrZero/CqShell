@@ -2,7 +2,7 @@
 
 pub(super) mod logs;
 mod modals;
-pub(super) use modals::{help_max_scroll, socks_secret_max_scroll};
+pub(super) use modals::{help_max_scroll, mcp_access_max_scroll, socks_secret_max_scroll};
 mod overview;
 mod sidebar;
 mod terminal_preview;
@@ -281,6 +281,8 @@ pub(super) fn draw(app: &App, frame: &mut Frame) {
         }
     } else if app.socks_secret.is_some() {
         modals::draw_socks_secret(app, frame, area, modal_alpha);
+    } else if app.mcp_access.is_some() {
+        modals::draw_mcp_access(app, frame, area, modal_alpha);
     } else if let Some(form) = &app.form {
         if form.picker.is_some() {
             modals::draw_picker(app, frame, area, form, modal_alpha);
@@ -483,6 +485,9 @@ fn draw_footer(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
         let is_clash = app
             .active_group()
             .is_some_and(|g| super::state::GROUPS[g] == "clash");
+        let is_ai = app
+            .active_group()
+            .is_some_and(|g| super::state::GROUPS[g] == "ai");
         if mobile {
             let mut v = vec![
                 ("↑↓", i.text("key.move")),
@@ -491,6 +496,9 @@ fn draw_footer(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
             ];
             if is_clash {
                 v.push(("Shift+S", i.text("key.socks_secret")));
+            }
+            if is_ai {
+                v.push(("Shift+M", i.text("key.mcp_access")));
             }
             v.extend([
                 ("[", i.text("nav.toggle")),
@@ -506,6 +514,9 @@ fn draw_footer(app: &App, frame: &mut Frame, regions: &LayoutRegions) {
             ];
             if is_clash {
                 v.push(("Shift+S", i.text("key.socks_secret")));
+            }
+            if is_ai {
+                v.push(("Shift+M", i.text("key.mcp_access")));
             }
             v.extend([
                 ("c", i.text("key.copy")),

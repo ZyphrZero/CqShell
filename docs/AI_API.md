@@ -2,74 +2,90 @@
 
 CqShell 内置零 `tokio` 依赖的原生 AI 控制面，对外同时提供两套基于同一套动作引擎与脱敏模型的能力：
 
-1. **原生 MCP（Model Context Protocol）stdio 服务器**：`cqs mcp`（JSON-RPC 2.0 换行分隔帧，支持 `2025-06-18` / `2025-03-26` / `2024-11-05` 协议协商），供 Claude Code、Codex CLI、Cursor、Claude Desktop 等外部 AI Agent 原生直连。
+1. **原生 MCP（Model Context Protocol）双传输服务器**：
+   - **stdio / SSH stdio**：`cqs mcp`（JSON-RPC 2.0 换行分隔帧，支持 `2025-06-18` / `2025-03-26` / `2024-11-05` 协议协商），零常驻进程，适合本机或 SSH 公钥远程直连。
+   - **Streamable HTTP + Bearer 密钥认证**：`cqs mcp serve` 与可选 `cqs-mcp.service` systemd 常驻托管（默认监听回环 `127.0.0.1:18765/mcp`、默认只读、强制 `0600` 高熵 Bearer 密钥与 `Origin` 防 DNS Rebinding 校验），供 Cursor / Claude Code / Codex / Antigravity 等跨平台客户端通过 URL + Bearer Token 远程接入。
+   - **一键安装与脱敏复制入口**：TUI `Agent 工具 -> MCP 服务与接入` 与全局 `Shift+M`「MCP 接入与脱敏密钥卡」（屏幕始终遮罩、OSC 52 一键复制），以及 CLI `cqs mcp install / uninstall / config / token / service`。
 2. **结构化 JSON CLI 控制面**：`status`、`describe`、`choices`、`list --json`、`run --json`、`batch --json` 与 `--params-json` / `--dry-run`，供脚本、CI 或具备终端工具的 AI Agent 以确定性 JSON 编排运维。
 
 ---
 
 ## 1. 快速接入 MCP 客户端
 
-### 1.1 本地连接（Claude Code / Codex CLI / Cursor）
+### 1.1 本机一键安装与卸载（自动增量合并，留存备份）
 
-**推荐起步配置（严格只读巡检）**：
+在安装了 Claude Code、Codex CLI、Cursor 或其他标准 `mcpServers` JSON 客户端的主机上，可直接通过 CLI 或 TUI 一键注册：
 
 ```bash
-# Claude Code
-claude mcp add cqs -- cqs mcp --read-only
+# 注册到 Claude Code (~/.claude.json)、Codex CLI (~/.codex/config.toml)、Cursor (~/.cursor/mcp.json)
+cqs mcp install --client claude --transport local_stdio --policy read_only
+cqs mcp install --client codex --transport local_stdio --policy read_only
+cqs mcp install --client cursor --transport local_stdio --policy read_only
+
+# 注册到任意自定义 mcpServers JSON 文件（例如 Antigravity / Claude Desktop / 项目 .mcp.json）
+cqs mcp install --client file --file /path/to/mcp.json --transport http --public-url https://mcp.example.com/mcp
+
+# 可逆卸载（仅删除指定名称条目，保留用户其他 MCP 服务器与设置）
+cqs mcp uninstall --client claude --name cqs
 ```
 
-**标准运维配置（只读 + 需显式确认的可逆/常规变更，默认拦截高危破坏性动作）**：
+### 1.2 远程连接方式 A：SSH stdio（免开放端口，复用 SSH 密钥）
+
+无需常驻守护进程，也无需独立 MCP 密钥，直接复用本机 SSH 免密认证与加密隧道：
+
+```bash
+# 生成各客户端可用的 SSH stdio 配置片段
+cqs mcp config --transport ssh_stdio --client json --ssh-target admin@server.example.com
+cqs mcp config --transport ssh_stdio --client claude --ssh-target admin@server.example.com
+cqs mcp config --transport ssh_stdio --client codex --ssh-target admin@server.example.com
+```
 
 ```json
 {
   "mcpServers": {
     "cqs": {
-      "command": "cqs",
-      "args": ["--lang", "zh-CN", "mcp"]
-    }
-  }
-}
-```
-
-**受限作用域 + 高危授权示例**（如仅开放 `docker` 与 `clash` 分组，或按需允许高危操作）：
-
-```json
-{
-  "mcpServers": {
-    "cqs": {
-      "command": "sudo",
-      "args": [
-        "cqs",
-        "--lang", "en-US",
-        "mcp",
-        "--allow-group", "system,network,docker,clash",
-        "--deny-action", "ssh.port,ssh.key,docker.uninstall"
-      ]
-    }
-  }
-}
-```
-
-### 1.2 通过 SSH 远程托管服务器
-
-因为 `cqs mcp` 使用标准 stdio 传输且无需常驻守护进程，可直接通过 SSH 通道暴露远端服务器的只读或受控运维能力：
-
-```json
-{
-  "mcpServers": {
-    "prod-vps": {
       "command": "ssh",
-      "args": [
-        "-T",
-        "admin@server.example.com",
-        "cqs",
-        "mcp",
-        "--read-only"
-      ]
+      "args": ["-T", "admin@server.example.com", "cqs", "mcp", "--read-only"]
     }
   }
 }
 ```
+
+### 1.3 远程连接方式 B：Streamable HTTP + Bearer 密钥（URL 直连）
+
+适合 Cursor / Antigravity / Claude Code / Codex CLI 等通过 URL + Header 远程接入的场景：
+
+```bash
+# 1. 配置远程 HTTP 参数（默认 127.0.0.1:18765/mcp、Bearer 开启、strict read-only）
+cqs run ai.mcp.configure --set mcp_listen=127.0.0.1 --set mcp_port=18765 \
+  --set mcp_policy=read_only --set mcp_public_url=https://mcp.example.com/mcp
+
+# 2. 启动前台服务，或安装可选 systemd 常驻服务（user / system 双作用域，UMask=0077）
+cqs mcp serve
+cqs mcp service install --scope user    # 或 sudo cqs mcp service install --scope system
+cqs mcp service status --scope user
+
+# 3. 导出客户端配置（默认脱敏为 <MCP_TOKEN>；显式 --reveal 输出真实 Bearer 密钥）
+cqs mcp config --transport http --client json
+cqs mcp config --transport http --client json --reveal
+cqs mcp config --transport http --client claude --reveal
+cqs mcp config --transport http --client codex --reveal
+
+# 4. 密钥管理（存于 0600 文件，禁止命令行参数传明文；轮换后运行中 HTTP 服务即时热切换）
+cqs mcp token status
+cqs mcp token rotate
+cqs mcp token set --file /path/to/private-0600.token
+```
+
+> **安全建议**：当 `mcp_listen` 绑定非回环地址（如 `0.0.0.0`）时，Bearer 密钥强制开启且不可关闭；裸 HTTP 会明文传输 `Authorization: Bearer` 请求头，生产公网访问请务必配合 **Nginx/Caddy HTTPS 反代**（并填写 `mcp_public_url`），或保持监听 `127.0.0.1` 配合 **Tailscale / WireGuard / `ssh -N -L 18765:127.0.0.1:18765 admin@server.example.com`** 隧道访问。
+
+### 1.4 TUI 一键复制入口（`Shift+M` 脱敏密钥卡）
+
+在 TUI 中进入 **Agent 工具（`ai` 分组）** 的 **MCP 服务与接入** 区块，或直接按全局快捷键 **`Shift+M`**（命令面板 `/` 搜索 `MCP` 也可直达）：
+- 屏幕始终以 `************************` 遮罩隐藏 Bearer 密钥，不落入终端回滚缓冲或任务日志；
+- 按 **`Tab`** 实时切换 `Streamable HTTP (Bearer)` / `SSH stdio` / `本机 stdio`，按 **`F`** 切换预览格式；
+- 按 **`1`（JSON）** / **`2`（Claude）** / **`3`（Codex）** / **`4`（Bearer 密钥或 SSH 隧道命令）** 通过 OSC 52 直接复制到本机剪贴板；
+- 按 **`R`** 原地轮换 `0600` Bearer 密钥并立即生效。
 
 ---
 
@@ -87,7 +103,8 @@ claude mcp add cqs -- cqs mcp --read-only
 
 ### 内置不变量（不可关闭）
 
-- **零明文密钥泄漏**：绝不调用 SOCKS5 明文读取接口；Mihomo 控制器密钥、SOCKS5 密码与订阅 URL Token 永不输出；Docker 容器/镜像 Inspect 强制对敏感环境变量脱敏为 `********` 并剥离未脱敏 `raw_json`。
+- **零明文密钥泄漏**：绝不调用 SOCKS5 明文读取接口；Mihomo 控制器密钥、SOCKS5 密码、MCP Bearer 密钥与订阅 URL Token 永不写入日志、Toast 或命令行参数；Docker 容器/镜像 Inspect 强制对敏感环境变量脱敏为 `********` 并剥离未脱敏 `raw_json`。
+- **防 MCP 自我提权红线**：所有变更 MCP 自身配置、Bearer 密钥、`systemd` 服务及本机客户端注册的动作（`ai.mcp.configure`、`ai.mcp.token.*`、`ai.mcp.service.*`、`ai.mcp.install`、`ai.mcp.uninstall`）均禁止通过 MCP 协议本身被外部 AI 自我调用（即使开启 `--allow-danger` 亦拒绝，仅允许本机 CLI/TUI 操作）；只读的 `ai.mcp.status` 允许脱敏查询。
 - **绝不自动重启主机**：所有 JSON / MCP 执行运行于无头捕获上下文（`Context::captured`），`kernel.install` 与 `kernel.boot` 仅完成安装或写入一次性 GRUB 启动项，永不自动执行 `reboot`。
 - **阻断交互式终端与无限流**：需要独占 TTY 的第三方脚本（`docker.install`、`test.ip`、`test.ai`、`test.speed`、`test.route`、`test.performance`）以及 `clash.logs follow=on` 均在预检阶段直接返回 `error.tty`，不会阻塞或污染 JSON-RPC stdout。
 - **有界输出与协议纯净**：单条 JSON-RPC 消息上限 4 MiB；动作日志上限 2000 行；Docker 日志上限 1000 行（单行 4 KiB 截断 + ANSI 清洗）；Mihomo 日志上限 500 行（全量脱敏）；stdout 严格只写 JSON-RPC 帧。

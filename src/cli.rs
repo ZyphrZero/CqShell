@@ -323,44 +323,7 @@ pub fn command(i: &I18n) -> Command {
                 ),
         );
     }
-    cmd = cmd.subcommand(
-        Command::new("mcp")
-            .about(i.text("cli.mcp").to_owned())
-            .help_template(format!(
-                "{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
-                i.text("cli.usage")
-            ))
-            .next_help_heading(i.text("cli.options").to_owned())
-            .arg(
-                Arg::new("read-only")
-                    .long("read-only")
-                    .action(ArgAction::SetTrue)
-                    .conflicts_with("allow-danger")
-                    .help(i.text("cli.mcp_read_only").to_owned()),
-            )
-            .arg(
-                Arg::new("allow-danger")
-                    .long("allow-danger")
-                    .action(ArgAction::SetTrue)
-                    .help(i.text("cli.mcp_allow_danger").to_owned()),
-            )
-            .arg(
-                Arg::new("allow-group")
-                    .long("allow-group")
-                    .value_name("GROUP")
-                    .value_delimiter(',')
-                    .action(ArgAction::Append)
-                    .help(i.text("cli.mcp_allow_group").to_owned()),
-            )
-            .arg(
-                Arg::new("deny-action")
-                    .long("deny-action")
-                    .value_name("ACTION_ID")
-                    .value_delimiter(',')
-                    .action(ArgAction::Append)
-                    .help(i.text("cli.mcp_deny_action").to_owned()),
-            ),
-    );
+    cmd = cmd.subcommand(mcp_command(i));
     cmd.help_template(format!(
         "{{name}} {{version}}\n{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
         i.text("cli.usage")
@@ -486,7 +449,10 @@ pub fn main_entry() -> i32 {
     let structured_json_subcommand = matches.get_flag("json")
         && matches!(
             matches.subcommand(),
-            Some(("status" | "describe" | "choices" | "run" | "batch", _))
+            Some((
+                "status" | "describe" | "choices" | "run" | "batch" | "mcp",
+                _
+            ))
         );
     let result = dispatch(&ctx, &matches, &preferences);
     match result {
@@ -551,12 +517,16 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                 _,
             )) => true,
             Some(("update", matches)) => matches.get_flag("check"),
+            Some(("mcp", matches)) => matches!(
+                matches.subcommand_name(),
+                Some("config" | "install" | "uninstall" | "token")
+            ),
             _ => false,
         };
         if !json_allowed {
             return Err(Error::new(
                 "error.cli",
-                "--json requires list/languages/themes/styles/status/describe/choices/run/batch or update --check",
+                "--json requires list/languages/themes/styles/status/describe/choices/run/batch, update --check, or mcp config/install/uninstall/token",
             ));
         }
     }
@@ -772,27 +742,7 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
             }
             Ok(0)
         }
-        Some(("mcp", matches)) => {
-            let mut policy = ExecutionPolicy::mcp_default();
-            policy.read_only = matches.get_flag("read-only");
-            policy.allow_danger = matches.get_flag("allow-danger");
-            policy.allow_groups = matches
-                .get_many::<String>("allow-group")
-                .into_iter()
-                .flatten()
-                .map(|s| s.trim().to_owned())
-                .filter(|s| !s.is_empty())
-                .collect();
-            policy.deny_actions = matches
-                .get_many::<String>("deny-action")
-                .into_iter()
-                .flatten()
-                .map(|s| s.trim().to_owned())
-                .filter(|s| !s.is_empty())
-                .collect();
-            McpServer::serve_stdio(ctx, policy)?;
-            Ok(0)
-        }
+        Some(("mcp", matches)) => dispatch_mcp(ctx, matches, args.get_flag("json")),
         Some(("run", matches)) => {
             let id = matches.get_one::<String>("action").unwrap();
             let dry_run = matches.get_flag("dry-run");
@@ -1024,6 +974,722 @@ fn styles(ctx: &Context, json: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn mcp_command(i: &I18n) -> Command {
+    let tmpl = format!(
+        "{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
+        i.text("cli.usage")
+    );
+    Command::new("mcp")
+        .about(i.text("cli.mcp").to_owned())
+        .help_template(tmpl.clone())
+        .subcommand_help_heading(i.text("cli.commands").to_owned())
+        .next_help_heading(i.text("cli.options").to_owned())
+        .arg(
+            Arg::new("read-only")
+                .long("read-only")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("allow-danger")
+                .help(i.text("cli.mcp_read_only").to_owned()),
+        )
+        .arg(
+            Arg::new("allow-danger")
+                .long("allow-danger")
+                .action(ArgAction::SetTrue)
+                .help(i.text("cli.mcp_allow_danger").to_owned()),
+        )
+        .arg(
+            Arg::new("allow-group")
+                .long("allow-group")
+                .value_name("GROUP")
+                .value_delimiter(',')
+                .action(ArgAction::Append)
+                .help(i.text("cli.mcp_allow_group").to_owned()),
+        )
+        .arg(
+            Arg::new("deny-action")
+                .long("deny-action")
+                .value_name("ACTION_ID")
+                .value_delimiter(',')
+                .action(ArgAction::Append)
+                .help(i.text("cli.mcp_deny_action").to_owned()),
+        )
+        .subcommand(
+            Command::new("serve")
+                .about(i.text("cli.mcp_serve").to_owned())
+                .help_template(tmpl.clone())
+                .next_help_heading(i.text("cli.options").to_owned())
+                .arg(
+                    Arg::new("listen")
+                        .long("listen")
+                        .value_name("IP")
+                        .help(i.text("cli.mcp_listen").to_owned()),
+                )
+                .arg(
+                    Arg::new("port")
+                        .long("port")
+                        .value_name("PORT")
+                        .help(i.text("cli.mcp_port").to_owned()),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .value_name("PATH")
+                        .help(i.text("cli.mcp_path").to_owned()),
+                )
+                .arg(
+                    Arg::new("no-auth")
+                        .long("no-auth")
+                        .action(ArgAction::SetTrue)
+                        .help(i.text("cli.mcp_no_auth").to_owned()),
+                )
+                .arg(
+                    Arg::new("read-only")
+                        .long("read-only")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["standard", "allow-danger"])
+                        .help(i.text("cli.mcp_read_only").to_owned()),
+                )
+                .arg(
+                    Arg::new("standard")
+                        .long("standard")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["read-only", "allow-danger"])
+                        .help(i.text("cli.mcp_standard").to_owned()),
+                )
+                .arg(
+                    Arg::new("allow-danger")
+                        .long("allow-danger")
+                        .action(ArgAction::SetTrue)
+                        .conflicts_with_all(["read-only", "standard"])
+                        .help(i.text("cli.mcp_allow_danger").to_owned()),
+                )
+                .arg(
+                    Arg::new("allow-group")
+                        .long("allow-group")
+                        .value_name("GROUP")
+                        .value_delimiter(',')
+                        .action(ArgAction::Append)
+                        .help(i.text("cli.mcp_allow_group").to_owned()),
+                )
+                .arg(
+                    Arg::new("deny-action")
+                        .long("deny-action")
+                        .value_name("ACTION_ID")
+                        .value_delimiter(',')
+                        .action(ArgAction::Append)
+                        .help(i.text("cli.mcp_deny_action").to_owned()),
+                ),
+        )
+        .subcommand(
+            Command::new("config")
+                .about(i.text("cli.mcp_config").to_owned())
+                .help_template(tmpl.clone())
+                .next_help_heading(i.text("cli.options").to_owned())
+                .arg(
+                    Arg::new("transport")
+                        .long("transport")
+                        .default_value("http")
+                        .value_parser(["http", "ssh", "ssh_stdio", "local", "local_stdio"])
+                        .help(i.text("cli.mcp_transport").to_owned()),
+                )
+                .arg(
+                    Arg::new("client")
+                        .long("client")
+                        .default_value("json")
+                        .value_parser(["json", "claude", "codex", "cursor"])
+                        .help(i.text("cli.mcp_client").to_owned()),
+                )
+                .arg(
+                    Arg::new("policy")
+                        .long("policy")
+                        .default_value("current")
+                        .value_parser([
+                            "current",
+                            "read_only",
+                            "read-only",
+                            "standard",
+                            "allow_danger",
+                            "allow-danger",
+                        ])
+                        .help(i.text("cli.mcp_policy").to_owned()),
+                )
+                .arg(
+                    Arg::new("host")
+                        .long("host")
+                        .value_name("HOST")
+                        .help(i.text("cli.mcp_host").to_owned()),
+                )
+                .arg(
+                    Arg::new("ssh-target")
+                        .long("ssh-target")
+                        .value_name("USER@HOST")
+                        .help(i.text("cli.mcp_ssh_target").to_owned()),
+                )
+                .arg(
+                    Arg::new("public-url")
+                        .long("public-url")
+                        .value_name("URL")
+                        .help(i.text("cli.mcp_public_url").to_owned()),
+                )
+                .arg(
+                    Arg::new("name")
+                        .long("name")
+                        .value_name("NAME")
+                        .help(i.text("cli.mcp_name").to_owned()),
+                )
+                .arg(
+                    Arg::new("reveal")
+                        .long("reveal")
+                        .action(ArgAction::SetTrue)
+                        .help(i.text("cli.mcp_reveal").to_owned()),
+                ),
+        )
+        .subcommand(
+            Command::new("install")
+                .about(i.text("cli.mcp_install").to_owned())
+                .help_template(tmpl.clone())
+                .next_help_heading(i.text("cli.options").to_owned())
+                .arg(
+                    Arg::new("client")
+                        .long("client")
+                        .default_value("claude")
+                        .value_parser(["claude", "codex", "cursor", "file"])
+                        .help(i.text("cli.mcp_client").to_owned()),
+                )
+                .arg(
+                    Arg::new("file")
+                        .long("file")
+                        .value_name("PATH")
+                        .help(i.text("cli.mcp_file").to_owned()),
+                )
+                .arg(
+                    Arg::new("transport")
+                        .long("transport")
+                        .default_value("local_stdio")
+                        .value_parser(["local", "local_stdio", "http", "ssh", "ssh_stdio"])
+                        .help(i.text("cli.mcp_transport").to_owned()),
+                )
+                .arg(
+                    Arg::new("policy")
+                        .long("policy")
+                        .default_value("read_only")
+                        .value_parser([
+                            "read_only",
+                            "read-only",
+                            "standard",
+                            "allow_danger",
+                            "allow-danger",
+                        ])
+                        .help(i.text("cli.mcp_policy").to_owned()),
+                )
+                .arg(
+                    Arg::new("name")
+                        .long("name")
+                        .default_value(crate::mcp::config::DEFAULT_SERVER_NAME)
+                        .value_name("NAME")
+                        .help(i.text("cli.mcp_name").to_owned()),
+                )
+                .arg(
+                    Arg::new("ssh-target")
+                        .long("ssh-target")
+                        .value_name("USER@HOST")
+                        .help(i.text("cli.mcp_ssh_target").to_owned()),
+                )
+                .arg(
+                    Arg::new("public-url")
+                        .long("public-url")
+                        .value_name("URL")
+                        .help(i.text("cli.mcp_public_url").to_owned()),
+                ),
+        )
+        .subcommand(
+            Command::new("uninstall")
+                .about(i.text("cli.mcp_uninstall").to_owned())
+                .help_template(tmpl.clone())
+                .next_help_heading(i.text("cli.options").to_owned())
+                .arg(
+                    Arg::new("client")
+                        .long("client")
+                        .default_value("claude")
+                        .value_parser(["claude", "codex", "cursor", "file"])
+                        .help(i.text("cli.mcp_client").to_owned()),
+                )
+                .arg(
+                    Arg::new("file")
+                        .long("file")
+                        .value_name("PATH")
+                        .help(i.text("cli.mcp_file").to_owned()),
+                )
+                .arg(
+                    Arg::new("name")
+                        .long("name")
+                        .default_value(crate::mcp::config::DEFAULT_SERVER_NAME)
+                        .value_name("NAME")
+                        .help(i.text("cli.mcp_name").to_owned()),
+                ),
+        )
+        .subcommand(
+            Command::new("token")
+                .about(i.text("cli.mcp_token").to_owned())
+                .help_template(tmpl.clone())
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .subcommand(
+                    Command::new("status")
+                        .about(i.text("cli.mcp_token_status").to_owned())
+                        .help_template(tmpl.clone()),
+                )
+                .subcommand(
+                    Command::new("init")
+                        .about(i.text("cli.mcp_token_init").to_owned())
+                        .help_template(tmpl.clone())
+                        .arg(
+                            Arg::new("reveal")
+                                .long("reveal")
+                                .action(ArgAction::SetTrue)
+                                .help(i.text("cli.mcp_reveal").to_owned()),
+                        ),
+                )
+                .subcommand(
+                    Command::new("rotate")
+                        .about(i.text("cli.mcp_token_rotate").to_owned())
+                        .help_template(tmpl.clone())
+                        .arg(
+                            Arg::new("reveal")
+                                .long("reveal")
+                                .action(ArgAction::SetTrue)
+                                .help(i.text("cli.mcp_reveal").to_owned()),
+                        ),
+                )
+                .subcommand(
+                    Command::new("set")
+                        .about(i.text("cli.mcp_token_set").to_owned())
+                        .help_template(tmpl.clone())
+                        .arg(
+                            Arg::new("file")
+                                .long("file")
+                                .value_name("PATH")
+                                .conflicts_with("stdin")
+                                .help(i.text("cli.mcp_token_file").to_owned()),
+                        )
+                        .arg(
+                            Arg::new("stdin")
+                                .long("stdin")
+                                .action(ArgAction::SetTrue)
+                                .conflicts_with("file")
+                                .help(i.text("cli.mcp_token_stdin").to_owned()),
+                        ),
+                ),
+        )
+        .subcommand(
+            Command::new("service")
+                .about(i.text("cli.mcp_service").to_owned())
+                .help_template(tmpl.clone())
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .arg(
+                    Arg::new("scope")
+                        .long("scope")
+                        .global(true)
+                        .default_value("user")
+                        .value_parser(["user", "system"])
+                        .help(i.text("field.service_scope").to_owned()),
+                )
+                .subcommand(
+                    Command::new("status").about(i.text("action.ai.mcp.service.status").to_owned()),
+                )
+                .subcommand(
+                    Command::new("install")
+                        .about(i.text("action.ai.mcp.service.install").to_owned()),
+                )
+                .subcommand(Command::new("start").about(i.text("cli.mcp_service_start").to_owned()))
+                .subcommand(Command::new("stop").about(i.text("cli.mcp_service_stop").to_owned()))
+                .subcommand(
+                    Command::new("restart").about(i.text("cli.mcp_service_restart").to_owned()),
+                )
+                .subcommand(
+                    Command::new("remove").about(i.text("action.ai.mcp.service.remove").to_owned()),
+                ),
+        )
+}
+
+fn dispatch_mcp(ctx: &Context, matches: &clap::ArgMatches, json_mode: bool) -> Result<i32> {
+    use crate::mcp::{
+        config as mcp_cfg, http as mcp_http, install as mcp_inst, service as mcp_svc,
+    };
+
+    match matches.subcommand() {
+        None => {
+            let mut policy = ExecutionPolicy::mcp_default();
+            policy.read_only = matches.get_flag("read-only");
+            policy.allow_danger = matches.get_flag("allow-danger");
+            policy.allow_groups = matches
+                .get_many::<String>("allow-group")
+                .into_iter()
+                .flatten()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+            policy.deny_actions = matches
+                .get_many::<String>("deny-action")
+                .into_iter()
+                .flatten()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+            McpServer::serve_stdio(ctx, policy)?;
+            Ok(0)
+        }
+        Some(("serve", sub)) => {
+            let mut cfg = mcp_cfg::load_config(ctx)?;
+            if let Some(listen) = sub.get_one::<String>("listen") {
+                let (norm, _) = mcp_cfg::normalize_listen(listen)?;
+                cfg.listen = norm;
+            }
+            if let Some(port) = sub.get_one::<String>("port") {
+                cfg.port = mcp_cfg::validate_port(port)?;
+            }
+            if let Some(path) = sub.get_one::<String>("path") {
+                cfg.endpoint_path = mcp_cfg::validate_endpoint_path(path)?;
+            }
+            if sub.get_flag("no-auth") {
+                cfg.auth_enabled = false;
+            }
+            if sub.get_flag("read-only") {
+                cfg.policy_mode = mcp_cfg::PolicyMode::ReadOnly;
+            } else if sub.get_flag("standard") {
+                cfg.policy_mode = mcp_cfg::PolicyMode::Standard;
+            } else if sub.get_flag("allow-danger") {
+                cfg.policy_mode = mcp_cfg::PolicyMode::AllowDanger;
+            }
+            let cli_groups: Vec<String> = sub
+                .get_many::<String>("allow-group")
+                .into_iter()
+                .flatten()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !cli_groups.is_empty() {
+                cfg.allow_groups = cli_groups;
+            }
+            let cli_deny: Vec<String> = sub
+                .get_many::<String>("deny-action")
+                .into_iter()
+                .flatten()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !cli_deny.is_empty() {
+                cfg.deny_actions = cli_deny;
+            }
+            cfg.validate()?;
+            if cfg.auth_enabled {
+                let (_, created) = mcp_cfg::ensure_token(ctx)?;
+                if created {
+                    eprintln!(
+                        "Initialized 0600 MCP Bearer token: {}",
+                        mcp_cfg::token_path(ctx).display()
+                    );
+                }
+            }
+            let policy = cfg.execution_policy();
+            mcp_http::serve_http(ctx, cfg, policy)?;
+            Ok(0)
+        }
+        Some(("config", sub)) => {
+            let mut cfg = mcp_cfg::load_config(ctx)?;
+            if let Some(name) = sub.get_one::<String>("name") {
+                cfg.server_name = mcp_cfg::validate_server_name(name)?;
+            }
+            if let Some(ssh) = sub.get_one::<String>("ssh-target") {
+                cfg.ssh_target = mcp_cfg::validate_ssh_target(ssh)?;
+            }
+            if let Some(url) = sub.get_one::<String>("public-url") {
+                cfg.public_url = mcp_cfg::validate_public_url(url)?;
+            }
+            cfg.validate()?;
+            let transport =
+                mcp_cfg::TransportMode::parse(sub.get_one::<String>("transport").unwrap())?;
+            let client = mcp_cfg::ClientFormat::parse(sub.get_one::<String>("client").unwrap())?;
+            let policy_raw = sub.get_one::<String>("policy").unwrap().as_str();
+            let policy_override = if policy_raw == "current" {
+                None
+            } else {
+                Some(mcp_cfg::PolicyMode::parse(policy_raw)?)
+            };
+            let host_override = sub.get_one::<String>("host").map(String::as_str);
+            let reveal = sub.get_flag("reveal");
+            let token_value = if transport == mcp_cfg::TransportMode::Http && cfg.auth_enabled {
+                if reveal {
+                    let (tok, _) = mcp_cfg::ensure_token(ctx)?;
+                    Some(tok)
+                } else {
+                    Some(mcp_cfg::REDACTED_TOKEN.to_owned())
+                }
+            } else {
+                None
+            };
+            let cqs_cmd = mcp_cfg::preferred_cqs_command(ctx);
+            let snippet = mcp_cfg::render_snippet(
+                &cfg,
+                transport,
+                client,
+                &cqs_cmd,
+                host_override,
+                policy_override,
+                token_value.as_deref(),
+            );
+            if json_mode {
+                let tok_status = mcp_cfg::token_status(ctx)?;
+                let payload = serde_json::json!({
+                    "schema_version": api::SCHEMA_VERSION,
+                    "ok": true,
+                    "transport": transport.as_str(),
+                    "client": client.as_str(),
+                    "server_name": cfg.server_name,
+                    "policy_mode": policy_override.unwrap_or(cfg.policy_mode).as_str(),
+                    "endpoint_url": cfg.effective_http_url(host_override),
+                    "ssh_target": cfg.effective_ssh_target(host_override),
+                    "ssh_tunnel_command": cfg.ssh_tunnel_command(host_override),
+                    "auth_enabled": cfg.auth_enabled,
+                    "revealed": reveal,
+                    "token_file": tok_status.path.display().to_string(),
+                    "token_exists": tok_status.exists,
+                    "token_fingerprint": tok_status.fingerprint,
+                    "snippet": snippet,
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                println!("{snippet}");
+            }
+            Ok(0)
+        }
+        Some(("install", sub)) => {
+            let target = mcp_inst::InstallTarget::parse(
+                sub.get_one::<String>("client").unwrap(),
+                sub.get_one::<String>("file").map(String::as_str),
+            )?;
+            let transport =
+                mcp_cfg::TransportMode::parse(sub.get_one::<String>("transport").unwrap())?;
+            let policy = mcp_cfg::PolicyMode::parse(sub.get_one::<String>("policy").unwrap())?;
+            let server_name = sub.get_one::<String>("name").unwrap().clone();
+            let outcome = mcp_inst::install(
+                ctx,
+                &mcp_inst::InstallOptions {
+                    target,
+                    transport,
+                    policy_override: Some(policy),
+                    server_name,
+                    ssh_target_override: sub.get_one::<String>("ssh-target").cloned(),
+                    public_url_override: sub.get_one::<String>("public-url").cloned(),
+                },
+            )?;
+            if json_mode {
+                let payload = serde_json::json!({
+                    "schema_version": api::SCHEMA_VERSION,
+                    "ok": true,
+                    "client": outcome.client,
+                    "path": outcome.path.display().to_string(),
+                    "server_name": outcome.server_name,
+                    "transport": outcome.transport.as_str(),
+                    "backup_path": outcome.backup_path.as_ref().map(|p| p.display().to_string()),
+                    "created_token": outcome.created_token,
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                ctx.message(
+                    "notice.mcp_installed",
+                    format!(
+                        "{} ({}) -> {} [{}]",
+                        outcome.client,
+                        outcome.transport.as_str(),
+                        outcome.path.display(),
+                        outcome.server_name
+                    ),
+                );
+                if let Some(backup) = outcome.backup_path {
+                    ctx.message("notice.backup", backup.display());
+                }
+            }
+            Ok(0)
+        }
+        Some(("uninstall", sub)) => {
+            let target = mcp_inst::InstallTarget::parse(
+                sub.get_one::<String>("client").unwrap(),
+                sub.get_one::<String>("file").map(String::as_str),
+            )?;
+            let server_name = sub.get_one::<String>("name").unwrap();
+            let outcome = mcp_inst::uninstall(ctx, &target, server_name)?;
+            if json_mode {
+                let payload = serde_json::json!({
+                    "schema_version": api::SCHEMA_VERSION,
+                    "ok": true,
+                    "client": outcome.client,
+                    "path": outcome.path.display().to_string(),
+                    "server_name": outcome.server_name,
+                    "removed": outcome.removed,
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else if outcome.removed {
+                ctx.message(
+                    "notice.mcp_uninstalled",
+                    format!(
+                        "{} [{}] <- {}",
+                        outcome.client,
+                        outcome.server_name,
+                        outcome.path.display()
+                    ),
+                );
+            } else {
+                ctx.message(
+                    "notice.mcp_not_registered",
+                    format!(
+                        "{} [{}] ({})",
+                        outcome.client,
+                        outcome.server_name,
+                        outcome.path.display()
+                    ),
+                );
+            }
+            Ok(0)
+        }
+        Some(("token", sub)) => match sub.subcommand() {
+            Some(("status", _)) => {
+                let st = mcp_cfg::token_status(ctx)?;
+                if json_mode {
+                    let payload = serde_json::json!({
+                        "schema_version": api::SCHEMA_VERSION,
+                        "ok": true,
+                        "exists": st.exists,
+                        "path": st.path.display().to_string(),
+                        "mode": st.mode_octal,
+                        "fingerprint": st.fingerprint,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else {
+                    println!(
+                        "token_file={} exists={} mode={} fingerprint={}",
+                        st.path.display(),
+                        st.exists,
+                        st.mode_octal.as_deref().unwrap_or("-"),
+                        st.fingerprint.as_deref().unwrap_or("none")
+                    );
+                }
+                Ok(0)
+            }
+            Some(("init", tsub)) => {
+                let (token, created) = mcp_cfg::ensure_token(ctx)?;
+                let st = mcp_cfg::token_status(ctx)?;
+                let reveal = tsub.get_flag("reveal");
+                if json_mode {
+                    let mut payload = serde_json::json!({
+                        "schema_version": api::SCHEMA_VERSION,
+                        "ok": true,
+                        "created": created,
+                        "path": st.path.display().to_string(),
+                        "fingerprint": st.fingerprint,
+                        "revealed": reveal,
+                    });
+                    if reveal {
+                        payload["token"] = serde_json::json!(token);
+                    }
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else if reveal {
+                    println!("{token}");
+                } else {
+                    ctx.message(
+                        "notice.mcp_token_ready",
+                        format!(
+                            "{} ({})",
+                            st.path.display(),
+                            st.fingerprint.as_deref().unwrap_or("ready")
+                        ),
+                    );
+                }
+                Ok(0)
+            }
+            Some(("rotate", tsub)) => {
+                let token = mcp_cfg::rotate_token(ctx)?;
+                let st = mcp_cfg::token_status(ctx)?;
+                let reveal = tsub.get_flag("reveal");
+                if json_mode {
+                    let mut payload = serde_json::json!({
+                        "schema_version": api::SCHEMA_VERSION,
+                        "ok": true,
+                        "rotated": true,
+                        "path": st.path.display().to_string(),
+                        "fingerprint": st.fingerprint,
+                        "revealed": reveal,
+                    });
+                    if reveal {
+                        payload["token"] = serde_json::json!(token);
+                    }
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else if reveal {
+                    println!("{token}");
+                } else {
+                    ctx.message(
+                        "notice.mcp_token_rotated",
+                        format!(
+                            "{} ({})",
+                            st.path.display(),
+                            st.fingerprint.as_deref().unwrap_or("rotated")
+                        ),
+                    );
+                }
+                Ok(0)
+            }
+            Some(("set", tsub)) => {
+                let path = if let Some(file) = tsub.get_one::<String>("file") {
+                    mcp_cfg::set_token_from_file(ctx, std::path::Path::new(file))?
+                } else if tsub.get_flag("stdin") {
+                    mcp_cfg::set_token_from_reader(ctx, std::io::stdin())?
+                } else {
+                    return Err(Error::new(
+                        "error.input",
+                        "specify --file <0600-path> or --stdin (plaintext CLI token arguments are forbidden)",
+                    ));
+                };
+                let st = mcp_cfg::token_status(ctx)?;
+                if json_mode {
+                    let payload = serde_json::json!({
+                        "schema_version": api::SCHEMA_VERSION,
+                        "ok": true,
+                        "path": path.display().to_string(),
+                        "fingerprint": st.fingerprint,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else {
+                    ctx.message(
+                        "notice.mcp_token_ready",
+                        format!(
+                            "{} ({})",
+                            path.display(),
+                            st.fingerprint.as_deref().unwrap_or("saved")
+                        ),
+                    );
+                }
+                Ok(0)
+            }
+            _ => Err(Error::new("error.cli", "mcp token")),
+        },
+        Some(("service", sub)) => {
+            let scope = sub.get_one::<String>("scope").unwrap().as_str();
+            match sub.subcommand() {
+                Some(("status", _)) => mcp_svc::status(ctx, scope)?,
+                Some(("install", _)) => mcp_svc::install(ctx, scope)?,
+                Some(("start", _)) => mcp_svc::control(ctx, scope, "start")?,
+                Some(("stop", _)) => mcp_svc::control(ctx, scope, "stop")?,
+                Some(("restart", _)) => mcp_svc::control(ctx, scope, "restart")?,
+                Some(("remove", _)) => mcp_svc::remove(ctx, scope)?,
+                _ => return Err(Error::new("error.cli", "mcp service")),
+            }
+            Ok(0)
+        }
+        Some((other, _)) => Err(Error::new("error.cli", format!("mcp {other}"))),
+    }
 }
 
 #[cfg(test)]

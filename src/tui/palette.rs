@@ -27,6 +27,7 @@ pub(super) enum WorkbenchCommand {
     MihomoFocus,
     GithubProxy,
     SocksSecret,
+    McpAccess,
     Theme,
     TransparentBg,
     ReducedMotion,
@@ -42,7 +43,7 @@ pub(super) enum WorkbenchCommand {
 }
 
 impl WorkbenchCommand {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::Overview,
         Self::Optimization,
         Self::Docker,
@@ -51,6 +52,7 @@ impl WorkbenchCommand {
         Self::MihomoFocus,
         Self::GithubProxy,
         Self::SocksSecret,
+        Self::McpAccess,
         Self::Theme,
         Self::TransparentBg,
         Self::ReducedMotion,
@@ -75,6 +77,7 @@ impl WorkbenchCommand {
             Self::MihomoFocus => "cmd.mihomo_focus",
             Self::GithubProxy => "cmd.github_proxy",
             Self::SocksSecret => "cmd.socks_secret",
+            Self::McpAccess => "cmd.mcp_access",
             Self::Theme => "cmd.theme",
             Self::TransparentBg => "cmd.transparent",
             Self::ReducedMotion => "cmd.motion",
@@ -100,6 +103,7 @@ impl WorkbenchCommand {
             Self::MihomoFocus => "z",
             Self::GithubProxy => "P",
             Self::SocksSecret => "Shift+S",
+            Self::McpAccess => "Shift+M",
             Self::Theme => "T",
             Self::TransparentBg => "T·B",
             Self::ReducedMotion => "T·M",
@@ -130,6 +134,9 @@ impl WorkbenchCommand {
             Self::GithubProxy => "github gh proxy mirror china acceleration 代理 加速 镜像 国内",
             Self::SocksSecret => {
                 "socks socks5 socks5h secret password auth credential uri mihomo 密钥 密码 凭据 代理 连接串"
+            }
+            Self::McpAccess => {
+                "mcp ai agent remote http ssh bearer token json claude codex cursor copy install 密钥 接入 复制 安装 远程"
             }
             Self::Theme => "theme style appearance color 主题 风格 外观 配色",
             Self::TransparentBg => "transparent background glass 透明 背景",

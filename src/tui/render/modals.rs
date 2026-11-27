@@ -2147,3 +2147,284 @@ pub(super) fn draw_socks_secret(app: &App, frame: &mut Frame, area: Rect, alpha:
 
     fx::apply_fade(frame.buffer_mut(), modal, theme.palette.canvas, alpha);
 }
+
+fn build_mcp_access_lines(
+    app: &App,
+    modal: &super::super::state::McpAccessModal,
+    inner_w: usize,
+) -> Vec<Line<'static>> {
+    use crate::mcp::config::{ClientFormat, TransportMode};
+    let theme = &app.theme.active;
+    let ascii = theme.flags.ascii;
+    let i = &app.ctx.i18n;
+    let access = &modal.access;
+    let cfg = &access.config;
+    let inner_w = inner_w.max(1);
+
+    let warn_style = tokens::fg(theme, Role::Warning).add_modifier(Modifier::BOLD);
+    let label_style = tokens::text(theme, Level::Tertiary);
+    let primary_style = tokens::text(theme, Level::Primary);
+    let primary_bold = primary_style.add_modifier(Modifier::BOLD);
+    let accent_bold = tokens::fg(theme, Role::Accent).add_modifier(Modifier::BOLD);
+    let muted_style = tokens::text(theme, Level::Secondary);
+    let info_style = tokens::fg(theme, Role::Info);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for row in wrap_words(i.text("ui.mcp_access_notice"), inner_w) {
+        lines.push(Line::from(Span::styled(row, warn_style)));
+    }
+    if modal.transport == TransportMode::Http && access.needs_plaintext_warning() {
+        for row in wrap_words(i.text("ui.mcp_access_plaintext_warn"), inner_w) {
+            lines.push(Line::from(Span::styled(row, warn_style)));
+        }
+    }
+    lines.push(Line::default());
+
+    let sep = if ascii { " | " } else { " · " };
+    let transport_label = match modal.transport {
+        TransportMode::Http => i.text("ui.mcp_mode_http"),
+        TransportMode::SshStdio => i.text("ui.mcp_mode_ssh"),
+        TransportMode::LocalStdio => i.text("ui.mcp_mode_local"),
+    };
+    let client_label = match modal.client {
+        ClientFormat::Json => "JSON",
+        ClientFormat::Claude => "Claude",
+        ClientFormat::Codex => "Codex",
+        ClientFormat::Cursor => "Cursor",
+    };
+    let header_summary = format!(
+        "{transport_label}{sep}{}={}{sep}F:{client_label}",
+        i.text("ui.mcp_access_policy"),
+        cfg.policy_mode.as_str(),
+    );
+    lines.push(Line::from(vec![
+        Span::styled(format!("{}: ", i.text("ui.mcp_access_mode")), label_style),
+        Span::styled(
+            clip_ascii_safe(
+                &header_summary,
+                inner_w.saturating_sub(i.text("ui.mcp_access_mode").width() + 2),
+                ascii,
+            ),
+            accent_bold,
+        ),
+    ]));
+
+    let endpoint_summary = match modal.transport {
+        TransportMode::Http => access.http_url(),
+        TransportMode::SshStdio => access.ssh_target(),
+        TransportMode::LocalStdio => access.cqs_cmd.clone(),
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("{}: ", i.text("ui.mcp_access_target")), label_style),
+        Span::styled(
+            clip_ascii_safe(
+                &endpoint_summary,
+                inner_w.saturating_sub(i.text("ui.mcp_access_target").width() + 2),
+                ascii,
+            ),
+            primary_bold,
+        ),
+    ]));
+
+    if modal.transport == TransportMode::Http {
+        let auth_val = if cfg.auth_enabled {
+            format!("Bearer {}", crate::mcp::config::MASKED_TOKEN)
+        } else {
+            i.text("ui.socks_preview_auth_loopback").to_owned()
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("{}: ", i.text("ui.mcp_access_auth")), label_style),
+            Span::styled(
+                clip_ascii_safe(
+                    &auth_val,
+                    inner_w.saturating_sub(i.text("ui.mcp_access_auth").width() + 2),
+                    ascii,
+                ),
+                if cfg.auth_enabled {
+                    muted_style
+                } else {
+                    info_style
+                },
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{}: ", i.text("ui.mcp_access_service")),
+                label_style,
+            ),
+            Span::styled(
+                clip_ascii_safe(
+                    &access.service_summary,
+                    inner_w.saturating_sub(i.text("ui.mcp_access_service").width() + 2),
+                    ascii,
+                ),
+                muted_style,
+            ),
+        ]));
+    }
+
+    lines.push(Line::default());
+    let preview_title = i.format("ui.mcp_access_snippet", &[("client", client_label)]);
+    lines.push(Line::from(Span::styled(preview_title, label_style)));
+    let snippet = access.masked_snippet(modal.transport, modal.client);
+    for raw_line in snippet.lines() {
+        for chunk in wrap_cells(raw_line, inner_w) {
+            lines.push(Line::from(Span::styled(chunk, primary_style)));
+        }
+    }
+
+    if modal.transport == TransportMode::Http && cfg.is_loopback() && cfg.public_url.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            i.text("ui.mcp_access_tunnel_hint").to_owned(),
+            label_style,
+        )));
+        for chunk in wrap_cells(&access.ssh_tunnel_cmd(), inner_w) {
+            lines.push(Line::from(Span::styled(chunk, info_style)));
+        }
+    }
+
+    if cfg.auth_enabled {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            i.text("ui.mcp_access_token_file").to_owned(),
+            label_style,
+        )));
+        for chunk in wrap_cells(&access.token_file.display().to_string(), inner_w) {
+            lines.push(Line::from(Span::styled(chunk, label_style)));
+        }
+    }
+
+    lines
+}
+
+pub(in crate::tui) fn mcp_access_max_scroll(app: &App, area: Rect) -> u16 {
+    let Some(modal) = &app.mcp_access else {
+        return 0;
+    };
+    let geom = layout::McpAccessGeometry::compute(
+        area,
+        modal.transport,
+        modal.access.token.is_some(),
+        &app.ctx.i18n,
+        app.theme.active.flags.ascii,
+        app.resolved_density(area),
+    );
+    let lines = build_mcp_access_lines(app, modal, geom.body.width as usize);
+    lines.len().saturating_sub(geom.body.height as usize) as u16
+}
+
+pub(super) fn draw_mcp_access(app: &App, frame: &mut Frame, area: Rect, alpha: f64) {
+    let Some(modal_state) = &app.mcp_access else {
+        return;
+    };
+    let theme = &app.theme.active;
+    let ascii = theme.flags.ascii;
+    let i = &app.ctx.i18n;
+    let is_http = modal_state.transport == crate::mcp::config::TransportMode::Http;
+    let has_token = modal_state.access.token.is_some();
+    let geom = layout::McpAccessGeometry::compute(
+        area,
+        modal_state.transport,
+        has_token,
+        i,
+        ascii,
+        app.resolved_density(area),
+    );
+    let modal = geom.modal;
+
+    fx::apply_shadow(frame.buffer_mut(), modal, area, theme);
+    tokens::draw_surface_card(frame, modal, theme, Role::Elevated, Role::BorderFocus, true);
+    let bg = if theme.flags.paint_bg {
+        tokens::color(theme, Role::Elevated)
+    } else {
+        Color::Reset
+    };
+
+    let title = format!(" {} ", i.text("ui.mcp_access_title"));
+    frame.buffer_mut().set_stringn(
+        modal.x + 2,
+        modal.y,
+        clip_ascii_safe(&title, modal.width.saturating_sub(4) as usize, ascii),
+        modal.width.saturating_sub(4) as usize,
+        tokens::fg(theme, Role::Accent)
+            .bg(bg)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let lines = build_mcp_access_lines(app, modal_state, geom.body.width as usize);
+    let total_lines = lines.len();
+    let max_scroll = total_lines.saturating_sub(geom.body.height as usize) as u16;
+    let scroll = modal_state.scroll.min(max_scroll);
+
+    if max_scroll > 0 {
+        let first = scroll as usize + 1;
+        let last = (scroll as usize + geom.body.height as usize).min(total_lines);
+        let pos = format!(" {first}-{last}/{total_lines} ");
+        let pos_w = pos.width() as u16;
+        if modal.width > pos_w + 8 {
+            frame.buffer_mut().set_stringn(
+                modal.right().saturating_sub(pos_w + 2),
+                modal.y,
+                &pos,
+                pos_w as usize,
+                tokens::text(theme, Level::Tertiary).bg(bg),
+            );
+        }
+    }
+
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), geom.body);
+
+    if let Some(rule_y) = geom.rule_y {
+        tokens::draw_rule(
+            frame.buffer_mut(),
+            modal.x + 2,
+            rule_y,
+            modal.width.saturating_sub(4),
+            theme,
+            bg,
+        );
+    }
+
+    let secret_label = if is_http && has_token {
+        i.text("ui.mcp_access_btn_token")
+    } else {
+        i.text("ui.mcp_access_btn_tunnel")
+    };
+    let buf = frame.buffer_mut();
+    draw_secret_chip(
+        app,
+        buf,
+        geom.btn_mode,
+        "Tab",
+        i.text("ui.mcp_access_btn_mode"),
+        false,
+        bg,
+    );
+    draw_secret_chip(app, buf, geom.btn_json, "1", "JSON", true, bg);
+    draw_secret_chip(app, buf, geom.btn_claude, "2", "Claude", false, bg);
+    draw_secret_chip(app, buf, geom.btn_codex, "3", "Codex", false, bg);
+    draw_secret_chip(app, buf, geom.btn_secret, "4", secret_label, false, bg);
+    if is_http {
+        draw_secret_chip(
+            app,
+            buf,
+            geom.btn_rotate,
+            "R",
+            i.text("ui.mcp_access_btn_rotate"),
+            false,
+            bg,
+        );
+    }
+    draw_secret_chip(
+        app,
+        buf,
+        geom.btn_close,
+        "Esc",
+        i.text("key.close"),
+        false,
+        bg,
+    );
+
+    fx::apply_fade(frame.buffer_mut(), modal, theme.palette.canvas, alpha);
+}

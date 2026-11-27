@@ -1157,5 +1157,238 @@ fn mcp_stdio_covers_all_13_tools_7_resources_4_prompts_and_error_recovery() {
     assert_eq!(bad_req["error"]["code"], -32600);
     assert_eq!(client.request("ping", json!({}))["result"], json!({}));
 
+    // Anti-self-escalation: MCP control-plane mutations are blocked over MCP even with confirm=true
+    let self_mut = client.request(
+        "tools/call",
+        json!({
+            "name": "cqs_run_action",
+            "arguments": {
+                "action_id": "ai.mcp.configure",
+                "parameters": { "mcp_listen": "0.0.0.0", "mcp_policy": "allow_danger" },
+                "confirm": true
+            }
+        }),
+    );
+    assert_eq!(self_mut["result"]["isError"], true);
+    assert_eq!(
+        self_mut["result"]["structuredContent"]["status"],
+        "policy_denied"
+    );
+    let mcp_stat = client.request(
+        "tools/call",
+        json!({
+            "name": "cqs_run_action",
+            "arguments": { "action_id": "ai.mcp.status" }
+        }),
+    );
+    assert_eq!(mcp_stat["result"]["isError"], false);
+    assert_eq!(
+        mcp_stat["result"]["structuredContent"]["status"],
+        "completed"
+    );
+
     client.finish();
+}
+
+#[test]
+fn mcp_cli_token_config_install_uninstall_and_streamable_http_server_work_end_to_end() {
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
+
+    let temp = tempfile::tempdir().unwrap();
+    let run_cqs = |home: &Path, args: &[&str]| cqs(home).args(args).output().unwrap();
+    let parse_json = |bytes: &[u8]| -> Value { serde_json::from_slice(bytes).unwrap() };
+
+    // 1. Token status -> absent; init -> creates 0600 token without echoing plaintext
+    let st_empty = run_cqs(temp.path(), &["--json", "mcp", "token", "status"]);
+    assert!(st_empty.status.success());
+    let st_json = parse_json(&st_empty.stdout);
+    assert_eq!(st_json["exists"], false);
+
+    let init_redacted = run_cqs(temp.path(), &["--json", "mcp", "token", "init"]);
+    assert!(init_redacted.status.success());
+    let init_json = parse_json(&init_redacted.stdout);
+    assert_eq!(init_json["created"], true);
+    assert_eq!(init_json["revealed"], false);
+    assert!(init_json.get("token").is_none());
+
+    // 2. `cqs mcp config` redacts by default and outputs real token only with `--reveal`
+    let cfg_redacted = run_cqs(
+        temp.path(),
+        &[
+            "--json",
+            "mcp",
+            "config",
+            "--transport",
+            "http",
+            "--client",
+            "json",
+            "--public-url",
+            "https://mcp.example.com/mcp",
+        ],
+    );
+    assert!(cfg_redacted.status.success());
+    let cfg_red_json = parse_json(&cfg_redacted.stdout);
+    assert_eq!(cfg_red_json["revealed"], false);
+    assert!(
+        cfg_red_json["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("<MCP_TOKEN>")
+    );
+
+    let cfg_revealed = run_cqs(
+        temp.path(),
+        &[
+            "--json",
+            "mcp",
+            "config",
+            "--transport",
+            "http",
+            "--client",
+            "json",
+            "--reveal",
+        ],
+    );
+    assert!(cfg_revealed.status.success());
+    let cfg_rev_json = parse_json(&cfg_revealed.stdout);
+    assert_eq!(cfg_rev_json["revealed"], true);
+    let snippet = cfg_rev_json["snippet"].as_str().unwrap();
+    assert!(snippet.contains("Bearer cqs_mcp_"), "{snippet}");
+
+    // Extract live Bearer token via `cqs mcp token init --reveal`
+    let tok_out = run_cqs(temp.path(), &["mcp", "token", "init", "--reveal"]);
+    assert!(tok_out.status.success());
+    let token = String::from_utf8(tok_out.stdout).unwrap().trim().to_owned();
+    assert!(token.starts_with("cqs_mcp_"));
+
+    // 3. Local client install & uninstall across Claude, Codex, Cursor, and custom --file
+    let custom_file = temp.path().join("custom_mcp.json");
+    for (client_name, extra) in [
+        ("claude", vec![]),
+        ("codex", vec![]),
+        ("cursor", vec![]),
+        ("file", vec!["--file", custom_file.to_str().unwrap()]),
+    ] {
+        let mut args = vec![
+            "--json",
+            "mcp",
+            "install",
+            "--client",
+            client_name,
+            "--transport",
+            "local_stdio",
+            "--policy",
+            "read_only",
+        ];
+        args.extend(extra.iter().copied());
+        let inst = run_cqs(temp.path(), &args);
+        assert!(
+            inst.status.success(),
+            "install {client_name}: {}",
+            String::from_utf8_lossy(&inst.stderr)
+        );
+        let inst_json = parse_json(&inst.stdout);
+        assert_eq!(inst_json["ok"], true);
+        assert_eq!(inst_json["client"], client_name);
+
+        let mut uargs = vec!["--json", "mcp", "uninstall", "--client", client_name];
+        uargs.extend(extra.iter().copied());
+        let uninst = run_cqs(temp.path(), &uargs);
+        assert!(uninst.status.success());
+        let uninst_json = parse_json(&uninst.stdout);
+        assert_eq!(uninst_json["removed"], true);
+    }
+
+    // 4. Non-loopback HTTP with `--no-auth` must be rejected with exit code 2
+    let bad_serve = run_cqs(
+        temp.path(),
+        &["mcp", "serve", "--listen", "0.0.0.0", "--no-auth"],
+    );
+    assert_eq!(bad_serve.status.code(), Some(2));
+
+    // 5. Live `cqs mcp serve` child process over loopback TCP: 401 -> 403 -> 200 initialize ->
+    // 200 tools/list -> anti-self-escalation denial even under --allow-danger
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+
+    let mut child = cqs(temp.path())
+        .args([
+            "--lang",
+            "en-US",
+            "mcp",
+            "serve",
+            "--listen",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--allow-danger",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let addr = format!("127.0.0.1:{port}");
+    let mut ready = false;
+    for _ in 0..50 {
+        if TcpStream::connect(&addr).is_ok() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    assert!(ready, "cqs mcp serve did not start listening on {addr}");
+
+    let exchange = |raw: &str| -> (u16, String) {
+        let mut s = TcpStream::connect(&addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        s.write_all(raw.as_bytes()).unwrap();
+        s.flush().unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        let (head, body) = out.split_once("\r\n\r\n").unwrap();
+        let code: u16 = head
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        (code, body.to_owned())
+    };
+
+    let ping = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    let (s401, _) = exchange(&format!(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n{ping}",
+        ping.len()
+    ));
+    assert_eq!(s401, 401);
+
+    let (s403, _) = exchange(&format!(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nOrigin: https://evil.example.org\r\nContent-Length: {}\r\n\r\n{ping}",
+        ping.len()
+    ));
+    assert_eq!(s403, 403);
+
+    let self_mut_body = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"cqs_run_action","arguments":{"action_id":"ai.mcp.token.rotate","confirm":true}}}"#;
+    let (s200, body) = exchange(&format!(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: {}\r\n\r\n{self_mut_body}",
+        self_mut_body.len()
+    ));
+    assert_eq!(s200, 200);
+    let parsed: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["result"]["isError"], true);
+    assert_eq!(
+        parsed["result"]["structuredContent"]["status"],
+        "policy_denied"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
 }

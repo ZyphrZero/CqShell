@@ -2956,6 +2956,120 @@ impl SocksSecretGeometry {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct McpAccessGeometry {
+    pub modal: Rect,
+    pub body: Rect,
+    pub rule_y: Option<u16>,
+    pub btn_mode: Rect,
+    pub btn_json: Rect,
+    pub btn_claude: Rect,
+    pub btn_codex: Rect,
+    pub btn_secret: Rect,
+    pub btn_rotate: Rect,
+    pub btn_close: Rect,
+}
+
+impl McpAccessGeometry {
+    pub fn compute(
+        area: Rect,
+        transport: crate::mcp::config::TransportMode,
+        has_token: bool,
+        i18n: &I18n,
+        ascii: bool,
+        density: ResolvedDensity,
+    ) -> Self {
+        let expanded = density.is_expanded() && area.height >= 24;
+        let margin_x = if area.width < 60 { 2 } else { 4 };
+        let modal_w = 92.min(area.width.saturating_sub(margin_x));
+        let max_h = area.height.saturating_sub(2).max(1);
+        let btn_rows_h = if expanded { 5u16 } else { 1u16 };
+        let modal_h = (22 + btn_rows_h)
+            .min(max_h)
+            .max((12 + btn_rows_h).min(max_h));
+        let modal = centered(area, modal_w, modal_h);
+        let rule_y =
+            (modal.height >= 9 + btn_rows_h).then(|| modal.bottom().saturating_sub(2 + btn_rows_h));
+        let body_h = modal
+            .height
+            .saturating_sub(if rule_y.is_some() { 4 } else { 3 } + btn_rows_h);
+        let body = Rect::new(
+            modal.x + 2,
+            modal.y + 2,
+            modal.width.saturating_sub(4),
+            body_h,
+        );
+
+        let is_http = transport == crate::mcp::config::TransportMode::Http;
+        let secret_label = if is_http && has_token {
+            i18n.text("ui.mcp_access_btn_token")
+        } else {
+            i18n.text("ui.mcp_access_btn_tunnel")
+        };
+
+        let (btn_mode, btn_json, btn_claude, btn_codex, btn_secret, btn_rotate, btn_close) =
+            if expanded {
+                let row1_y = modal.bottom().saturating_sub(6);
+                let row2_y = row1_y + 3;
+                let row1 = split_touch_buttons(
+                    Rect::new(modal.x + 2, row1_y, modal.width.saturating_sub(4), 2),
+                    4,
+                );
+                let row2 = split_touch_buttons(
+                    Rect::new(modal.x + 2, row2_y, modal.width.saturating_sub(4), 2),
+                    3,
+                );
+                (
+                    row1[0], row1[1], row1[2], row1[3], row2[0], row2[1], row2[2],
+                )
+            } else {
+                let btn_y = modal.bottom().saturating_sub(2);
+                let max_right = modal.right().saturating_sub(2);
+                let mut x = modal.x + 2;
+                let fmt_btn = |key: &str, label: &str| -> u16 {
+                    if ascii {
+                        format!("[{key} {label}]").width() as u16
+                    } else {
+                        format!(" {key} {label} ").width() as u16
+                    }
+                };
+                let mut place = |w: u16| -> Rect {
+                    if x + w > max_right || w == 0 {
+                        return Rect::default();
+                    }
+                    let r = Rect::new(x, btn_y, w, 1);
+                    x = x.saturating_add(w + 1);
+                    r
+                };
+                let b_mode = place(fmt_btn("Tab", i18n.text("ui.mcp_access_btn_mode")));
+                let b_json = place(fmt_btn("1", "JSON"));
+                let b_claude = place(fmt_btn("2", "Claude"));
+                let b_codex = place(fmt_btn("3", "Codex"));
+                let b_secret = place(fmt_btn("4", secret_label));
+                let b_rot = if is_http {
+                    place(fmt_btn("R", i18n.text("ui.mcp_access_btn_rotate")))
+                } else {
+                    Rect::default()
+                };
+                let b_close = place(fmt_btn("Esc", i18n.text("key.close")));
+                (b_mode, b_json, b_claude, b_codex, b_secret, b_rot, b_close)
+            };
+
+        Self {
+            modal,
+            body,
+            rule_y,
+            btn_mode,
+            btn_json,
+            btn_claude,
+            btn_codex,
+            btn_secret,
+            btn_rotate,
+            btn_close,
+        }
+    }
+}
+
 pub(super) fn full_log_modal(area: Rect) -> (Rect, Rect) {
     let margin_x = if area.width < 60 { 2 } else { 4 };
     let modal = centered(

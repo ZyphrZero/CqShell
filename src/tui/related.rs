@@ -202,6 +202,63 @@ pub(super) fn clash_socks(
     }
 }
 
+/// Live status summary for `ai.mcp.*` actions in the Agent tools workbench using cached config.
+pub(super) fn ai_mcp(
+    summary: Option<&crate::mcp::config::McpSummary>,
+    snapshot: &Snapshot,
+    i18n: &I18n,
+) -> Related {
+    let public_ip = value(&snapshot.public.ipv4).map(String::as_str);
+    match summary {
+        Some(summary) => {
+            let cfg = &summary.config;
+            let endpoint = format!("{}{}", cfg.listen_endpoint(), cfg.endpoint_path);
+            let policy_badge = match cfg.policy_mode {
+                crate::mcp::config::PolicyMode::ReadOnly => "RO",
+                crate::mcp::config::PolicyMode::Standard => "STD",
+                crate::mcp::config::PolicyMode::AllowDanger => "DANGER",
+            };
+            let auth_summary = if cfg.auth_enabled {
+                match &summary.token_fingerprint {
+                    Some(fp) => lit(&format!("Bearer ({fp})")),
+                    None => unlit(i18n.text("ui.mcp_token_uninitialized")),
+                }
+            } else {
+                unlit(i18n.text("ui.socks_preview_auth_loopback"))
+            };
+            let url = cfg.effective_http_url(public_ip);
+            Related {
+                tag: vec![
+                    Segment::new(lit(&endpoint), Style::default()),
+                    Segment::new(policy_badge.to_owned(), Style::default()),
+                ],
+                state: vec![
+                    line(
+                        i18n,
+                        "dash.mcp_endpoint",
+                        lit(&format!("{endpoint} · {policy_badge}")),
+                    ),
+                    line(i18n, "dash.mcp_auth", auth_summary),
+                    line(i18n, "dash.mcp_url", url),
+                ],
+                matches_current: never,
+            }
+        }
+        None => Related {
+            tag: vec![Segment::new(
+                unlit(i18n.text("dash.not_configured")),
+                Style::default(),
+            )],
+            state: vec![line(
+                i18n,
+                "dash.mcp_endpoint",
+                unlit(i18n.text("dash.not_configured")),
+            )],
+            matches_current: never,
+        },
+    }
+}
+
 /// The Related_Reading of `spec`, or `None` for an Action the table does not list. `now` is
 /// the frame clock, which dates the public lookup.
 pub(super) fn related(

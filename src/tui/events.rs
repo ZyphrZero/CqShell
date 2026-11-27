@@ -5,8 +5,8 @@
 use super::{
     layout::{
         self, CommandPaletteGeometry, ConfirmationGeometry, FormGeometry, LayoutRegions,
-        PickerGeometry, PromptPreviewGeometry, SocksSecretGeometry, ThumbAction, hit_best, hit_opt,
-        hit_rect,
+        McpAccessGeometry, PickerGeometry, PromptPreviewGeometry, SocksSecretGeometry, ThumbAction,
+        hit_best, hit_opt, hit_rect,
     },
     palette::{self, PaletteItem},
     selection::{self, DragSelection, TextPane},
@@ -47,6 +47,10 @@ impl App {
         // 2b. Transient SOCKS5 / 5h credential reveal modal (never written to task logs)
         if self.socks_secret.is_some() {
             return self.socks_secret_key(key);
+        }
+        // 2c. Transient MCP access & Bearer token copy modal (always masked on screen)
+        if self.mcp_access.is_some() {
+            return self.mcp_access_key(key);
         }
         // 3. Form / Picker
         if self.form.as_ref().is_some_and(|form| form.picker.is_some()) {
@@ -289,6 +293,7 @@ impl App {
             KeyCode::Char('t' | 'T') => self.open_theme_drawer(),
             KeyCode::Char('p' | 'P') if idle => return self.open_github_proxy_form(),
             KeyCode::Char('S') => return self.open_socks_secret_modal(),
+            KeyCode::Char('M') => return self.open_mcp_access_modal(),
             KeyCode::Char('r' | 'R') => return Ok(Effect::Refresh),
             KeyCode::Char('n' | 'N') => return Ok(Effect::PublicIp),
             KeyCode::Char('g' | 'G') => {
@@ -662,6 +667,98 @@ impl App {
         Ok(Effect::None)
     }
 
+    fn mcp_access_key(&mut self, key: KeyEvent) -> Result<Effect> {
+        use crate::mcp::config::{ClientFormat, TransportMode};
+        let max_s = super::render::mcp_access_max_scroll(self, self.viewport);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'Q') => {
+                self.close_mcp_access();
+            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.transport = m.transport.next();
+                    m.scroll = 0;
+                }
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.transport = m.transport.prev();
+                    m.scroll = 0;
+                }
+            }
+            KeyCode::Char('f' | 'F') => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.client = m.client.next();
+                    m.scroll = 0;
+                }
+            }
+            KeyCode::Char('1') => {
+                if let Some(m) = &self.mcp_access {
+                    let text = m.access.copy_snippet(m.transport, ClientFormat::Json);
+                    return Ok(self.copy_mcp_field(text, "ui.mcp_access_field_json"));
+                }
+            }
+            KeyCode::Char('2') => {
+                if let Some(m) = &self.mcp_access {
+                    let text = m.access.copy_snippet(m.transport, ClientFormat::Claude);
+                    return Ok(self.copy_mcp_field(text, "ui.mcp_access_field_claude"));
+                }
+            }
+            KeyCode::Char('3') => {
+                if let Some(m) = &self.mcp_access {
+                    let text = m.access.copy_snippet(m.transport, ClientFormat::Codex);
+                    return Ok(self.copy_mcp_field(text, "ui.mcp_access_field_codex"));
+                }
+            }
+            KeyCode::Char('4') => {
+                if let Some(m) = &self.mcp_access {
+                    if m.transport == TransportMode::Http
+                        && let Some(tok) = m.access.token.clone()
+                    {
+                        return Ok(self.copy_mcp_field(tok, "ui.mcp_access_field_token"));
+                    }
+                    let tunnel = m.access.ssh_tunnel_cmd();
+                    return Ok(self.copy_mcp_field(tunnel, "ui.mcp_access_field_tunnel"));
+                }
+            }
+            KeyCode::Char('r' | 'R') => {
+                self.rotate_mcp_access_token();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.scroll = m.scroll.min(max_s).saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.scroll = m.scroll.saturating_add(1).min(max_s);
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.scroll = m.scroll.min(max_s).saturating_sub(6);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.scroll = m.scroll.saturating_add(6).min(max_s);
+                }
+            }
+            KeyCode::Home => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.scroll = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(m) = self.mcp_access.as_mut() {
+                    m.scroll = max_s;
+                }
+            }
+            _ => {}
+        }
+        Ok(Effect::None)
+    }
+
     fn form_key(&mut self, key: KeyEvent) -> Result<Effect> {
         if key.code == KeyCode::Esc {
             self.form = None;
@@ -678,6 +775,15 @@ impl App {
                 .is_some_and(|f| f.spec.id == "clash.socks.configure")
         {
             return self.open_socks_secret_modal();
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('m' | 'M'))
+            && self
+                .form
+                .as_ref()
+                .is_some_and(|f| f.spec.id.starts_with("ai.mcp."))
+        {
+            return self.open_mcp_access_modal();
         }
         let form = self.form.as_mut().expect("active form");
         let n = form.values.len();
@@ -1042,6 +1148,78 @@ impl App {
                     } else if btn == Some(4) {
                         let cmd = modal.creds.curl_cmd.clone();
                         return Ok(self.copy_socks_secret_field(cmd, "ui.socks_secret_field_curl"));
+                    }
+                }
+                _ => {}
+            }
+            return Ok(Effect::None);
+        }
+
+        // 2c. Transient MCP access & Bearer token copy modal
+        if let Some(modal) = &self.mcp_access {
+            use crate::mcp::config::{ClientFormat, TransportMode};
+            let transport = modal.transport;
+            let has_token = modal.access.token.is_some();
+            let geom = McpAccessGeometry::compute(
+                area,
+                transport,
+                has_token,
+                &self.ctx.i18n,
+                self.theme.active.flags.ascii,
+                density,
+            );
+            let max_s = super::render::mcp_access_max_scroll(self, area);
+            match event.kind {
+                MouseEventKind::ScrollUp => {
+                    if let Some(m) = self.mcp_access.as_mut() {
+                        m.scroll = m.scroll.min(max_s).saturating_sub(2);
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if let Some(m) = self.mcp_access.as_mut() {
+                        m.scroll = m.scroll.saturating_add(2).min(max_s);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let btn = hit_best(
+                        [
+                            (geom.btn_close, 0u8),
+                            (geom.btn_mode, 1u8),
+                            (geom.btn_json, 2u8),
+                            (geom.btn_claude, 3u8),
+                            (geom.btn_codex, 4u8),
+                            (geom.btn_secret, 5u8),
+                            (geom.btn_rotate, 6u8),
+                        ],
+                        point,
+                        slop,
+                    );
+                    if !geom.modal.contains(point) || btn == Some(0) {
+                        self.close_mcp_access();
+                    } else if btn == Some(1) {
+                        if let Some(m) = self.mcp_access.as_mut() {
+                            m.transport = m.transport.next();
+                            m.scroll = 0;
+                        }
+                    } else if btn == Some(2) {
+                        let text = modal.access.copy_snippet(transport, ClientFormat::Json);
+                        return Ok(self.copy_mcp_field(text, "ui.mcp_access_field_json"));
+                    } else if btn == Some(3) {
+                        let text = modal.access.copy_snippet(transport, ClientFormat::Claude);
+                        return Ok(self.copy_mcp_field(text, "ui.mcp_access_field_claude"));
+                    } else if btn == Some(4) {
+                        let text = modal.access.copy_snippet(transport, ClientFormat::Codex);
+                        return Ok(self.copy_mcp_field(text, "ui.mcp_access_field_codex"));
+                    } else if btn == Some(5) {
+                        if transport == TransportMode::Http
+                            && let Some(tok) = modal.access.token.clone()
+                        {
+                            return Ok(self.copy_mcp_field(tok, "ui.mcp_access_field_token"));
+                        }
+                        let tunnel = modal.access.ssh_tunnel_cmd();
+                        return Ok(self.copy_mcp_field(tunnel, "ui.mcp_access_field_tunnel"));
+                    } else if btn == Some(6) {
+                        self.rotate_mcp_access_token();
                     }
                 }
                 _ => {}

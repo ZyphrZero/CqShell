@@ -4450,3 +4450,151 @@ fn touch_portrait_82x54_and_narrow_52x36_full_app_workflows_and_plain_ascii() {
         app_en.handle_key(key(KeyCode::Esc)).unwrap();
     }
 }
+
+#[test]
+fn mcp_access_modal_masks_tokens_copies_via_osc52_switches_modes_rotates_and_is_pure_ascii() {
+    use crate::mcp::config::{ClientFormat, MASKED_TOKEN, TransportMode, read_token};
+    use crate::tui::layout::McpAccessGeometry;
+    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    let click = |x: u16, y: u16| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+
+    let (_temp, mut app) = test_app("zh-CN");
+    let ai_idx = GROUPS.iter().position(|g| *g == "ai").unwrap();
+    app.goto_nav(NavTarget::Group(ai_idx));
+
+    // 1. `ai` group renders 2 sections & footer displays Shift+M MCP access shortcut
+    let ai_screen = render_clash_frame_text(&mut app, 120, 36);
+    assert!(ai_screen.contains("AI CLI 工具"), "{ai_screen}");
+    assert!(ai_screen.contains("MCP 服务与接入"), "{ai_screen}");
+    assert!(ai_screen.contains("MCP 接入"), "{ai_screen}");
+
+    // 2. Pressing Shift+M opens McpAccessModal, auto-initializes 0600 token, masks it on screen
+    app.handle_key(key(KeyCode::Char('M'))).unwrap();
+    assert!(app.mcp_access.is_some());
+    assert_eq!(app.overlay_kind(), 14);
+    let live_token = read_token(&app.ctx)
+        .unwrap()
+        .expect("0600 token initialized");
+    assert!(live_token.starts_with("cqs_mcp_"));
+
+    let modal_text = render_clash_frame_text(&mut app, 120, 36);
+    assert!(modal_text.contains("MCP 接入与脱敏密钥卡"), "{modal_text}");
+    assert!(modal_text.contains(MASKED_TOKEN), "{modal_text}");
+    assert!(
+        !modal_text.contains(&live_token),
+        "raw MCP token leaked on screen:\n{modal_text}"
+    );
+
+    // 3. Keys 1/2/3/4 copy real JSON / Claude / Codex / Bearer token via OSC 52 without leaking into toast
+    for (ch, needle) in [
+        ('1', "\"mcpServers\""),
+        ('2', "claude mcp add --transport http"),
+        ('3', "[mcp_servers.cqs"),
+        ('4', live_token.as_str()),
+    ] {
+        let eff = app.handle_key(key(KeyCode::Char(ch))).unwrap();
+        let super::state::Effect::Copy(copied) = eff else {
+            panic!("key {ch} should emit Effect::Copy");
+        };
+        assert!(copied.contains(&live_token), "key {ch} missing live token");
+        assert!(
+            copied.contains(needle),
+            "key {ch} missing {needle}: {copied}"
+        );
+        assert!(
+            !app.toast
+                .as_ref()
+                .is_some_and(|t| t.text.contains(&live_token)),
+            "toast leaked live token on key {ch}"
+        );
+    }
+
+    // 4. `R` rotates token in place; subsequent copy uses the new token and screen still masks it
+    app.handle_key(key(KeyCode::Char('r'))).unwrap();
+    let rotated = read_token(&app.ctx).unwrap().expect("rotated token");
+    assert_ne!(rotated, live_token);
+    let eff = app.handle_key(key(KeyCode::Char('4'))).unwrap();
+    assert!(matches!(eff, super::state::Effect::Copy(ref t) if t == &rotated));
+    let after_rot_text = render_clash_frame_text(&mut app, 120, 36);
+    assert!(!after_rot_text.contains(&rotated));
+    assert!(!after_rot_text.contains(&live_token));
+
+    // 5. Tab switches transport (HTTP -> SSH stdio -> Local stdio); F cycles preview client format
+    app.handle_key(key(KeyCode::Tab)).unwrap();
+    assert_eq!(
+        app.mcp_access.as_ref().unwrap().transport,
+        TransportMode::SshStdio
+    );
+    app.handle_key(key(KeyCode::Char('f'))).unwrap();
+    assert_eq!(
+        app.mcp_access.as_ref().unwrap().client,
+        ClientFormat::Claude
+    );
+    // In SSH mode, key `4` copies SSH tunnel command
+    let tun_eff = app.handle_key(key(KeyCode::Char('4'))).unwrap();
+    assert!(matches!(tun_eff, super::state::Effect::Copy(ref c) if c.starts_with("ssh -N -L ")));
+
+    // 6. Mouse click on shared McpAccessGeometry buttons works and closes cleanly
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+    let geom = McpAccessGeometry::compute(
+        area,
+        app.mcp_access.as_ref().unwrap().transport,
+        true,
+        &app.ctx.i18n,
+        false,
+        app.resolved_density(area),
+    );
+    app.handle_mouse(click(geom.btn_mode.x + 1, geom.btn_mode.y), area)
+        .unwrap();
+    assert_eq!(
+        app.mcp_access.as_ref().unwrap().transport,
+        TransportMode::LocalStdio
+    );
+    app.handle_mouse(click(geom.btn_close.x + 1, geom.btn_close.y), area)
+        .unwrap();
+    assert!(app.mcp_access.is_none());
+
+    // 7. `ai.mcp.configure` form prefills saved config and supports Ctrl+M shortcut to open card
+    let cfg_spec = crate::actions::find("ai.mcp.configure").unwrap();
+    app.open_form(cfg_spec, super::state::FormMode::Run)
+        .unwrap();
+    assert!(app.form.is_some());
+    app.handle_key(crossterm::event::KeyEvent::new(
+        KeyCode::Char('m'),
+        KeyModifiers::CONTROL,
+    ))
+    .unwrap();
+    assert!(app.mcp_access.is_some());
+    app.close_mcp_access();
+    app.form = None;
+
+    // 8. Plain ASCII theme in en-US stays 100% pure 7-bit ASCII across 120x36, 80x24, 59x24, 40x16
+    let (_temp_en, mut app_en) = test_app("en-US");
+    app_en
+        .preview_theme("plain", Background::Detected((0, 0, 0)))
+        .unwrap();
+    app_en.goto_nav(NavTarget::Group(ai_idx));
+    app_en.handle_key(key(KeyCode::Char('M'))).unwrap();
+    let en_token = read_token(&app_en.ctx).unwrap().unwrap();
+    for transport in TransportMode::ALL {
+        app_en.mcp_access.as_mut().unwrap().transport = transport;
+        for (w, h) in [(120u16, 36u16), (80, 24), (59, 24), (40, 16)] {
+            let rendered = render_clash_frame_text(&mut app_en, w, h);
+            assert!(
+                rendered.is_ascii(),
+                "non-ASCII in plain McpAccessModal ({transport:?} {w}x{h}):\n{rendered}"
+            );
+            assert!(
+                !rendered.contains(&en_token),
+                "raw token leaked in plain McpAccessModal ({transport:?} {w}x{h})"
+            );
+        }
+    }
+}

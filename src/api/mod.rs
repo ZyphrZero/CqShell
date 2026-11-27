@@ -26,6 +26,9 @@ pub struct ExecutionPolicy {
     pub allow_danger: bool,
     pub allow_groups: Vec<String>,
     pub deny_actions: Vec<String>,
+    /// Blocks MCP-control-plane mutating actions (`ai.mcp.configure`, `ai.mcp.token.*`,
+    /// `ai.mcp.service.*`, `ai.mcp.install/uninstall`) from being invoked via MCP itself.
+    pub block_mcp_control_mutations: bool,
 }
 
 impl ExecutionPolicy {
@@ -36,18 +39,21 @@ impl ExecutionPolicy {
             allow_danger: true,
             allow_groups: Vec::new(),
             deny_actions: Vec::new(),
+            block_mcp_control_mutations: false,
         }
     }
 
     /// Safe default policy for `cqs mcp`: read-only queries and reversible/standard mutations
     /// (with explicit `confirm: true`) are allowed; destructive/high-risk mutations require
-    /// starting the server with `--allow-danger`.
+    /// starting the server with `--allow-danger`. Self-mutating MCP control-plane actions are
+    /// always blocked from invocation over MCP.
     pub fn mcp_default() -> Self {
         Self {
             read_only: false,
             allow_danger: false,
             allow_groups: Vec::new(),
             deny_actions: Vec::new(),
+            block_mcp_control_mutations: true,
         }
     }
 
@@ -75,6 +81,15 @@ impl ExecutionPolicy {
 
     /// Checks whether `spec` with resolved `parameters` is permitted under this policy.
     pub fn check_action(&self, spec: &Spec, parameters: &Parameters) -> Result<()> {
+        if self.block_mcp_control_mutations && spec.is_mcp_control_mutation() {
+            return Err(Error::new(
+                "error.policy",
+                format!(
+                    "action '{}' modifies MCP server or client control-plane state and cannot be invoked over MCP; run it locally via CLI or TUI",
+                    spec.id
+                ),
+            ));
+        }
         if !self.allow_groups.is_empty() && !self.allow_groups.iter().any(|g| g == spec.group) {
             return Err(Error::new(
                 "error.policy",
@@ -164,6 +179,7 @@ impl ExecutionPolicy {
                 "auto_reboot_disabled": true,
                 "interactive_tty_blocked": true,
                 "explicit_confirm_required_for_mutations": true,
+                "mcp_self_escalation_blocked": self.block_mcp_control_mutations,
             }
         })
     }
@@ -1068,6 +1084,32 @@ mod tests {
         assert!(allow_danger.check_action(&clean, &full_clean).is_ok());
         assert!(allow_danger.check_action(&ssh, &ssh.defaults()).is_ok());
 
+        // Anti-self-escalation: MCP control-plane mutations are blocked even under --allow-danger,
+        // while read-only `ai.mcp.status` remains allowed and direct CLI `permissive()` allows all.
+        let mcp_status = actions::find("ai.mcp.status").unwrap();
+        let mcp_cfg = actions::find("ai.mcp.configure").unwrap();
+        let mcp_rot = actions::find("ai.mcp.token.rotate").unwrap();
+        let mcp_svc = actions::find("ai.mcp.service.install").unwrap();
+        assert!(
+            allow_danger
+                .check_action(&mcp_status, &mcp_status.defaults())
+                .is_ok()
+        );
+        for blocked in [&mcp_cfg, &mcp_rot, &mcp_svc] {
+            assert_eq!(
+                allow_danger
+                    .check_action(blocked, &blocked.defaults())
+                    .unwrap_err()
+                    .key,
+                "error.policy"
+            );
+            assert!(
+                ExecutionPolicy::permissive()
+                    .check_action(blocked, &blocked.defaults())
+                    .is_ok()
+            );
+        }
+
         let mut ro = ExecutionPolicy::mcp_default();
         ro.read_only = true;
         assert!(ro.check_action(&info, &info.defaults()).is_ok());
@@ -1154,7 +1196,7 @@ mod tests {
         let ctx = test_ctx(temp.path());
 
         let all = list_actions_json(&ctx, &ActionFilter::default(), None);
-        assert_eq!(all["total"], 106);
+        assert_eq!(all["total"], 115);
 
         let non_int = list_actions_json(
             &ctx,
@@ -1164,7 +1206,7 @@ mod tests {
             },
             None,
         );
-        assert_eq!(non_int["total"], 100);
+        assert_eq!(non_int["total"], 109);
 
         let mut ro_policy = ExecutionPolicy::mcp_default();
         ro_policy.read_only = true;

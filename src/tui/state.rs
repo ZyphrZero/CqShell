@@ -372,6 +372,16 @@ pub(super) struct SocksSecretModal {
     pub scroll: u16,
 }
 
+/// Transient in-memory modal for copying MCP client configs and Bearer token via OSC 52 only.
+/// Tokens are always masked on screen and cleared from memory immediately when closed.
+#[derive(Debug, Clone)]
+pub(super) struct McpAccessModal {
+    pub access: crate::mcp::config::RevealedMcpAccess,
+    pub transport: crate::mcp::config::TransportMode,
+    pub client: crate::mcp::config::ClientFormat,
+    pub scroll: u16,
+}
+
 /// Interactive terminal prompt preview studio state (`terminal.preview`).
 #[derive(Debug, Clone)]
 pub(super) struct PromptPreview {
@@ -558,6 +568,14 @@ pub(super) struct SocksCacheEntry {
     pub config: Option<crate::ops::clash::socks::SocksConfig>,
 }
 
+type FileStatKey = Option<(u64, Option<std::time::SystemTime>, u64)>;
+
+#[derive(Debug, Clone)]
+pub(super) struct McpCacheEntry {
+    pub key: (FileStatKey, FileStatKey),
+    pub summary: Option<crate::mcp::config::McpSummary>,
+}
+
 pub struct App {
     pub(super) ctx: Context,
     /// Active navigation destination (starts on Overview Dashboard).
@@ -594,6 +612,7 @@ pub struct App {
     pub(super) form: Option<Form>,
     pub(super) prompt_preview: Option<PromptPreview>,
     pub(super) socks_secret: Option<SocksSecretModal>,
+    pub(super) mcp_access: Option<McpAccessModal>,
     pub(super) loading: Option<Loading>,
     pub(super) confirmation: Option<Confirmation>,
     pub(super) notice: Option<String>,
@@ -639,6 +658,8 @@ pub struct App {
     /// Stat-fingerprinted cache of `cqs-socks5` config so rendering never re-parses `mixin.yaml`
     /// from disk every frame.
     pub(super) socks_cache: RefCell<Option<SocksCacheEntry>>,
+    /// Stat-fingerprinted cache of MCP config & token metadata to avoid per-frame disk I/O.
+    pub(super) mcp_cache: RefCell<Option<McpCacheEntry>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -713,6 +734,7 @@ impl App {
             form: None,
             prompt_preview: None,
             socks_secret: None,
+            mcp_access: None,
             loading: None,
             confirmation: None,
             notice: None,
@@ -750,6 +772,7 @@ impl App {
             clash: super::clash::state::ClashState::default(),
             docker_task_title: None,
             socks_cache: RefCell::new(None),
+            mcp_cache: RefCell::new(None),
         }
     }
 
@@ -1637,6 +1660,8 @@ impl App {
             2
         } else if self.socks_secret.is_some() {
             12
+        } else if self.mcp_access.is_some() {
+            14
         } else if self.form.as_ref().is_some_and(|form| form.picker.is_some()) {
             3
         } else if self.form.is_some() {
@@ -1871,6 +1896,7 @@ impl App {
         );
         self.notify(summary, tone);
         self.socks_cache.borrow_mut().take();
+        self.mcp_cache.borrow_mut().take();
         crate::ops::clash::runtime_cache::invalidate_all();
         self.completed_since_refresh = true;
         self.ctx.cancel.store(false, Ordering::SeqCst);
@@ -2060,6 +2086,25 @@ impl App {
                     "socks_user".into(),
                     cfg.username.unwrap_or_else(|| "cqs".into()),
                 ),
+            ]);
+        }
+        if spec.id == "ai.mcp.configure"
+            && !self.parameters.contains_key(spec.id)
+            && let Ok(cfg) = crate::mcp::config::load_config(&self.ctx)
+        {
+            values = BTreeMap::from([
+                ("mcp_listen".into(), cfg.listen),
+                ("mcp_port".into(), cfg.port.to_string()),
+                ("mcp_path".into(), cfg.endpoint_path),
+                (
+                    "mcp_auth".into(),
+                    if cfg.auth_enabled { "on" } else { "off" }.into(),
+                ),
+                ("mcp_policy".into(), cfg.policy_mode.as_str().into()),
+                ("mcp_public_url".into(), cfg.public_url),
+                ("mcp_ssh_target".into(), cfg.ssh_target),
+                ("mcp_allow_groups".into(), cfg.allow_groups.join(",")),
+                ("mcp_deny_actions".into(), cfg.deny_actions.join(",")),
             ]);
         }
         if spec.id == "github.proxy" {
@@ -2805,6 +2850,60 @@ impl App {
         }
     }
 
+    pub(super) fn open_mcp_access_modal(&mut self) -> Result<Effect> {
+        let public_v4 = match &self.snapshot.public.ipv4 {
+            Reading::Value(ip) if !ip.is_empty() => Some(ip.as_str()),
+            _ => None,
+        };
+        match crate::mcp::config::RevealedMcpAccess::load(&self.ctx, public_v4) {
+            Ok(access) => {
+                self.mcp_cache.borrow_mut().take();
+                self.mcp_access = Some(McpAccessModal {
+                    access,
+                    transport: crate::mcp::config::TransportMode::Http,
+                    client: crate::mcp::config::ClientFormat::Json,
+                    scroll: 0,
+                });
+            }
+            Err(err) => {
+                let msg = self.ctx.i18n.error(&err);
+                self.notify(msg, Tone::Danger);
+            }
+        }
+        Ok(Effect::None)
+    }
+
+    pub(super) fn close_mcp_access(&mut self) {
+        self.mcp_access = None;
+    }
+
+    pub(super) fn copy_mcp_field(&mut self, value: String, field_key: &str) -> Effect {
+        let field = self.ctx.i18n.text(field_key);
+        let msg = self
+            .ctx
+            .i18n
+            .format("toast.copied_mcp_field", &[("field", field)]);
+        self.notify(msg, Tone::Success);
+        Effect::Copy(value)
+    }
+
+    pub(super) fn rotate_mcp_access_token(&mut self) {
+        match crate::mcp::config::rotate_token(&self.ctx) {
+            Ok(new_token) => {
+                self.mcp_cache.borrow_mut().take();
+                if let Some(modal) = self.mcp_access.as_mut() {
+                    modal.access.token = Some(new_token);
+                }
+                let msg = self.ctx.i18n.text("toast.mcp_token_rotated").to_owned();
+                self.notify(msg, Tone::Success);
+            }
+            Err(err) => {
+                let msg = self.ctx.i18n.error(&err);
+                self.notify(msg, Tone::Danger);
+            }
+        }
+    }
+
     pub(super) fn run_workbench_command(
         &mut self,
         cmd: palette::WorkbenchCommand,
@@ -2837,6 +2936,7 @@ impl App {
             }
             WorkbenchCommand::GithubProxy => return self.open_github_proxy_form(),
             WorkbenchCommand::SocksSecret => return self.open_socks_secret_modal(),
+            WorkbenchCommand::McpAccess => return self.open_mcp_access_modal(),
             WorkbenchCommand::Theme => self.open_theme_drawer(),
             WorkbenchCommand::TransparentBg => self.toggle_transparent_bg(true),
             WorkbenchCommand::ReducedMotion => self.toggle_reduced_motion(true),
@@ -2879,10 +2979,48 @@ impl App {
         parsed
     }
 
+    pub(super) fn cached_mcp_summary(&self) -> Option<crate::mcp::config::McpSummary> {
+        let stat_of = |path: &std::path::Path| -> FileStatKey {
+            std::fs::metadata(path).ok().map(|meta| {
+                #[cfg(unix)]
+                let ino = {
+                    use std::os::unix::fs::MetadataExt;
+                    meta.ino()
+                };
+                #[cfg(not(unix))]
+                let ino = 0u64;
+                (meta.len(), meta.modified().ok(), ino)
+            })
+        };
+        let key = (
+            stat_of(&crate::mcp::config::config_path(&self.ctx)),
+            stat_of(&crate::mcp::config::token_path(&self.ctx)),
+        );
+        if let Some(entry) = self.mcp_cache.borrow().as_ref()
+            && entry.key == key
+        {
+            return entry.summary.clone();
+        }
+        let parsed = crate::mcp::config::inspect(&self.ctx).ok();
+        *self.mcp_cache.borrow_mut() = Some(McpCacheEntry {
+            key,
+            summary: parsed.clone(),
+        });
+        parsed
+    }
+
     pub(super) fn related_for(&self, spec: &Spec) -> Option<related::Related> {
         if spec.id == "github.proxy" {
             return Some(related::github_proxy(
                 self.ctx.github_proxy.as_deref(),
+                &self.ctx.i18n,
+            ));
+        }
+        if spec.id.starts_with("ai.mcp.") {
+            let cached = self.cached_mcp_summary();
+            return Some(related::ai_mcp(
+                cached.as_ref(),
+                &self.snapshot,
                 &self.ctx.i18n,
             ));
         }
