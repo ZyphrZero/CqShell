@@ -1772,11 +1772,7 @@ fn build_socks_secret_lines(
     let label_style = tokens::text(theme, Level::Tertiary);
     let primary_style = tokens::text(theme, Level::Primary);
     let primary_bold = primary_style.add_modifier(Modifier::BOLD);
-    let secret_style = if modal.show_password {
-        tokens::fg(theme, Role::Accent).add_modifier(Modifier::BOLD)
-    } else {
-        tokens::text(theme, Level::Secondary)
-    };
+    let accent_bold = tokens::fg(theme, Role::Accent).add_modifier(Modifier::BOLD);
     let muted_style = tokens::text(theme, Level::Secondary);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -1813,27 +1809,24 @@ fn build_socks_secret_lines(
         ),
     ]));
 
+    // Never display the raw SOCKS5 password on screen; always render a fixed-width mask.
     if creds.has_auth {
         let user = creds.username.as_deref().unwrap_or("cqs");
-        let pass_text = if modal.show_password {
-            creds.password.as_deref().unwrap_or("")
-        } else {
-            "************************"
-        };
+        let masked_pass = "************************";
         lines.push(Line::from(vec![
             Span::styled(format!("{}: ", i.text("ui.socks_secret_user")), label_style),
             Span::styled(user.to_owned(), primary_bold),
         ]));
         let pass_prefix = format!("{}: ", i.text("ui.socks_secret_pass"));
-        if pass_prefix.width() + pass_text.width() <= inner_w {
+        if pass_prefix.width() + masked_pass.width() <= inner_w {
             lines.push(Line::from(vec![
                 Span::styled(pass_prefix, label_style),
-                Span::styled(pass_text.to_owned(), secret_style),
+                Span::styled(masked_pass.to_owned(), muted_style),
             ]));
         } else {
             lines.push(Line::from(Span::styled(pass_prefix, label_style)));
-            for chunk in wrap_cells(pass_text, inner_w) {
-                lines.push(Line::from(Span::styled(chunk, secret_style)));
+            for chunk in wrap_cells(masked_pass, inner_w) {
+                lines.push(Line::from(Span::styled(chunk, muted_style)));
             }
         }
     } else {
@@ -1846,32 +1839,17 @@ fn build_socks_secret_lines(
         ]));
     }
 
-    let masked_h = creds.masked_uri("socks5h");
-    let masked_5 = creds.masked_uri("socks5");
-    let masked_curl = creds.masked_curl_cmd();
-    let uri_h = if modal.show_password {
-        creds.socks5h_uri.as_str()
-    } else {
-        masked_h.as_str()
-    };
-    let uri_5 = if modal.show_password {
-        creds.socks5_uri.as_str()
-    } else {
-        masked_5.as_str()
-    };
-    let curl = if modal.show_password {
-        creds.curl_cmd.as_str()
-    } else {
-        masked_curl.as_str()
-    };
+    let uri_h = creds.masked_uri("socks5h");
+    let uri_5 = creds.masked_uri("socks5");
+    let curl = creds.masked_curl_cmd();
 
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         i.text("ui.socks_secret_socks5h").to_owned(),
         label_style,
     )));
-    for chunk in wrap_cells(uri_h, inner_w) {
-        lines.push(Line::from(Span::styled(chunk, secret_style)));
+    for chunk in wrap_cells(&uri_h, inner_w) {
+        lines.push(Line::from(Span::styled(chunk, accent_bold)));
     }
 
     lines.push(Line::default());
@@ -1879,15 +1857,8 @@ fn build_socks_secret_lines(
         i.text("ui.socks_secret_socks5").to_owned(),
         label_style,
     )));
-    for chunk in wrap_cells(uri_5, inner_w) {
-        lines.push(Line::from(Span::styled(
-            chunk,
-            if modal.show_password {
-                primary_style
-            } else {
-                muted_style
-            },
-        )));
+    for chunk in wrap_cells(&uri_5, inner_w) {
+        lines.push(Line::from(Span::styled(chunk, primary_style)));
     }
 
     lines.push(Line::default());
@@ -1895,7 +1866,7 @@ fn build_socks_secret_lines(
         i.text("ui.socks_secret_curl").to_owned(),
         label_style,
     )));
-    for chunk in wrap_cells(curl, inner_w) {
+    for chunk in wrap_cells(&curl, inner_w) {
         lines.push(Line::from(Span::styled(chunk, muted_style)));
     }
 
@@ -1920,7 +1891,6 @@ pub(in crate::tui) fn socks_secret_max_scroll(app: &App, area: Rect) -> u16 {
     let geom = layout::SocksSecretGeometry::compute(
         area,
         &modal.creds,
-        modal.show_password,
         &app.ctx.i18n,
         app.theme.active.flags.ascii,
     );
@@ -1995,13 +1965,7 @@ pub(super) fn draw_socks_secret(app: &App, frame: &mut Frame, area: Rect, alpha:
     let theme = &app.theme.active;
     let ascii = theme.flags.ascii;
     let i = &app.ctx.i18n;
-    let geom = layout::SocksSecretGeometry::compute(
-        area,
-        &modal_state.creds,
-        modal_state.show_password,
-        i,
-        ascii,
-    );
+    let geom = layout::SocksSecretGeometry::compute(area, &modal_state.creds, i, ascii);
     let modal = geom.modal;
 
     fx::apply_shadow(frame.buffer_mut(), modal, area, theme);
@@ -2074,12 +2038,6 @@ pub(super) fn draw_socks_secret(app: &App, frame: &mut Frame, area: Rect, alpha:
         bg,
     );
     draw_secret_chip(app, buf, geom.btn_curl, "4", "curl", false, bg);
-    let mask_lbl = if modal_state.show_password {
-        i.text("ui.socks_secret_btn_hide")
-    } else {
-        i.text("ui.socks_secret_btn_show")
-    };
-    draw_secret_chip(app, buf, geom.btn_mask, "m", mask_lbl, false, bg);
     draw_secret_chip(
         app,
         buf,

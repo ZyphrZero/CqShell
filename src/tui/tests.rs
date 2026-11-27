@@ -2107,7 +2107,7 @@ fn socks5_transient_secret_modal_reveals_copies_masks_and_never_logs_secrets() {
     )
     .unwrap();
 
-    // 3. Shift+S opens the transient credential reveal modal.
+    // 3. Shift+S opens the credential card with password & URIs strictly masked on screen.
     app.handle_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
         .unwrap();
     assert!(app.socks_secret.is_some());
@@ -2115,11 +2115,13 @@ fn socks5_transient_secret_modal_reveals_copies_masks_and_never_logs_secrets() {
     let expected_5 = "socks5://alice:S3cret%23Pass!99@203.0.113.88:10808";
     let expected_curl = format!("curl -x '{expected_5h}' https://ifconfig.me");
 
-    let revealed = render_frame_text(&mut app, 120, 36);
-    assert!(revealed.contains("SOCKS5 / 5h 凭据与连接串"));
-    assert!(revealed.contains(secret_pw));
-    assert!(revealed.contains(expected_5h));
-    assert!(revealed.contains(expected_5));
+    let rendered = render_frame_text(&mut app, 120, 36);
+    assert!(rendered.contains("SOCKS5 / 5h 凭据与连接串"));
+    assert!(!rendered.contains(secret_pw));
+    assert!(!rendered.contains("S3cret%23Pass!99"));
+    assert!(rendered.contains("************************"));
+    assert!(rendered.contains("socks5h://alice:********@203.0.113.88:10808"));
+    assert!(rendered.contains("socks5://alice:********@203.0.113.88:10808"));
 
     // 4. Keys 1/2/3/4 emit exact OSC 52 Copy effects without ever leaking secrets into logs or toast.
     let copy_text = |eff: Effect| match eff {
@@ -2160,14 +2162,32 @@ fn socks5_transient_secret_modal_reveals_copies_masks_and_never_logs_secrets() {
     );
     assert!(app.logs.is_empty());
 
-    // 5. Pressing 'm' masks credentials on screen; pressing 'm' again restores them.
-    app.handle_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE))
-        .unwrap();
-    let masked = render_frame_text(&mut app, 120, 36);
-    assert!(!masked.contains(secret_pw));
-    assert!(!masked.contains("S3cret%23Pass!99"));
-    assert!(masked.contains("************************"));
-    assert!(masked.contains("socks5h://alice:********@203.0.113.88:10808"));
+    // 5. Pressing 'm', 'M', or Space can never unmask the password on screen.
+    for code in [KeyCode::Char('m'), KeyCode::Char('M'), KeyCode::Char(' ')] {
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+            .unwrap();
+        let still_masked = render_frame_text(&mut app, 120, 36);
+        assert!(!still_masked.contains(secret_pw));
+        assert!(!still_masked.contains("S3cret%23Pass!99"));
+        assert!(still_masked.contains("************************"));
+        assert!(still_masked.contains("socks5h://alice:********@203.0.113.88:10808"));
+    }
+
+    // 5b. Mouse click on Copy Password button copies the real password while screen stays masked.
+    let area = Rect::new(0, 0, 120, 36);
+    let geom = super::layout::SocksSecretGeometry::compute(
+        area,
+        &app.socks_secret.as_ref().unwrap().creds,
+        &app.ctx.i18n,
+        false,
+    );
+    assert_eq!(
+        copy_text(
+            app.handle_mouse(click(geom.btn_password.x + 1, geom.btn_password.y), area)
+                .unwrap()
+        ),
+        secret_pw
+    );
 
     // 6. Pressing Esc clears the transient struct from memory immediately.
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
@@ -2206,6 +2226,8 @@ fn socks5_transient_secret_modal_reveals_copies_masks_and_never_logs_secrets() {
             rendered.is_ascii(),
             "non-ASCII character in plain mode at {w}x{h}:\n{rendered}"
         );
+        assert!(!rendered.contains(secret_pw));
+        assert!(!rendered.contains("S3cret%23Pass!99"));
     }
     drop(temp);
 }

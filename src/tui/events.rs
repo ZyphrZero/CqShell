@@ -615,13 +615,6 @@ impl App {
                     return Ok(self.copy_socks_secret_field(cmd, "ui.socks_secret_field_curl"));
                 }
             }
-            KeyCode::Char('m' | 'M' | ' ') => {
-                if let Some(modal) = self.socks_secret.as_mut()
-                    && modal.creds.has_auth
-                {
-                    modal.show_password = !modal.show_password;
-                }
-            }
             KeyCode::Up | KeyCode::Char('k') => {
                 if let Some(modal) = self.socks_secret.as_mut() {
                     modal.scroll = modal.scroll.min(max_s).saturating_sub(1);
@@ -985,12 +978,11 @@ impl App {
             return Ok(Effect::None);
         }
 
-        // 2b. Transient SOCKS5 / 5h credential reveal modal
+        // 2b. Transient SOCKS5 / 5h masked credential copy modal
         if let Some(modal) = &self.socks_secret {
             let geom = SocksSecretGeometry::compute(
                 area,
                 &modal.creds,
-                modal.show_password,
                 &self.ctx.i18n,
                 self.theme.active.flags.ascii,
             );
@@ -1024,11 +1016,6 @@ impl App {
                     } else if geom.btn_curl.contains(point) {
                         let cmd = modal.creds.curl_cmd.clone();
                         return Ok(self.copy_socks_secret_field(cmd, "ui.socks_secret_field_curl"));
-                    } else if geom.btn_mask.contains(point)
-                        && let Some(m) = self.socks_secret.as_mut()
-                        && m.creds.has_auth
-                    {
-                        m.show_password = !m.show_password;
                     }
                 }
                 _ => {}

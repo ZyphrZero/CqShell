@@ -364,12 +364,11 @@ pub(super) struct Loading {
     pub started: Instant,
 }
 
-/// Transient in-memory modal showing `cqs-socks5` credentials inside TUI only.
-/// Cleared from memory immediately when closed; never appended to task logs.
+/// Transient in-memory modal for copying `cqs-socks5` credentials inside TUI only.
+/// Passwords are always masked on screen (copy-only via OSC 52); cleared from memory when closed.
 #[derive(Debug, Clone)]
 pub(super) struct SocksSecretModal {
     pub creds: crate::ops::clash::socks::RevealedCredentials,
-    pub show_password: bool,
     pub scroll: u16,
 }
 
@@ -2727,11 +2726,7 @@ impl App {
         };
         match crate::ops::clash::socks::reveal(&self.ctx, public_v4) {
             Ok(Some(creds)) => {
-                self.socks_secret = Some(SocksSecretModal {
-                    creds,
-                    show_password: true,
-                    scroll: 0,
-                });
+                self.socks_secret = Some(SocksSecretModal { creds, scroll: 0 });
             }
             Ok(None) => {
                 let msg = self.ctx.i18n.text("toast.socks_not_configured").to_owned();

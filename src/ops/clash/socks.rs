@@ -375,9 +375,9 @@ pub fn inspect(ctx: &Context) -> Result<SocksConfig> {
     Ok(read_existing(ctx)?.config)
 }
 
-/// Full in-memory SOCKS5 / SOCKS5h credentials for transient TUI reveal and OSC 52 copy only.
-/// Never printed to CLI stdout/stderr or written to task logs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Full in-memory SOCKS5 / SOCKS5h credentials for transient TUI OSC 52 clipboard copy only.
+/// Never rendered in plaintext on screen, printed to CLI stdout/stderr, or written to task logs.
+#[derive(Clone, PartialEq, Eq)]
 pub struct RevealedCredentials {
     pub listen: String,
     pub port: u16,
@@ -391,6 +391,25 @@ pub struct RevealedCredentials {
     pub socks5_uri: String,
     pub curl_cmd: String,
     pub auth_file: PathBuf,
+}
+
+impl std::fmt::Debug for RevealedCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RevealedCredentials")
+            .field("listen", &self.listen)
+            .field("port", &self.port)
+            .field("host", &self.host)
+            .field("udp", &self.udp)
+            .field("outbound", &self.outbound)
+            .field("has_auth", &self.has_auth)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[redacted]"))
+            .field("socks5h_uri", &self.masked_uri("socks5h"))
+            .field("socks5_uri", &self.masked_uri("socks5"))
+            .field("curl_cmd", &self.masked_curl_cmd())
+            .field("auth_file", &self.auth_file)
+            .finish()
+    }
 }
 
 impl RevealedCredentials {
@@ -1172,6 +1191,7 @@ mod tests {
         );
         assert!(with_ip.masked_curl_cmd().contains("********"));
         assert!(!with_ip.masked_curl_cmd().contains("S3cret"));
+        assert!(!format!("{with_ip:?}").contains("S3cret"));
 
         let without_ip = reveal(&ctx, None).unwrap().unwrap();
         assert_eq!(

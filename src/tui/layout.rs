@@ -1783,7 +1783,6 @@ pub(super) struct SocksSecretGeometry {
     pub btn_socks5: Rect,
     pub btn_password: Rect,
     pub btn_curl: Rect,
-    pub btn_mask: Rect,
     pub btn_close: Rect,
 }
 
@@ -1791,7 +1790,6 @@ impl SocksSecretGeometry {
     pub fn compute(
         area: Rect,
         creds: &crate::ops::clash::socks::RevealedCredentials,
-        show_password: bool,
         i18n: &I18n,
         ascii: bool,
     ) -> Self {
@@ -1799,34 +1797,19 @@ impl SocksSecretGeometry {
         let modal_w = 88.min(area.width.saturating_sub(margin_x));
         let inner_w = modal_w.saturating_sub(4).max(1) as usize;
 
-        let masked_h = creds.masked_uri("socks5h");
-        let masked_5 = creds.masked_uri("socks5");
-        let masked_curl = creds.masked_curl_cmd();
-        let uri_h = if show_password {
-            creds.socks5h_uri.as_str()
-        } else {
-            masked_h.as_str()
-        };
-        let uri_5 = if show_password {
-            creds.socks5_uri.as_str()
-        } else {
-            masked_5.as_str()
-        };
-        let curl = if show_password {
-            creds.curl_cmd.as_str()
-        } else {
-            masked_curl.as_str()
-        };
+        let uri_h = creds.masked_uri("socks5h");
+        let uri_5 = creds.masked_uri("socks5");
+        let curl = creds.masked_curl_cmd();
         let file_str = creds.auth_file.display().to_string();
 
-        // Estimate natural body line count so the modal wraps snugly without clipping URIs.
+        // Estimate natural body line count so the modal wraps snugly without clipping masked URIs.
         let mut lines = 0usize;
         lines += super::render::wrap_words(i18n.text("ui.socks_secret_notice"), inner_w).len();
         lines += 2; // blank + listen/mode summary
         lines += if creds.has_auth { 3 } else { 2 }; // auth rows + blank
-        lines += 1 + super::render::wrap_cells(uri_h, inner_w).len() + 1;
-        lines += 1 + super::render::wrap_cells(uri_5, inner_w).len() + 1;
-        lines += 1 + super::render::wrap_cells(curl, inner_w).len() + 1;
+        lines += 1 + super::render::wrap_cells(&uri_h, inner_w).len() + 1;
+        lines += 1 + super::render::wrap_cells(&uri_5, inner_w).len() + 1;
+        lines += 1 + super::render::wrap_cells(&curl, inner_w).len() + 1;
         if creds.has_auth {
             lines += 1 + super::render::wrap_cells(&file_str, inner_w).len();
         }
@@ -1875,16 +1858,6 @@ impl SocksSecretGeometry {
             Rect::default()
         };
         let btn_curl = place(fmt_btn("4", "curl"));
-        let btn_mask = if creds.has_auth {
-            let lbl = if show_password {
-                i18n.text("ui.socks_secret_btn_hide")
-            } else {
-                i18n.text("ui.socks_secret_btn_show")
-            };
-            place(fmt_btn("m", lbl))
-        } else {
-            Rect::default()
-        };
         let btn_close = place(fmt_btn("Esc", i18n.text("key.close")));
 
         Self {
@@ -1895,7 +1868,6 @@ impl SocksSecretGeometry {
             btn_socks5,
             btn_password,
             btn_curl,
-            btn_mask,
             btn_close,
         }
     }
