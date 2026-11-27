@@ -62,6 +62,7 @@
 - **配色 × UI 样式双维解耦**：内置 **8 套配色方案 × 8 套 UI 设计语言**，支持自动探测终端深浅色、实时预览抽屉（`T`）、透明背景（`B`）、减弱动效（`M`）与自定义 TOML 主题。
 - **专属 Docker 6 标签工作台**：内置 `cqs docker` 全屏聚焦 / 侧栏嵌入双态管理界面，覆盖容器、Compose、镜像、卷、网络与守护进程；纯原生 CLI JSON 采集，零后台驻留开销。
 - **100 项结构化运维动作**：11 大功能模块 + 固定置顶的「一键优化」批处理清单，CLI 与 TUI 共用同一套参数校验、权限检查与执行引擎。
+- **原生 AI 接口（MCP + 结构化 JSON）**：内置零 `tokio` 依赖的原生 MCP stdio 服务器（`cqs mcp`）与结构化 JSON CLI（`status` / `describe` / `choices` / `run --json` / `batch --json` / `--dry-run` / `--params-json`），内置只读/标准/高危三层权限护栏与强制脱敏，供 Claude Code、Codex CLI、Cursor 等外部 AI Agent 安全操控。
 - **事务化安全边界**：全链路 HTTPS + SHA-256 校验、文件锁（`flock`）、配置预检、原子替换、before-image 恢复基线、非交互 `apt` 保护与分级口令确认；任何场景下均不会静默重启系统。
 
 ---
@@ -322,11 +323,19 @@ detect_background = true
 所有操作 ID 不随语言变化，无终端环境下可直接使用 CLI，配合 `--yes` / `-y` 自动确认通用提示：
 
 ```bash
-# 查看元数据、主题与版本更新
+# 查看元数据、状态快照、动作 Schema 与版本更新
 cqs list --json
+cqs status --json
+cqs describe bbr.enable --json
+cqs choices clash.proxy.select --json
 cqs themes && cqs styles
 cqs update --check --json
 sudo cqs --gh-proxy default update
+
+# 原生 MCP 服务器与结构化 JSON 预检/执行（供外部 AI Agent 接入，详见 docs/AI_API.md）
+cqs mcp --read-only
+sudo cqs run bbr.enable --json --dry-run --params-json '{"qdisc":"fq"}'
+sudo cqs --yes run bbr.enable --json --params-json '{"qdisc":"fq"}'
 
 # 系统换源、BBR 与 TCP 调优
 cqs run system.mirror.test
@@ -371,6 +380,7 @@ cqs --yes run clash.start
 | 文档 | 内容 |
 | --- | --- |
 | [docs/TECHNICAL.md](docs/TECHNICAL.md) | 系统架构、权限与锁、事务恢复机制及测试验收说明 |
+| [docs/AI_API.md](docs/AI_API.md) | 原生 MCP stdio 服务器、结构化 JSON CLI、安全护栏与外部 AI 接入指南 |
 | [docs/THEMES.md](docs/THEMES.md) | 配色与 UI 样式双维系统、20 项颜色角色与自定义主题编写 |
 | [docs/MIHOMO.md](docs/MIHOMO.md) | Mihomo 全量命令、多面板、控制器、TUN/systemd 与 `clashctl` 兼容说明 |
 | [docs/MIRRORS.md](docs/MIRRORS.md) | LinuxMirrors Lite 软件源接入范围与恢复策略 |

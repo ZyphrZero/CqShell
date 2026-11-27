@@ -659,6 +659,56 @@ pub fn fetch_image_inspect(ctx: &Context, id: &str) -> Result<ImageInspect> {
     parse_image_inspect(&res.stdout, &hist)
 }
 
+/// Reads a bounded snapshot of recent container logs without `--follow`, sanitizing ANSI
+/// control sequences and capping line length to protect JSON / MCP callers.
+pub fn fetch_container_logs(ctx: &Context, id: &str, tail: usize) -> Result<Vec<String>> {
+    if id.is_empty() || id.starts_with('-') || id.chars().any(char::is_control) {
+        return Err(Error::new("error.input", format!("container id: {id}")));
+    }
+    ctx.platform()?;
+    if !available("docker") {
+        return Err(Error::new("error.dependency", "docker"));
+    }
+    let bounded_tail = tail.clamp(1, 1000);
+    let tail_str = bounded_tail.to_string();
+    let res = run_readonly(
+        ctx,
+        "docker",
+        &["logs", "--tail", &tail_str, "--timestamps", id],
+        LIST_TIMEOUT,
+    )?;
+    if !res.success {
+        let detail = if res.timed_out {
+            "docker logs timed out".to_owned()
+        } else {
+            first_meaningful_line(&res.stderr)
+                .or_else(|| first_meaningful_line(&res.stdout))
+                .unwrap_or_else(|| "docker logs failed".to_owned())
+        };
+        return Err(Error::new("error.command", detail));
+    }
+    let mut lines = Vec::new();
+    for raw in res.stdout.lines().chain(res.stderr.lines()) {
+        let mut clean = crate::runtime::sanitize(raw);
+        if clean.len() > super::model::MAX_LOG_LINE_BYTES {
+            let mut end = super::model::MAX_LOG_LINE_BYTES;
+            while end > 0 && !clean.is_char_boundary(end) {
+                end -= 1;
+            }
+            clean.truncate(end);
+        }
+        lines.push(clean);
+        if lines.len() >= bounded_tail * 2 {
+            break;
+        }
+    }
+    if lines.len() > bounded_tail {
+        let drain_count = lines.len() - bounded_tail;
+        lines.drain(..drain_count);
+    }
+    Ok(lines)
+}
+
 /// Reads a Compose YAML file safely with path checks, a strict 256 KiB cap, and control sanitization.
 pub fn read_compose_file(path: &str) -> Result<String> {
     use std::io::Read;

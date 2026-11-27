@@ -62,17 +62,20 @@ fn draw_status_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     let bg = surface_bg(theme, Role::SurfaceAlt);
     let buf = frame.buffer_mut();
 
-    let uptime = cl
-        .snapshot
-        .summary
-        .uptime_secs
-        .map(format_uptime)
-        .unwrap_or_else(|| "-".to_owned());
+    let sep = tokens::glyph(theme, Glyph::Separator);
+    let conns_total = cl.snapshot.connections.len();
+    let header_meta = match cl.snapshot.summary.uptime_secs.map(format_uptime) {
+        Some(uptime) => format!(
+            "{} {conns_total} {sep} {uptime}",
+            i.text("clash.overview.conns")
+        ),
+        None => format!("{} {conns_total}", i.text("clash.overview.conns")),
+    };
     draw_card_title(
         buf,
         card,
         i.text("clash.overview.status"),
-        &uptime,
+        &header_meta,
         theme,
         Role::SurfaceAlt,
     );
@@ -80,7 +83,6 @@ fn draw_status_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
     let ix = card.x + 2;
     let iw = card.width.saturating_sub(4) as usize;
     let dot = tokens::glyph(theme, Glyph::DotOn);
-    let sep = tokens::glyph(theme, Glyph::Separator);
     let sum = &cl.snapshot.summary;
     let pid_str = sum.pid.map(|p| format!("PID {p}")).unwrap_or_default();
     let ver = if sum.version.is_empty() {

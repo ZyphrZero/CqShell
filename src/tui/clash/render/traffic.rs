@@ -1002,9 +1002,19 @@ pub(super) fn draw_overview_card(app: &App, frame: &mut Frame, geom: &OverviewGe
     } else {
         i.text("clash.traffic.atlas_title").to_owned()
     };
-    let title_meta = if card.width >= 56 {
+    let conn_total = snap.connections.len();
+    let title_meta = if card.width >= 66 {
         format!(
-            "{dn_sym}{} {up_sym}{} {sep} TCP {} / UDP {}",
+            "{dn_sym}{} {up_sym}{} {sep} {} {conn_total} (TCP {}/UDP {})",
+            format_bytes_compact(snap.download_total),
+            format_bytes_compact(snap.upload_total),
+            i.text("clash.overview.conns"),
+            snap.tcp_count(),
+            snap.udp_count()
+        )
+    } else if card.width >= 50 {
+        format!(
+            "{dn_sym}{} {up_sym}{} {sep} TCP {}/UDP {}",
             format_bytes_compact(snap.download_total),
             format_bytes_compact(snap.upload_total),
             snap.tcp_count(),
@@ -1012,9 +1022,10 @@ pub(super) fn draw_overview_card(app: &App, frame: &mut Frame, geom: &OverviewGe
         )
     } else {
         format!(
-            "{dn_sym}{} {up_sym}{}",
+            "{dn_sym}{} {up_sym}{} {sep} {} {conn_total}",
             format_bytes_compact(snap.download_total),
             format_bytes_compact(snap.upload_total),
+            i.text("clash.overview.conns"),
         )
     };
     draw_card_title(buf, card, &title, &title_meta, theme, Role::SurfaceAlt);
@@ -1309,7 +1320,9 @@ pub(super) fn draw_fullscreen_atlas(app: &App, frame: &mut Frame, geom: &Traffic
             })
             .unwrap_or_default();
         let right_meta = format!(
-            "TCP {} / UDP {}{mem_meta}",
+            "{} {} (TCP {} / UDP {}){mem_meta}",
+            i.text("clash.overview.conns"),
+            snap.connections.len(),
             snap.tcp_count(),
             snap.udp_count()
         );

@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     actions,
-    dashboard::{LocalSnapshot, PublicSnapshot, Reading, Snapshot, Usage},
+    dashboard::{ConnectionCounts, LocalSnapshot, PublicSnapshot, Reading, Snapshot, Usage},
     i18n::I18n,
     ops::clash::State as ClashState,
     runtime::{Context, Outcome, Step, StepState},
@@ -65,6 +65,11 @@ pub(in crate::tui) fn fixture_snapshot(now: Instant) -> Snapshot {
             bbr_version: Reading::Value("v3".into()),
             tcp_configured: Reading::Value(false),
             tcp_rmem_max: Reading::Value(6 * MIB),
+            connections: Reading::Value(ConnectionCounts {
+                tcp: 24,
+                tcp_time_wait: 5,
+                udp: 6,
+            }),
             updated: Some(now - Duration::from_secs(2)),
         },
         public: PublicSnapshot {

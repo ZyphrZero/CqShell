@@ -107,7 +107,7 @@ fn theme_flag_is_ignored_outside_tui_and_json_rejection_mentions_themes() {
         .unwrap();
     assert!(output.status.success());
     let output = command(temp.path())
-        .args(["--lang", "en-US", "--json", "run", "system.info"])
+        .args(["--lang", "en-US", "--json", "proxy-env", "off"])
         .output()
         .unwrap();
     assert!(!output.status.success());

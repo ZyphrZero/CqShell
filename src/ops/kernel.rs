@@ -559,7 +559,7 @@ pub(crate) fn reboot_after_install(ctx: &Context, installed: &str, running: &str
     ctx.message("notice.kernel_installed", installed);
     ctx.message("notice.running_kernel", running);
     ctx.message("notice.kernel_verify", installed);
-    if ctx.events.is_some() || ctx.interactive {
+    if ctx.can_prompt() {
         // Installing with --yes must not also authorize a host reboot.
         let mut prompt = ctx.clone();
         prompt.yes = false;
@@ -603,7 +603,7 @@ pub(crate) fn schedule_boot(
         return Err(Error::new("error.kernel_boot_pending", pending));
     }
 
-    let reboot_now = ctx.events.is_some() || ctx.interactive;
+    let reboot_now = ctx.can_prompt();
     if reboot_now {
         let mut prompt = ctx.clone();
         prompt.yes = false;

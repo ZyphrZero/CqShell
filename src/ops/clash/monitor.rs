@@ -1985,6 +1985,38 @@ fn poll_step(
     snap.updated_at = Some(now);
 }
 
+/// Captures a single synchronous, read-only Mihomo snapshot without spawning background threads
+/// or WebSocket streams. Intended for structured CLI JSON queries and MCP tools/resources.
+pub fn fetch_snapshot(
+    ctx: &Context,
+    include_rules: bool,
+    include_providers: bool,
+) -> ClashSnapshot {
+    let probe = ctx.silent();
+    let mut snap = ClashSnapshot::default();
+    let mut version_cached = String::new();
+    let mut cached_settings = None;
+    let mut ka_client = None;
+    let mut uptime_anchor = None;
+    let mut tracker = ConnectionTracker::default();
+    poll_step(
+        &probe,
+        ClashTab::Overview,
+        true,
+        true,
+        false,
+        include_rules,
+        include_providers,
+        &mut version_cached,
+        &mut cached_settings,
+        &mut ka_client,
+        &mut uptime_anchor,
+        &mut tracker,
+        &mut snap,
+    );
+    snap
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

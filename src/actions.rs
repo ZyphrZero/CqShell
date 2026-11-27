@@ -189,6 +189,43 @@ impl Spec {
     pub fn description(&self) -> String {
         format!("description.{}", self.id)
     }
+    /// Whether this action requires Debian / Ubuntu Linux platform checks.
+    pub fn requires_platform(&self) -> bool {
+        !matches!(
+            self.kind,
+            Kind::GithubProxy | Kind::TerminalPreview | Kind::SelfUpdateCheck | Kind::SelfUpdate
+        )
+    }
+    /// Whether this action can complete in a headless non-interactive session (JSON CLI / MCP).
+    pub fn non_interactive_supported(&self) -> bool {
+        !self.external
+    }
+    /// Whether this action carries destructive, access-disrupting, or kernel-level risk.
+    pub fn is_danger(&self, parameters: Option<&Parameters>) -> bool {
+        if is_danger_generic(self.kind) {
+            return true;
+        }
+        match self.kind {
+            Kind::KernelInstall | Kind::KernelRemove | Kind::KernelBoot | Kind::SshKey => true,
+            Kind::Clean => parameters
+                .and_then(|p| p.get("scope"))
+                .is_some_and(|scope| scope == "full"),
+            _ => false,
+        }
+    }
+    /// Normalized risk tier for programmatic/AI callers:
+    /// `"read_only"`, `"reversible"`, `"standard"`, or `"danger"`.
+    pub fn risk_level(&self, parameters: Option<&Parameters>) -> &'static str {
+        if !self.changes {
+            "read_only"
+        } else if self.is_danger(parameters) {
+            "danger"
+        } else if self.reversible {
+            "reversible"
+        } else {
+            "standard"
+        }
+    }
     pub fn defaults(&self) -> Parameters {
         self.fields
             .iter()

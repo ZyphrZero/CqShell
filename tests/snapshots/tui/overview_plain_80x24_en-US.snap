@@ -6,11 +6,11 @@
 +-[System & resources]-----------------+ +-[Network & proxy]-------------------+
 | CPU    [#---------]  12%  2C | ::::: | | BBR   o Disabled | available / v... |
 | Memory [######----]  63%    1.2/1.9G | | TCP   o not configured | fq_codel   |
-| Disk   [####------]  41%  16.4/40.0G | | IPv4  203.0.113.24 | AS64500 Exa... |
-| Swap   [#---------]  10%    0.2/2.0G | | IPv6  2001:db8:3c4d:15::1a2f        |
-| Host   vps-sg-01 | Debian GNU/Lin... | | Proxy Mihomo * Running | v1.19.2... |
-| Kernel 6.12.8-joeyblog-bbrv3 | x8... | | GH    o Direct                      |
-| Uptime 3d 04h 00m | Asia/Shanghai    | |                                     |
+| Disk   [####------]  41%  16.4/40.0G | | Conns TCP 24 | UDP 6 | TW 5         |
+| Swap   [#---------]  10%    0.2/2.0G | | IPv4  203.0.113.24 | AS64500 Exa... |
+| Host   vps-sg-01 | Debian GNU/Lin... | | IPv6  2001:db8:3c4d:15::1a2f        |
+| Kernel 6.12.8-joeyblog-bbrv3 | x8... | | Proxy Mihomo * Running | v1.19.2... |
+| Uptime 3d 04h 00m | Asia/Shanghai    | | GH    o Direct                      |
 +--------------------------------------+ +-------------------------------------+
                                                                                 
  Quick Actions & Insights                                      / search actions 
@@ -41,7 +41,7 @@
 4 21 5 reset reset bold
 5 10 1 reset reset bold
 5 21 5 reset reset bold
-6 49 29 green reset -
+7 49 29 green reset -
 11 1 24 reset reset bold
 13 2 22 reset reset bold
 13 29 9 reset reset bold

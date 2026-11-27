@@ -1,12 +1,18 @@
 use crate::{
     actions::{self, Parameters, Spec},
+    api::{self, ExecutionPolicy},
     config::{Paths, Preferences},
     error::{Error, Result},
     i18n::I18n,
+    mcp::McpServer,
     runtime::Context,
 };
 use clap::{Arg, ArgAction, Command};
-use std::{env, fs, io::IsTerminal, path::PathBuf};
+use std::{
+    env, fs,
+    io::{IsTerminal, Read},
+    path::PathBuf,
+};
 
 fn bootstrap(args: &[String], name: &str) -> Option<String> {
     args.iter().enumerate().find_map(|(i, a)| {
@@ -238,10 +244,123 @@ pub fn command(i: &I18n) -> Command {
                     Arg::new("set")
                         .long("set")
                         .action(ArgAction::Append)
+                        .conflicts_with("params-json")
                         .help(i.text("cli.set").to_owned()),
+                )
+                .arg(
+                    Arg::new("params-json")
+                        .long("params-json")
+                        .value_name("JSON|-")
+                        .help(i.text("cli.params_json").to_owned()),
+                )
+                .arg(
+                    Arg::new("dry-run")
+                        .long("dry-run")
+                        .action(ArgAction::SetTrue)
+                        .help(i.text("cli.dry_run").to_owned()),
                 ),
         );
     }
+    cmd = cmd.subcommand(
+        Command::new("status")
+            .about(i.text("cli.status").to_owned())
+            .help_template(format!(
+                "{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
+                i.text("cli.usage")
+            ))
+            .next_help_heading(i.text("cli.options").to_owned())
+            .arg(
+                Arg::new("section")
+                    .long("section")
+                    .default_value("system")
+                    .value_parser(["system", "docker", "mihomo", "all"])
+                    .help(i.text("cli.status_section").to_owned()),
+            )
+            .arg(
+                Arg::new("public-ip")
+                    .long("public-ip")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.status_public_ip").to_owned()),
+            )
+            .arg(
+                Arg::new("sample-cpu")
+                    .long("sample-cpu")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.status_sample_cpu").to_owned()),
+            )
+            .arg(
+                Arg::new("include-stats")
+                    .long("include-stats")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.status_include_stats").to_owned()),
+            )
+            .arg(
+                Arg::new("include-rules")
+                    .long("include-rules")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.status_include_rules").to_owned()),
+            )
+            .arg(
+                Arg::new("include-providers")
+                    .long("include-providers")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.status_include_providers").to_owned()),
+            ),
+    );
+    for (name, about_key) in [("describe", "cli.describe"), ("choices", "cli.choices")] {
+        cmd = cmd.subcommand(
+            Command::new(name)
+                .about(i.text(about_key).to_owned())
+                .help_template(format!(
+                    "{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
+                    i.text("cli.usage")
+                ))
+                .next_help_heading(i.text("cli.options").to_owned())
+                .arg(
+                    Arg::new("action")
+                        .required(true)
+                        .help(i.text("cli.action").to_owned()),
+                ),
+        );
+    }
+    cmd = cmd.subcommand(
+        Command::new("mcp")
+            .about(i.text("cli.mcp").to_owned())
+            .help_template(format!(
+                "{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
+                i.text("cli.usage")
+            ))
+            .next_help_heading(i.text("cli.options").to_owned())
+            .arg(
+                Arg::new("read-only")
+                    .long("read-only")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with("allow-danger")
+                    .help(i.text("cli.mcp_read_only").to_owned()),
+            )
+            .arg(
+                Arg::new("allow-danger")
+                    .long("allow-danger")
+                    .action(ArgAction::SetTrue)
+                    .help(i.text("cli.mcp_allow_danger").to_owned()),
+            )
+            .arg(
+                Arg::new("allow-group")
+                    .long("allow-group")
+                    .value_name("GROUP")
+                    .value_delimiter(',')
+                    .action(ArgAction::Append)
+                    .help(i.text("cli.mcp_allow_group").to_owned()),
+            )
+            .arg(
+                Arg::new("deny-action")
+                    .long("deny-action")
+                    .value_name("ACTION_ID")
+                    .value_delimiter(',')
+                    .action(ArgAction::Append)
+                    .help(i.text("cli.mcp_deny_action").to_owned()),
+            ),
+    );
     cmd.help_template(format!(
         "{{name}} {{version}}\n{{about}}\n\n{}: {{usage}}\n\n{{all-args}}",
         i.text("cli.usage")
@@ -364,26 +483,51 @@ pub fn main_entry() -> i32 {
             }
         }
     }
+    let structured_json_subcommand = matches.get_flag("json")
+        && matches!(
+            matches.subcommand(),
+            Some(("status" | "describe" | "choices" | "run" | "batch", _))
+        );
     let result = dispatch(&ctx, &matches, &preferences);
     match result {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(e) => {
-            eprintln!("{}", ctx.i18n.error(&e));
-            if e.key == "error.cancelled" {
-                130
-            } else if matches!(
-                e.key,
-                "error.input" | "error.action" | "error.required" | "error.cli"
-            ) {
-                2
+            if structured_json_subcommand {
+                let envelope = api::error_envelope(&ctx, &e);
+                if let Ok(text) = serde_json::to_string_pretty(&envelope) {
+                    println!("{text}");
+                } else {
+                    eprintln!("{}", ctx.i18n.error(&e));
+                }
             } else {
-                1
+                eprintln!("{}", ctx.i18n.error(&e));
             }
+            api::exit_code(&e)
         }
     }
 }
 
-fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -> Result<()> {
+fn read_params_json(raw: &str) -> Result<serde_json::Value> {
+    const MAX_JSON_BYTES: u64 = 1024 * 1024;
+    let text = if raw == "-" {
+        let mut buf = Vec::new();
+        std::io::stdin()
+            .take(MAX_JSON_BYTES + 1)
+            .read_to_end(&mut buf)?;
+        if buf.len() as u64 > MAX_JSON_BYTES {
+            return Err(Error::new(
+                "error.input",
+                "params-json stdin exceeds 1 MiB limit",
+            ));
+        }
+        String::from_utf8(buf).map_err(|e| Error::new("error.input", e))?
+    } else {
+        raw.to_owned()
+    };
+    serde_json::from_str(&text).map_err(|e| Error::new("error.input", format!("params-json: {e}")))
+}
+
+fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -> Result<i32> {
     if args.get_flag("install") || args.get_flag("uninstall") {
         if args.subcommand().is_some() {
             return Err(Error::new(
@@ -396,24 +540,35 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
         } else {
             "app.uninstall"
         })?;
-        return actions::execute(ctx, &spec, &Parameters::new());
+        actions::execute(ctx, &spec, &Parameters::new())?;
+        return Ok(0);
     }
     if args.get_flag("json") {
         let json_allowed = match args.subcommand() {
-            Some(("list" | "languages" | "themes" | "styles", _)) => true,
+            Some((
+                "list" | "languages" | "themes" | "styles" | "status" | "describe" | "choices"
+                | "run" | "batch",
+                _,
+            )) => true,
             Some(("update", matches)) => matches.get_flag("check"),
             _ => false,
         };
         if !json_allowed {
             return Err(Error::new(
                 "error.cli",
-                "--json requires list/languages/themes/styles or update --check",
+                "--json requires list/languages/themes/styles/status/describe/choices/run/batch or update --check",
             ));
         }
     }
     match args.subcommand() {
-        Some(("themes", _)) => themes(ctx, args.get_flag("json")),
-        Some(("styles", _)) => styles(ctx, args.get_flag("json")),
+        Some(("themes", _)) => {
+            themes(ctx, args.get_flag("json"))?;
+            Ok(0)
+        }
+        Some(("styles", _)) => {
+            styles(ctx, args.get_flag("json"))?;
+            Ok(0)
+        }
         Some(("update", matches)) => {
             let check_only = matches.get_flag("check");
             let version = matches.get_one::<String>("target-version").cloned();
@@ -423,8 +578,7 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                     ctx,
                     version.as_deref(),
                     args.get_flag("json"),
-                )
-                .map(|_| ())
+                )?;
             } else {
                 crate::ops::self_update::update(
                     ctx,
@@ -433,11 +587,14 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                         force,
                         target_path: None,
                     },
-                )
-                .map(|_| ())
+                )?;
             }
+            Ok(0)
         }
-        Some(("clashctl", matches)) => crate::ops::clash::compat::dispatch(ctx, matches),
+        Some(("clashctl", matches)) => {
+            crate::ops::clash::compat::dispatch(ctx, matches)?;
+            Ok(0)
+        }
         Some(("list", _)) => {
             let specs = actions::specs();
             if args.get_flag("json") {
@@ -462,7 +619,7 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                     }
                 }
             }
-            Ok(())
+            Ok(0)
         }
         Some(("languages", _)) => {
             let languages = ctx.i18n.languages();
@@ -473,24 +630,213 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                     println!("{id}\t{name}");
                 }
             }
-            Ok(())
+            Ok(0)
         }
         Some(("proxy-env", matches)) => {
             let enabled = matches.get_one::<String>("state").unwrap() == "on";
             let shell = matches.get_one::<String>("shell").unwrap();
             print!("{}", crate::ops::clash::proxy_env(ctx, enabled, shell)?);
-            Ok(())
+            Ok(0)
+        }
+        Some(("status", matches)) => {
+            let section = matches.get_one::<String>("section").unwrap().as_str();
+            let public_ip = matches.get_flag("public-ip");
+            let sample_cpu = matches.get_flag("sample-cpu");
+            let include_stats = matches.get_flag("include-stats");
+            let include_rules = matches.get_flag("include-rules");
+            let include_providers = matches.get_flag("include-providers");
+            let json_mode = args.get_flag("json");
+            if json_mode || section != "system" {
+                let payload = match section {
+                    "system" => api::snapshots::system_status_json(ctx, public_ip, sample_cpu),
+                    "docker" => api::snapshots::docker_snapshot_json(ctx, "all", include_stats)?,
+                    "mihomo" => api::snapshots::mihomo_snapshot_json(
+                        ctx,
+                        include_rules,
+                        include_providers,
+                        None,
+                        None,
+                    ),
+                    "all" => serde_json::json!({
+                        "schema_version": api::SCHEMA_VERSION,
+                        "ok": true,
+                        "system": api::snapshots::system_status_json(ctx, public_ip, sample_cpu),
+                        "docker": api::snapshots::docker_snapshot_json(ctx, "all", include_stats)?,
+                        "mihomo": api::snapshots::mihomo_snapshot_json(
+                            ctx,
+                            include_rules,
+                            include_providers,
+                            None,
+                            None,
+                        ),
+                    }),
+                    other => return Err(Error::new("error.input", other)),
+                };
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                println!(
+                    "{}",
+                    api::snapshots::system_status_text(ctx, public_ip, sample_cpu)
+                );
+            }
+            Ok(0)
+        }
+        Some(("describe", matches)) => {
+            let id = matches.get_one::<String>("action").unwrap();
+            let spec = actions::find_ref(id)?;
+            let detail = api::action_detail_json(ctx, spec);
+            if args.get_flag("json") {
+                println!("{}", serde_json::to_string_pretty(&detail)?);
+            } else {
+                let a = &detail["action"];
+                println!(
+                    "{} ({})  {}",
+                    a["id"].as_str().unwrap_or(""),
+                    a["group"].as_str().unwrap_or(""),
+                    a["label"].as_str().unwrap_or("")
+                );
+                println!("  {}", a["description"].as_str().unwrap_or(""));
+                println!(
+                    "  risk={} mutates={} root={} reversible={} non_interactive={}",
+                    a["risk"].as_str().unwrap_or(""),
+                    a["mutates"].as_bool().unwrap_or(false),
+                    a["root"].as_bool().unwrap_or(false),
+                    a["reversible"].as_bool().unwrap_or(false),
+                    a["non_interactive_supported"].as_bool().unwrap_or(false),
+                );
+                if let Some(params) = a["parameters"].as_array() {
+                    for p in params {
+                        println!(
+                            "  param {} (required={}, default={:?}, choices={})",
+                            p["name"].as_str().unwrap_or(""),
+                            p["required"].as_bool().unwrap_or(false),
+                            p["default"].as_str().unwrap_or(""),
+                            p["choices"]
+                        );
+                    }
+                }
+            }
+            Ok(0)
+        }
+        Some(("choices", matches)) => {
+            let id = matches.get_one::<String>("action").unwrap();
+            let payload = api::action_choices_json(ctx, id)?;
+            if args.get_flag("json") {
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else if let Some(fields) = payload["fields"].as_array() {
+                if fields.is_empty() {
+                    println!("{id}: no enumerated parameter choices");
+                }
+                for f in fields {
+                    println!("{}:", f["field"].as_str().unwrap_or(""));
+                    if let Some(err) = f
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                    {
+                        println!("  error: {err}");
+                        continue;
+                    }
+                    if let Some(items) = f["choices"].as_array() {
+                        for item in items {
+                            let mark = if item["current"].as_bool().unwrap_or(false) {
+                                "*"
+                            } else {
+                                "-"
+                            };
+                            let val = item["value"].as_str().unwrap_or("");
+                            let detail = item["detail"].as_str().unwrap_or("");
+                            if detail.is_empty() {
+                                println!("  {mark} {val}");
+                            } else {
+                                println!("  {mark} {val} ({detail})");
+                            }
+                            if let Some(children) = item["children"].as_array() {
+                                for child in children {
+                                    let cmark = if child["current"].as_bool().unwrap_or(false) {
+                                        "*"
+                                    } else {
+                                        "-"
+                                    };
+                                    println!(
+                                        "      {cmark} {}",
+                                        child["value"].as_str().unwrap_or("")
+                                    );
+                                }
+                            }
+                        }
+                    } else if let Some(note) = f["note"].as_str() {
+                        println!("  {note}");
+                    }
+                }
+            }
+            Ok(0)
+        }
+        Some(("mcp", matches)) => {
+            let mut policy = ExecutionPolicy::mcp_default();
+            policy.read_only = matches.get_flag("read-only");
+            policy.allow_danger = matches.get_flag("allow-danger");
+            policy.allow_groups = matches
+                .get_many::<String>("allow-group")
+                .into_iter()
+                .flatten()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+            policy.deny_actions = matches
+                .get_many::<String>("deny-action")
+                .into_iter()
+                .flatten()
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+            McpServer::serve_stdio(ctx, policy)?;
+            Ok(0)
         }
         Some(("run", matches)) => {
             let id = matches.get_one::<String>("action").unwrap();
-            let parameters = parse_parameters(
-                matches
-                    .get_many::<String>("set")
-                    .into_iter()
-                    .flatten()
-                    .cloned(),
-            )?;
-            actions::execute(ctx, &actions::find(id)?, &parameters)
+            let dry_run = matches.get_flag("dry-run");
+            let json_mode = args.get_flag("json");
+            let params_json = matches.get_one::<String>("params-json");
+            let parameters = if let Some(raw) = params_json {
+                let spec = actions::find(id)?;
+                let value = read_params_json(raw)?;
+                api::parameters_from_json(&spec, &value)?
+            } else {
+                parse_parameters(
+                    matches
+                        .get_many::<String>("set")
+                        .into_iter()
+                        .flatten()
+                        .cloned(),
+                )?
+            };
+            if json_mode {
+                let (payload, code) = api::execute_action_json(
+                    ctx,
+                    &ExecutionPolicy::permissive(),
+                    id,
+                    &parameters,
+                    ctx.yes,
+                    dry_run,
+                );
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+                return Ok(code);
+            }
+            if dry_run {
+                let (payload, code) = api::execute_action_json(
+                    ctx,
+                    &ExecutionPolicy::permissive(),
+                    id,
+                    &parameters,
+                    ctx.yes,
+                    true,
+                );
+                println!("{}", api::format_dry_run_text(ctx, &payload));
+                return Ok(code);
+            }
+            actions::execute(ctx, &actions::find(id)?, &parameters)?;
+            Ok(0)
         }
         Some(("batch", matches)) => {
             let ids = matches
@@ -498,13 +844,44 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                 .unwrap()
                 .map(String::as_str)
                 .collect::<Vec<_>>();
-            let sets = matches
-                .get_many::<String>("set")
-                .into_iter()
-                .flatten()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            actions::batch(ctx, &batch_jobs(&ids, &sets)?)
+            let dry_run = matches.get_flag("dry-run");
+            let json_mode = args.get_flag("json");
+            let jobs = if let Some(raw) = matches.get_one::<String>("params-json") {
+                let value = read_params_json(raw)?;
+                api::batch_jobs_from_json(&ids, &value)?
+            } else {
+                let sets = matches
+                    .get_many::<String>("set")
+                    .into_iter()
+                    .flatten()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                batch_jobs(&ids, &sets)?
+            };
+            if json_mode {
+                let (payload, code) = api::execute_batch_json(
+                    ctx,
+                    &ExecutionPolicy::permissive(),
+                    &jobs,
+                    ctx.yes,
+                    dry_run,
+                );
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+                return Ok(code);
+            }
+            if dry_run {
+                let (payload, code) = api::execute_batch_json(
+                    ctx,
+                    &ExecutionPolicy::permissive(),
+                    &jobs,
+                    ctx.yes,
+                    true,
+                );
+                println!("{}", api::format_dry_run_text(ctx, &payload));
+                return Ok(code);
+            }
+            actions::batch(ctx, &jobs)?;
+            Ok(0)
         }
         Some(("docker", matches)) => {
             if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -521,7 +898,8 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                 args.get_one::<String>("style").map(String::as_str),
                 preferences,
                 crate::tui::LaunchTarget::Docker { tab, fullscreen },
-            )
+            )?;
+            Ok(0)
         }
         Some(("mihomo", matches)) => {
             if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -538,7 +916,8 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                 args.get_one::<String>("style").map(String::as_str),
                 preferences,
                 crate::tui::LaunchTarget::Clash { tab, fullscreen },
-            )
+            )?;
+            Ok(0)
         }
         None => {
             if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
@@ -549,7 +928,8 @@ fn dispatch(ctx: &Context, args: &clap::ArgMatches, preferences: &Preferences) -
                 args.get_one::<String>("theme").map(String::as_str),
                 args.get_one::<String>("style").map(String::as_str),
                 preferences,
-            )
+            )?;
+            Ok(0)
         }
         Some((name, _)) => Err(Error::new("error.cli", name)),
     }
@@ -662,7 +1042,7 @@ mod tests {
             .chain(ids.iter().copied())
             .chain(sets.iter().flat_map(|set| ["--set", *set]));
         let matches = command(&ctx.i18n).try_get_matches_from(args).unwrap();
-        dispatch(&ctx, &matches, &Preferences::default())
+        dispatch(&ctx, &matches, &Preferences::default()).map(|_| ())
     }
 
     #[test]

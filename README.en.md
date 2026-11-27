@@ -313,11 +313,19 @@ Language precedence: `--lang` > `CQS_LANG` > `config.toml` > `LC_ALL` / `LC_MESS
 Action IDs are language-independent. Use the CLI directly in non-interactive shells, with `--yes` / `-y` to auto-accept generic prompts:
 
 ```bash
-# Discovery, appearance & self-updates
+# Discovery, status snapshots, action schemas & self-updates
 cqs list --json
+cqs status --json
+cqs describe bbr.enable --json
+cqs choices clash.proxy.select --json
 cqs themes && cqs styles
 cqs update --check --json
 sudo cqs --gh-proxy default update
+
+# Native MCP stdio server & structured JSON dry-run/execution for AI agents (see docs/AI_API.md)
+cqs mcp --read-only
+sudo cqs run bbr.enable --json --dry-run --params-json '{"qdisc":"fq"}'
+sudo cqs --yes run bbr.enable --json --params-json '{"qdisc":"fq"}'
 
 # Mirrors, BBR & TCP tuning
 cqs run system.mirror.test
@@ -362,6 +370,7 @@ cqs --yes run clash.start
 | Document | Scope |
 | --- | --- |
 | [docs/TECHNICAL.md](docs/TECHNICAL.md) | Architecture, locks, transactional recovery & testing acceptance |
+| [docs/AI_API.md](docs/AI_API.md) | Native MCP stdio server, structured JSON CLI, safety guardrails & AI client setup |
 | [docs/THEMES.md](docs/THEMES.md) | Decoupled themes & styles, 20 color roles & custom theme authoring |
 | [docs/MIHOMO.md](docs/MIHOMO.md) | Mihomo actions, Web panels, controller, TUN/systemd & `clashctl` compatibility |
 | [docs/MIRRORS.md](docs/MIRRORS.md) | LinuxMirrors Lite integration scope & recovery |

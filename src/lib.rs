@@ -1,10 +1,12 @@
 pub mod actions;
+pub mod api;
 pub mod cli;
 pub mod config;
 pub mod dashboard;
 pub mod error;
 pub mod github_proxy;
 pub mod i18n;
+pub mod mcp;
 pub mod ops;
 pub mod runtime;
 pub mod storage;

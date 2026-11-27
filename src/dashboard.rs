@@ -67,6 +67,22 @@ impl Usage {
     }
 }
 
+/// Host TCP / UDP socket counters parsed from Linux `/proc/net/sockstat{,6}` in O(1) without forks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConnectionCounts {
+    /// Active TCP sockets in use (IPv4 + IPv6).
+    pub tcp: u64,
+    /// TCP sockets currently in `TIME_WAIT`.
+    pub tcp_time_wait: u64,
+    /// Active UDP sockets in use (IPv4 + IPv6).
+    pub udp: u64,
+}
+impl ConnectionCounts {
+    pub fn total(&self) -> u64 {
+        self.tcp.saturating_add(self.udp)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LocalSnapshot {
     pub host: Reading<String>,
@@ -96,6 +112,8 @@ pub struct LocalSnapshot {
     pub tcp_configured: Reading<bool>,
     /// The max field of /proc/sys/net/ipv4/tcp_rmem, in bytes. Linux only.
     pub tcp_rmem_max: Reading<u64>,
+    /// Active host TCP/UDP socket counters from `/proc/net/sockstat{,6}`. Linux only.
+    pub connections: Reading<ConnectionCounts>,
     pub updated: Option<Instant>,
 }
 impl Default for LocalSnapshot {
@@ -124,6 +142,7 @@ impl Default for LocalSnapshot {
             bbr_version: Reading::Loading,
             tcp_configured: Reading::Loading,
             tcp_rmem_max: Reading::Loading,
+            connections: Reading::Loading,
             updated: None,
         }
     }
@@ -321,6 +340,7 @@ impl Sampler {
             bbr_version: Reading::NotApplicable,
             tcp_configured: Reading::NotApplicable,
             tcp_rmem_max: Reading::NotApplicable,
+            connections: Reading::NotApplicable,
             updated: Some(now),
         };
         if cfg!(target_os = "linux") {
@@ -329,6 +349,10 @@ impl Sampler {
                 Path::new("/proc/sys"),
                 Path::new("/sys/module/tcp_bbr/version"),
                 &ctx.paths.tcp,
+            );
+            snapshot.connections = read_linux_connections(
+                Path::new("/proc/net/sockstat"),
+                Path::new("/proc/net/sockstat6"),
             );
             // Re-read every sample: cgroup limits can change while the TUI runs.
             snapshot.effective_memory_kb =
@@ -491,6 +515,69 @@ pub fn parse_tcp_rmem(text: &str) -> Result<u64> {
     field(max)
 }
 
+fn parse_sockstat_field(text: &str, prefix: &str, key: &str) -> Result<Option<u64>> {
+    let Some(line) = text.lines().find(|l| l.starts_with(prefix)) else {
+        return Ok(None);
+    };
+    let mut tokens = line[prefix.len()..].split_ascii_whitespace();
+    while let (Some(field), Some(word)) = (tokens.next(), tokens.next()) {
+        if field == key {
+            if !word.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(Error::new(
+                    "error.data",
+                    format!("sockstat {prefix} {key}: {word:?} is not a decimal integer"),
+                ));
+            }
+            let val = word.parse::<u64>().map_err(|e| {
+                Error::new(
+                    "error.data",
+                    format!("sockstat {prefix} {key}: {word:?}: {e}"),
+                )
+            })?;
+            return Ok(Some(val));
+        }
+    }
+    Ok(None)
+}
+
+/// Parses Linux `/proc/net/sockstat` and optional `/proc/net/sockstat6` into TCP/UDP socket counts.
+pub fn parse_sockstat(v4: &str, v6: Option<&str>) -> Result<ConnectionCounts> {
+    let tcp4 = parse_sockstat_field(v4, "TCP:", "inuse")?
+        .ok_or_else(|| Error::new("error.data", "sockstat: missing TCP inuse"))?;
+    let tcp_tw = parse_sockstat_field(v4, "TCP:", "tw")?.unwrap_or(0);
+    let udp4 = parse_sockstat_field(v4, "UDP:", "inuse")?
+        .ok_or_else(|| Error::new("error.data", "sockstat: missing UDP inuse"))?;
+    let (tcp6, udp6) = match v6 {
+        Some(text) => (
+            parse_sockstat_field(text, "TCP6:", "inuse")?.unwrap_or(0),
+            parse_sockstat_field(text, "UDP6:", "inuse")?.unwrap_or(0),
+        ),
+        None => (0, 0),
+    };
+    Ok(ConnectionCounts {
+        tcp: tcp4.saturating_add(tcp6),
+        tcp_time_wait: tcp_tw,
+        udp: udp4.saturating_add(udp6),
+    })
+}
+
+pub fn read_linux_connections(sockstat: &Path, sockstat6: &Path) -> Reading<ConnectionCounts> {
+    let v4 = match fs::read_to_string(sockstat) {
+        Ok(text) => text,
+        Err(e) => {
+            return Reading::Unavailable(format!("{}: {e}", sockstat.display()));
+        }
+    };
+    let v6 = match fs::read_to_string(sockstat6) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Reading::Unavailable(format!("{}: {e}", sockstat6.display()));
+        }
+    };
+    Reading::from_result(parse_sockstat(&v4, v6.as_deref()))
+}
+
 pub fn parse_ip(text: &str, v4: bool) -> Result<String> {
     let ip: std::net::IpAddr = text
         .trim()
@@ -501,7 +588,7 @@ pub fn parse_ip(text: &str, v4: bool) -> Result<String> {
     }
     Ok(ip.to_string())
 }
-fn query_public(ctx: &Context) -> PublicSnapshot {
+pub fn query_public(ctx: &Context) -> PublicSnapshot {
     let query = |url: &str| {
         ctx.output(
             "curl",
@@ -1226,5 +1313,68 @@ mod tests {
         // Immediate second check without new publication returns None (zero clone).
         assert!(monitor.snapshot_if_changed(&mut seen).unwrap().is_none());
         drop(monitor);
+    }
+
+    #[test]
+    fn sockstat_parser_aggregates_ipv4_ipv6_and_handles_missing_ipv6_or_malformed_input() {
+        let v4 = "\
+sockets: used 215
+TCP: inuse 18 orphan 0 tw 5 alloc 22 mem 3
+UDP: inuse 4 mem 1
+UDPLITE: inuse 0
+RAW: inuse 0
+FRAG: inuse 0 memory 0
+";
+        let v6 = "\
+TCP6: inuse 6
+UDP6: inuse 2
+UDPLITE6: inuse 0
+RAW6: inuse 0
+FRAG6: inuse 0 memory 0
+";
+        let dual = parse_sockstat(v4, Some(v6)).unwrap();
+        assert_eq!(
+            dual,
+            ConnectionCounts {
+                tcp: 24,
+                tcp_time_wait: 5,
+                udp: 6,
+            }
+        );
+        assert_eq!(dual.total(), 30);
+
+        let v4_only = parse_sockstat(v4, None).unwrap();
+        assert_eq!(
+            v4_only,
+            ConnectionCounts {
+                tcp: 18,
+                tcp_time_wait: 5,
+                udp: 4,
+            }
+        );
+
+        assert_eq!(
+            parse_sockstat("UDP: inuse 1\n", None).unwrap_err().key,
+            "error.data"
+        );
+        assert_eq!(
+            parse_sockstat("TCP: inuse +4 tw 0\nUDP: inuse 1\n", None)
+                .unwrap_err()
+                .key,
+            "error.data"
+        );
+
+        // Missing sockstat6 degrades cleanly to IPv4-only counts; missing sockstat is Unavailable.
+        let temp = tempfile::tempdir().unwrap();
+        let p4 = temp.path().join("sockstat");
+        let p6 = temp.path().join("sockstat6");
+        assert!(matches!(
+            read_linux_connections(&p4, &p6),
+            Reading::Unavailable(_)
+        ));
+        fs::write(&p4, v4).unwrap();
+        assert_eq!(read_linux_connections(&p4, &p6), Reading::Value(v4_only));
+        fs::write(&p6, v6).unwrap();
+        assert_eq!(read_linux_connections(&p4, &p6), Reading::Value(dual));
     }
 }

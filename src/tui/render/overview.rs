@@ -472,6 +472,23 @@ fn draw_network_card(app: &App, frame: &mut Frame, card: Rect) {
         other => placeholder(app, other),
     };
 
+    // Host connections (TCP / UDP / TIME_WAIT from Linux /proc/net/sockstat{,6})
+    let (conns_text, conns_tone) = match local.connections {
+        Reading::Value(c) => {
+            let text = if c.tcp_time_wait > 0 && inner.width >= 32 {
+                format!("TCP {}{sep}UDP {}{sep}TW {}", c.tcp, c.udp, c.tcp_time_wait)
+            } else {
+                format!("TCP {}{sep}UDP {}", c.tcp, c.udp)
+            };
+            (text, Tone::Plain)
+        }
+        ref other => placeholder(app, other),
+    };
+    let compact_conns_suffix = match local.connections {
+        Reading::Value(c) => format!("{sep}TCP {}/UDP {}", c.tcp, c.udp),
+        _ => String::new(),
+    };
+
     // IPv4 + ISP
     let (v4_text, v4_tone) = match (&public.ipv4, &public.isp) {
         (Reading::Value(ip), Reading::Value(isp)) if !isp.is_empty() => {
@@ -578,7 +595,8 @@ fn draw_network_card(app: &App, frame: &mut Frame, card: Rect) {
             ));
         }
     } else if inner.height == 5 {
-        // Medium-short mobile: BBR, TCP, IPv4, Proxy, GitHub
+        // Medium-short mobile: BBR, TCP (+ compact conns), IPv4, Proxy, GitHub
+        let tcp_with_conns = format!("{tcp_text}{compact_conns_suffix}");
         lines.push(fact_line(
             app,
             i.text("dash.row_bbr"),
@@ -589,7 +607,7 @@ fn draw_network_card(app: &App, frame: &mut Frame, card: Rect) {
         lines.push(fact_line(
             app,
             i.text("dash.row_tcp"),
-            &tcp_text,
+            &tcp_with_conns,
             tcp_tone,
             inner.width as usize,
         ));
@@ -614,7 +632,53 @@ fn draw_network_card(app: &App, frame: &mut Frame, card: Rect) {
             gh_tone,
             inner.width as usize,
         ));
+    } else if inner.height == 6 {
+        // Compact 6-row card (e.g. 59x24 mobile): keep all 6 rows and surface host conns inline on TCP
+        let tcp_with_conns = format!("{tcp_text}{compact_conns_suffix}");
+        lines.push(fact_line(
+            app,
+            i.text("dash.row_bbr"),
+            &bbr_text,
+            bbr_tone,
+            inner.width as usize,
+        ));
+        lines.push(fact_line(
+            app,
+            i.text("dash.row_tcp"),
+            &tcp_with_conns,
+            tcp_tone,
+            inner.width as usize,
+        ));
+        lines.push(fact_line(
+            app,
+            i.text("dash.ipv4"),
+            &v4_text,
+            v4_tone,
+            inner.width as usize,
+        ));
+        lines.push(fact_line(
+            app,
+            i.text("dash.ipv6"),
+            &v6_text,
+            v6_tone,
+            inner.width as usize,
+        ));
+        lines.push(fact_line(
+            app,
+            i.text("dash.row_proxy"),
+            &proxy_text,
+            proxy_tone,
+            inner.width as usize,
+        ));
+        lines.push(fact_line(
+            app,
+            i.text("dash.row_github"),
+            &gh_text,
+            gh_tone,
+            inner.width as usize,
+        ));
     } else {
+        // Full 7+ row card (80x24 compact = 7 rows; 120x36 wide = 8 rows with breathing gap)
         lines.push(fact_line(
             app,
             i.text("dash.row_bbr"),
@@ -627,6 +691,13 @@ fn draw_network_card(app: &App, frame: &mut Frame, card: Rect) {
             i.text("dash.row_tcp"),
             &tcp_text,
             tcp_tone,
+            inner.width as usize,
+        ));
+        lines.push(fact_line(
+            app,
+            i.text("dash.row_conns"),
+            &conns_text,
+            conns_tone,
             inner.width as usize,
         ));
         lines.push(fact_line(

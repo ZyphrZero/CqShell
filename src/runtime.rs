@@ -65,6 +65,7 @@ pub struct Context {
     pub github_proxy: Option<String>,
     pub(crate) environment: std::collections::BTreeMap<String, String>,
     pub(crate) batch_confirmed: bool,
+    pub(crate) headless: bool,
     recovering: bool,
 }
 
@@ -112,6 +113,7 @@ impl Context {
             github_proxy: None,
             environment: std::collections::BTreeMap::new(),
             batch_confirmed: false,
+            headless: false,
             recovering: false,
         }
     }
@@ -163,7 +165,34 @@ impl Context {
         let (tx, _rx) = mpsc::channel();
         ctx.events = Some(tx);
         ctx.interactive = false;
+        ctx.headless = true;
         ctx
+    }
+    /// Return a non-interactive clone that routes logs and batch step events into the returned
+    /// receiver without printing to `stdout` or attempting interactive confirmations.
+    pub fn captured(&self, yes: bool) -> (Self, mpsc::Receiver<Event>) {
+        let mut ctx = self.clone();
+        let (tx, rx) = mpsc::channel();
+        ctx.events = Some(tx);
+        ctx.interactive = false;
+        ctx.headless = true;
+        ctx.yes = yes;
+        (ctx, rx)
+    }
+    /// Whether this context is attached to an interactive confirmation UI (TUI event loop or TTY).
+    pub fn can_prompt(&self) -> bool {
+        !self.headless && (self.events.is_some() || self.interactive)
+    }
+    /// Whether the current process holds root privileges on Unix.
+    pub fn is_root(&self) -> bool {
+        #[cfg(unix)]
+        {
+            unsafe { libc::geteuid() == 0 }
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
     pub fn check(&self) -> Result<()> {
         if !self.recovering && self.cancel.load(Ordering::SeqCst) {
@@ -245,7 +274,9 @@ impl Context {
         if allow_batch_skip && self.batch_confirmed {
             return Ok(());
         }
-        let accepted = if let Some(tx) = &self.events {
+        let accepted = if !self.headless
+            && let Some(tx) = &self.events
+        {
             let (reply, receive) = mpsc::channel();
             tx.send(Event::Confirm {
                 text,
@@ -261,7 +292,7 @@ impl Context {
                     Err(e) => return Err(Error::new("error.io", e)),
                 }
             }
-        } else if self.interactive {
+        } else if !self.headless && self.interactive {
             println!("{text}");
             let stdin = std::io::stdin();
             let mut reader = stdin.lock();

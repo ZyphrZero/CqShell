@@ -7,12 +7,12 @@
  ────────────────────   ───────────────────────────────────────────────   ───────────────────────────────────────────── 
  ▎ ◈ Overview            CPU    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  12%  2C · ▂▂▂▂▂     BBR   ○ Disabled · available / v3 · cubic    
    ✦ Optimization        Memory ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  63%    1.2/1.9G     TCP   ○ not configured · fq_codel            
-  ──────────────────     Disk   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  41%  16.4/40.0G     IPv4  203.0.113.24 · AS64500 Example Net     
-  Infrastructure ───     Swap   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  10%    0.2/2.0G     IPv6  2001:db8:3c4d:15::1a2f                 
-   1 System                                                                                                             
-   2 Kernel              Host   vps-sg-01 · Debian GNU/Linux 12 (book…     Proxy Mihomo ● Running · v1.19.2 · Termina…  
-   3 Network             Kernel 6.12.8-joeyblog-bbrv3 · x86_64             GH    ○ Direct                               
-   4 SSH                 Uptime 3d 04h 00m · Asia/Shanghai                                                              
+  ──────────────────     Disk   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  41%  16.4/40.0G     Conns TCP 24 · UDP 6 · TW 5                  
+  Infrastructure ───     Swap   ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄  10%    0.2/2.0G     IPv4  203.0.113.24 · AS64500 Example Net     
+   1 System                                                                IPv6  2001:db8:3c4d:15::1a2f                 
+   2 Kernel              Host   vps-sg-01 · Debian GNU/Linux 12 (book…                                                  
+   3 Network             Kernel 6.12.8-joeyblog-bbrv3 · x86_64             Proxy Mihomo ● Running · v1.19.2 · Termina…  
+   4 SSH                 Uptime 3d 04h 00m · Asia/Shanghai                 GH    ○ Direct                               
    5 Docker                                                                                                             
                         Quick Actions & Insights                                                       / search actions 
   Proxy & Tools ────    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━   ───────────────────────────────────────────── 
@@ -181,8 +181,7 @@
 6 72 1 #0f172a #f1f5f9 -
 6 73 2 #0f172a #ffffff -
 6 75 6 #52637a #ffffff -
-6 81 22 #334155 #ffffff -
-6 103 17 #0f172a #ffffff -
+6 81 39 #0f172a #ffffff -
 7 0 1 #0f172a #e8eef5 -
 7 1 1 #0b665f #e8eef5 bold
 7 2 1 #0f172a #e8eef5 -
@@ -193,7 +192,10 @@
 7 22 1 #0f172a #f1f5f9 -
 7 23 49 #0f172a #ffffff -
 7 72 1 #0f172a #f1f5f9 -
-7 73 47 #0f172a #ffffff -
+7 73 2 #0f172a #ffffff -
+7 75 6 #52637a #ffffff -
+7 81 22 #334155 #ffffff -
+7 103 17 #0f172a #ffffff -
 8 0 1 #0f172a #e8eef5 -
 8 1 1 #0b665f #e8eef5 bold
 8 2 1 #0f172a #e8eef5 -
@@ -206,10 +208,7 @@
 8 25 7 #52637a #ffffff -
 8 32 40 #0f172a #ffffff -
 8 72 1 #0f172a #f1f5f9 -
-8 73 2 #0f172a #ffffff -
-8 75 6 #52637a #ffffff -
-8 81 37 #146c35 #ffffff -
-8 118 2 #0f172a #ffffff -
+8 73 47 #0f172a #ffffff -
 9 0 1 #0f172a #e8eef5 -
 9 1 1 #0b665f #e8eef5 bold
 9 2 1 #0f172a #e8eef5 -
@@ -225,8 +224,8 @@
 9 72 1 #0f172a #f1f5f9 -
 9 73 2 #0f172a #ffffff -
 9 75 6 #52637a #ffffff -
-9 81 8 #334155 #ffffff -
-9 89 31 #0f172a #ffffff -
+9 81 37 #146c35 #ffffff -
+9 118 2 #0f172a #ffffff -
 10 0 1 #0f172a #e8eef5 -
 10 1 1 #0b665f #e8eef5 bold
 10 2 1 #0f172a #e8eef5 -
@@ -240,7 +239,10 @@
 10 32 26 #334155 #ffffff -
 10 58 14 #0f172a #ffffff -
 10 72 1 #0f172a #f1f5f9 -
-10 73 47 #0f172a #ffffff -
+10 73 2 #0f172a #ffffff -
+10 75 6 #52637a #ffffff -
+10 81 8 #334155 #ffffff -
+10 89 31 #0f172a #ffffff -
 11 0 1 #0f172a #e8eef5 -
 11 1 1 #0b665f #e8eef5 bold
 11 2 1 #0f172a #e8eef5 -
