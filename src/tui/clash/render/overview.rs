@@ -7,12 +7,13 @@
 //! - Live Active Connections preview + Clickable Policy Group quick cards
 
 use super::{
-    draw_card_title, draw_pill_chip, draw_progress_bar, fill_rect_bg, surface_bg, traffic,
+    delay_role, draw_card_title, draw_pill_chip, draw_progress_bar, fill_rect_bg, surface_bg,
+    traffic,
 };
 use crate::{
     ops::clash::model::{
-        IpQualityLevel, IpQualityOutcome, UserinfoSource, format_bytes, format_bytes_compact,
-        format_relative_epoch, format_speed_compact, format_uptime,
+        IpQualityLevel, IpQualityOutcome, SubscriptionUserinfo, UserinfoSource, format_bytes,
+        format_bytes_compact, format_relative_age, format_speed_compact, format_uptime,
     },
     theme::{Level, Role},
     tui::{
@@ -582,38 +583,51 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
         if card.height >= 4 {
             let age = prof
                 .updated_epoch
-                .map(|ts| format_relative_epoch(ts, now_epoch))
+                .map(|ts| format_relative_age(ts, now_epoch, i))
                 .unwrap_or_else(|| "-".to_owned());
             let host_lbl = if prof.is_local {
                 i.text("clash.profile.local")
             } else {
                 prof.host.as_str()
             };
-            let extra = if let Some((info, source)) = &effective_quota {
+            let extra: Option<(String, Option<Role>)> = if let Some((info, source)) =
+                &effective_quota
+            {
                 if let Some(exp_ts) = info.expire
                     && let Some(exp) = info.expire_date()
                 {
                     if exp_ts <= now_epoch {
-                        Some(format!("{exp} ({})", i.text("clash.profile.expired")))
+                        Some((
+                            format!("{exp} ({})", i.text("clash.profile.expired")),
+                            Some(Role::Danger),
+                        ))
                     } else if let Some(days) = info.days_until_expire(now_epoch) {
-                        Some(format!(
-                            "{exp} ({})",
-                            i.format("clash.profile.days_left", &[("days", &days.to_string())])
+                        let role = (days <= 7).then_some(Role::Warning);
+                        Some((
+                            format!(
+                                "{exp} ({})",
+                                i.format("clash.profile.days_left", &[("days", &days.to_string())])
+                            ),
+                            role,
                         ))
                     } else {
-                        Some(format!("{} {exp}", i.text("clash.profile.expire")))
+                        Some((format!("{} {exp}", i.text("clash.profile.expire")), None))
                     }
                 } else {
                     match source {
-                        UserinfoSource::Provider(name) => {
-                            Some(i.format("clash.profile.from_provider", &[("name", name)]))
-                        }
-                        UserinfoSource::Providers(count) => Some(i.format(
-                            "clash.profile.from_providers",
-                            &[("count", &count.to_string())],
+                        UserinfoSource::Provider(name) => Some((
+                            i.format("clash.profile.from_provider", &[("name", name)]),
+                            None,
+                        )),
+                        UserinfoSource::Providers(count) => Some((
+                            i.format(
+                                "clash.profile.from_providers",
+                                &[("count", &count.to_string())],
+                            ),
+                            None,
                         )),
                         UserinfoSource::Profile if info.total > 0 || info.used() > 0 => {
-                            Some(i.text("clash.profile.no_expiry").to_owned())
+                            Some((i.text("clash.profile.no_expiry").to_owned(), None))
                         }
                         UserinfoSource::Profile => None,
                     }
@@ -621,48 +635,72 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
             } else {
                 None
             };
-            let sub = if let Some(extra) = extra {
-                let full = format!("{host_lbl} {sep} {age} {sep} {extra}");
-                if full.width() <= iw {
-                    full
+            let prefix_full = format!("{host_lbl} {sep} {age}");
+            if let Some((extra_txt, extra_role)) = extra {
+                let with_sep = format!(" {sep} {extra_txt}");
+                let prefix = if prefix_full.width() + with_sep.width() <= iw {
+                    prefix_full
                 } else {
-                    format!("{host_lbl} {sep} {extra}")
+                    host_lbl.to_owned()
+                };
+                let pre_clip = clip_ascii_safe(&prefix, iw, ascii);
+                let pre_w = pre_clip.width();
+                buf.set_stringn(
+                    ix,
+                    card.y + 2,
+                    &pre_clip,
+                    iw,
+                    tokens::text(theme, Level::Secondary).bg(bg),
+                );
+                let rem_w = iw.saturating_sub(pre_w);
+                if rem_w >= 4 {
+                    let sep_part = format!(" {sep} ");
+                    let sep_w = sep_part.width();
+                    buf.set_stringn(
+                        ix + pre_w as u16,
+                        card.y + 2,
+                        clip_ascii_safe(&sep_part, rem_w, ascii),
+                        rem_w,
+                        tokens::text(theme, Level::Tertiary).bg(bg),
+                    );
+                    let ex_budget = rem_w.saturating_sub(sep_w);
+                    if ex_budget > 0 {
+                        let ex_style = match extra_role {
+                            Some(role) => {
+                                tokens::fg(theme, role).bg(bg).add_modifier(Modifier::BOLD)
+                            }
+                            None => tokens::text(theme, Level::Secondary).bg(bg),
+                        };
+                        buf.set_stringn(
+                            ix + (pre_w + sep_w) as u16,
+                            card.y + 2,
+                            clip_ascii_safe(&extra_txt, ex_budget, ascii),
+                            ex_budget,
+                            ex_style,
+                        );
+                    }
                 }
             } else {
-                format!("{host_lbl} {sep} {age}")
-            };
-            buf.set_stringn(
-                ix,
-                card.y + 2,
-                clip_ascii_safe(&sub, iw, ascii),
-                iw,
-                tokens::text(theme, Level::Secondary).bg(bg),
-            );
+                buf.set_stringn(
+                    ix,
+                    card.y + 2,
+                    clip_ascii_safe(&prefix_full, iw, ascii),
+                    iw,
+                    tokens::text(theme, Level::Secondary).bg(bg),
+                );
+            }
         }
 
         if card.height >= 5 {
             if let Some((info, _)) = &effective_quota {
                 if info.total > 0 {
-                    let pct = (info.ratio() * 100.0).round() as u64;
-                    let quota = format!(
-                        "{pct}% {}  {} / {}",
-                        i.text("clash.profile.used"),
-                        format_bytes_compact(info.used()),
-                        format_bytes_compact(info.total)
-                    );
-                    let fill_role = if pct >= 90 {
-                        Role::Danger
-                    } else if pct >= 75 {
-                        Role::Warning
-                    } else {
-                        Role::Accent
-                    };
-                    buf.set_stringn(
-                        ix,
-                        card.y + 3,
-                        clip_ascii_safe(&quota, iw, ascii),
-                        iw,
-                        tokens::fg(theme, fill_role).bg(bg),
+                    let fill_role = draw_overview_quota_row(
+                        buf,
+                        Rect::new(ix, card.y + 3, iw as u16, 1),
+                        *info,
+                        i,
+                        theme,
+                        bg,
                     );
                     if card.height >= 6 {
                         draw_progress_bar(
@@ -678,7 +716,7 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
                     let used_line = format!(
                         "{} {}",
                         i.text("clash.profile.used"),
-                        format_bytes_compact(info.used())
+                        format_bytes(info.used())
                     );
                     buf.set_stringn(
                         ix,
@@ -752,26 +790,13 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
                 .add_modifier(Modifier::BOLD),
         );
         if card.height >= 4 && info.total > 0 {
-            let pct = (info.ratio() * 100.0).round() as u64;
-            let quota = format!(
-                "{pct}% {}  {} / {}",
-                i.text("clash.profile.used"),
-                format_bytes_compact(info.used()),
-                format_bytes_compact(info.total)
-            );
-            let fill_role = if pct >= 90 {
-                Role::Danger
-            } else if pct >= 75 {
-                Role::Warning
-            } else {
-                Role::Accent
-            };
-            buf.set_stringn(
-                ix,
-                card.y + 2,
-                clip_ascii_safe(&quota, iw, ascii),
-                iw,
-                tokens::fg(theme, fill_role).bg(bg),
+            let fill_role = draw_overview_quota_row(
+                buf,
+                Rect::new(ix, card.y + 2, iw as u16, 1),
+                *info,
+                i,
+                theme,
+                bg,
             );
             if card.height >= 5 {
                 draw_progress_bar(
@@ -793,6 +818,125 @@ fn draw_profile_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
             tokens::text(theme, Level::Tertiary).bg(bg),
         );
     }
+}
+
+fn draw_overview_quota_row(
+    buf: &mut ratatui::buffer::Buffer,
+    row: Rect,
+    info: SubscriptionUserinfo,
+    i: &crate::i18n::I18n,
+    theme: &crate::theme::Theme,
+    bg: ratatui::style::Color,
+) -> Role {
+    let ascii = theme.flags.ascii;
+    let sep = tokens::glyph(theme, Glyph::Separator);
+    let pct = info.usage_percent();
+    let over = info.is_over_quota();
+    let fill_role = if over || pct >= 90 {
+        Role::Danger
+    } else if pct >= 75 {
+        Role::Warning
+    } else {
+        Role::Accent
+    };
+
+    let iw = row.width as usize;
+    let pct_str = format!("{pct}%");
+    let used_lbl = format!(
+        " {}",
+        i.text(if over {
+            "clash.profile.over_quota"
+        } else {
+            "clash.profile.used"
+        })
+    );
+    let left_w = pct_str.width() + used_lbl.width();
+    buf.set_stringn(
+        row.x,
+        row.y,
+        clip_ascii_safe(&pct_str, iw, ascii),
+        iw,
+        tokens::fg(theme, fill_role)
+            .bg(bg)
+            .add_modifier(Modifier::BOLD),
+    );
+    let lbl_budget = iw.saturating_sub(pct_str.width());
+    if lbl_budget > 0 {
+        buf.set_stringn(
+            row.x + pct_str.width() as u16,
+            row.y,
+            clip_ascii_safe(&used_lbl, lbl_budget, ascii),
+            lbl_budget,
+            tokens::text(theme, Level::Secondary).bg(bg),
+        );
+    }
+
+    let right_budget = iw.saturating_sub(left_w + 2);
+    if right_budget < 8 {
+        return fill_role;
+    }
+
+    let used_full = format_bytes(info.used());
+    let total_full = format_bytes(info.total);
+    let ratio_full = format!("{used_full} / {total_full}");
+    let rem_part = if !over {
+        format!(
+            " {sep} {} {}",
+            i.text("clash.profile.rem_short"),
+            format_bytes(info.remaining())
+        )
+    } else {
+        String::new()
+    };
+
+    if !rem_part.is_empty() && ratio_full.width() + rem_part.width() <= right_budget {
+        let total_rw = ratio_full.width() + rem_part.width();
+        let rx = row.right().saturating_sub(total_rw as u16);
+        buf.set_stringn(
+            rx,
+            row.y,
+            clip_ascii_safe(&ratio_full, ratio_full.width(), ascii),
+            ratio_full.width(),
+            tokens::text(theme, Level::Primary).bg(bg),
+        );
+        let rem_style = if pct >= 90 {
+            tokens::fg(theme, Role::Danger).bg(bg)
+        } else if pct >= 75 {
+            tokens::fg(theme, Role::Warning).bg(bg)
+        } else {
+            tokens::text(theme, Level::Secondary).bg(bg)
+        };
+        buf.set_stringn(
+            rx + ratio_full.width() as u16,
+            row.y,
+            clip_ascii_safe(&rem_part, rem_part.width(), ascii),
+            rem_part.width(),
+            rem_style,
+        );
+    } else if ratio_full.width() <= right_budget {
+        tokens::put_right(
+            buf,
+            row,
+            &clip_ascii_safe(&ratio_full, right_budget, ascii),
+            tokens::text(theme, Level::Primary).bg(bg),
+        );
+    } else {
+        let compact = format!(
+            "{}/{}",
+            format_bytes_compact(info.used()),
+            format_bytes_compact(info.total)
+        );
+        if compact.width() <= right_budget {
+            tokens::put_right(
+                buf,
+                row,
+                &clip_ascii_safe(&compact, right_budget, ascii),
+                tokens::text(theme, Level::Primary).bg(bg),
+            );
+        }
+    }
+
+    fill_role
 }
 
 fn draw_services_card(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
@@ -1201,6 +1345,7 @@ fn draw_groups_preview(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
         return;
     }
 
+    let arrow = if ascii { ">" } else { "›" };
     for &(rect, g_idx) in &geom.group_card_hits {
         let Some(group) = groups.get(g_idx) else {
             continue;
@@ -1209,11 +1354,18 @@ fn draw_groups_preview(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
         let hovered = app.hover.is_some_and(|p| rect.contains(p));
         let cell_bg = if focused {
             tokens::color(theme, Role::Selection)
-        } else if hovered {
-            tokens::color(theme, Role::Surface)
+        } else if hovered && !theme.flags.solid_selection {
+            super::blend_role_bg(
+                theme,
+                Role::SurfaceAlt,
+                Role::Selection,
+                if theme.light { 0.55 } else { 0.45 },
+                Role::SurfaceAlt,
+            )
         } else {
             bg
         };
+        let solid_focused = focused && theme.flags.solid_selection;
         fill_rect_bg(buf, rect, cell_bg);
         let cw = rect.width.saturating_sub(2) as usize;
         let bar = if focused {
@@ -1221,33 +1373,91 @@ fn draw_groups_preview(app: &App, frame: &mut Frame, geom: &OverviewGeom) {
         } else {
             " "
         };
-        buf.set_stringn(
-            rect.x,
-            rect.y,
-            bar,
-            1,
-            tokens::fg(theme, Role::Accent).bg(cell_bg),
-        );
+        let bar_style = ratatui::style::Style::default()
+            .fg(if solid_focused {
+                tokens::selected_accent(theme)
+            } else {
+                tokens::color(theme, Role::Accent)
+            })
+            .bg(cell_bg)
+            .add_modifier(Modifier::BOLD);
+        buf.set_stringn(rect.x, rect.y, bar, 1, bar_style);
+        if rect.height >= 2 {
+            buf.set_stringn(rect.x, rect.y + 1, bar, 1, bar_style);
+        }
+
+        let delay_badge = cl
+            .group_resolved_delay(group)
+            .map(|ms| (format!("{ms}ms"), delay_role(Some(ms), true)));
+        let name_budget = match &delay_badge {
+            Some((lbl, _)) if cw >= lbl.width() + 10 => cw.saturating_sub(lbl.width() + 1),
+            _ => cw,
+        };
+        let name_style = if solid_focused {
+            ratatui::style::Style::default()
+                .fg(tokens::selected_fg(theme))
+                .bg(cell_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            tokens::text(theme, Level::Primary)
+                .bg(cell_bg)
+                .add_modifier(Modifier::BOLD)
+        };
         buf.set_stringn(
             rect.x + 1,
             rect.y,
-            clip_ascii_safe(&group.name, cw, ascii),
-            cw,
-            tokens::text(theme, Level::Primary)
-                .bg(cell_bg)
-                .add_modifier(Modifier::BOLD),
+            clip_ascii_safe(&group.name, name_budget, ascii),
+            name_budget,
+            name_style,
         );
-        let now_text = if group.now.is_empty() {
+        if let Some((lbl, role)) = &delay_badge
+            && cw >= lbl.width() + 10
+        {
+            let d_style = if solid_focused {
+                ratatui::style::Style::default()
+                    .fg(tokens::selected_fg(theme))
+                    .bg(cell_bg)
+            } else {
+                tokens::fg(theme, *role).bg(cell_bg)
+            };
+            tokens::put_right(
+                buf,
+                Rect::new(rect.x + 1, rect.y, cw as u16, 1),
+                lbl,
+                d_style,
+            );
+        }
+
+        let now_text = if group.resolved_chain.len() >= 2 && cw >= 18 {
+            let last = group
+                .resolved_chain
+                .last()
+                .map(String::as_str)
+                .unwrap_or(&group.now);
+            let full = format!("{} {arrow} {last}", group.now);
+            if full.width() <= cw {
+                full
+            } else {
+                format!("{arrow} {last}")
+            }
+        } else if group.now.is_empty() {
             "-".to_owned()
         } else {
             group.now.clone()
+        };
+        let now_style = if solid_focused {
+            ratatui::style::Style::default()
+                .fg(tokens::selected_fg(theme))
+                .bg(cell_bg)
+        } else {
+            tokens::fg(theme, Role::Accent).bg(cell_bg)
         };
         buf.set_stringn(
             rect.x + 1,
             rect.y + 1,
             clip_ascii_safe(&now_text, cw, ascii),
             cw,
-            tokens::fg(theme, Role::Accent).bg(cell_bg),
+            now_style,
         );
     }
 }

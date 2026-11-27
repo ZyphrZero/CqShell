@@ -3797,3 +3797,288 @@ fn clash_service_status_modal_management_and_profile_usage_fallback_work() {
         }
     }
 }
+
+#[test]
+fn clash_proxy_selection_ux_and_quota_visualization_work_across_themes() {
+    use super::clash::{
+        fixture::sample_snapshot,
+        layout::{ClashBodyGeom, proxy_card_delay_hit},
+        state::{ClashModal, ProxySort},
+    };
+    use crate::{
+        ops::clash::{
+            model::{ClashTab, ProxyNodeItem, SubscriptionUserinfo},
+            monitor::{ClashEvent, ClashMonitorCmd},
+        },
+        theme::{Background, Role, StyleSelection, builtin, derive, resolve},
+    };
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    let right_click = |x: u16, y: u16| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+
+    // 1. Overview usage card renders precise bytes, remaining quota, localized age, and visible track
+    let (_temp, mut app) = test_app("zh-CN");
+    app.clash.snapshot = sample_snapshot();
+    app.clash.snapshot.profiles[0].userinfo = Some(SubscriptionUserinfo {
+        upload: 256 * 1024 * 1024 * 1024,
+        download: 1034 * 1024 * 1024 * 1024,
+        total: 1638 * 1024 * 1024 * 1024,
+        expire: None,
+    });
+    app.open_clash(ClashTab::Overview, false, false);
+    app.preview_theme("daylight", Background::Detected((0xf1, 0xf5, 0xf9)))
+        .unwrap();
+    let area = Rect::new(0, 0, 120, 36);
+    app.viewport = area;
+
+    let ov_text = render_clash_frame_text(&mut app, 120, 36);
+    for needle in [
+        "79% 已用",
+        "1.26 TB / 1.60 TB",
+        "剩 348.0 GB",
+        "长期有效",
+        "Proxy › JP-Opt-02",
+        "112ms",
+    ] {
+        assert!(
+            ov_text.contains(needle),
+            "Overview missing upgraded quota/group detail {needle:?}:\n{ov_text}"
+        );
+    }
+
+    // Over-quota displays >100% cleanly without claiming 0 B remaining.
+    app.clash.snapshot.profiles[0].userinfo = Some(SubscriptionUserinfo {
+        upload: 700 * 1024 * 1024 * 1024,
+        download: 1100 * 1024 * 1024 * 1024,
+        total: 1638 * 1024 * 1024 * 1024,
+        expire: None,
+    });
+    let over_text = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        over_text.contains("110% 超额"),
+        "Overview must highlight over-quota state:\n{over_text}"
+    );
+
+    // 2. Progress bar unfilled track maintains contrast >= 1.5 across every built-in RGB theme
+    for def in builtin::all() {
+        let theme = resolve(&def, StyleSelection::Auto, &Background::Disabled, false);
+        if theme.flags.ascii {
+            continue;
+        }
+        let card_bg = super::render::tokens::color(&theme, Role::SurfaceAlt);
+        let track_fg = super::clash::render::progress_track_fg_for_test(&theme, card_bg);
+        if let (ratatui::style::Color::Rgb(br, bg_g, bb), ratatui::style::Color::Rgb(tr, tg, tb)) =
+            (card_bg, track_fg)
+        {
+            let ratio = derive::contrast((br, bg_g, bb), (tr, tg, tb));
+            assert!(
+                ratio >= 1.5,
+                "theme {} progress bar track contrast too low against SurfaceAlt: {ratio:.2}",
+                theme.id
+            );
+        }
+    }
+
+    // 3. Proxies tab: entering auto-locates active node (`JP-Opt-02`), single-click selects immediately
+    // with optimistic update, clicking delay badge or right-clicking pings node without switching.
+    app.clash.set_tab(ClashTab::Proxies);
+    assert_eq!(app.clash.selected_node().unwrap().name, "JP-Opt-02");
+
+    // Populate >30 nodes to exercise vertical scrolling, range label, and right-edge scrollbar.
+    for extra in 0..32 {
+        app.clash.snapshot.groups[0].members.push(ProxyNodeItem {
+            name: format!("Node-{extra:02}"),
+            kind: "Vmess".into(),
+            delay_ms: Some(90 + extra as u64),
+            tested: true,
+            is_group: false,
+            now: None,
+            udp: true,
+            alive: true,
+            original_index: 6 + extra,
+        });
+    }
+    let px_text = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        px_text.contains("1-"),
+        "Scrollable node grid should display visible range:\n{px_text}"
+    );
+
+    let regions = LayoutRegions::compute(area, &app);
+    let Some(ClashBodyGeom::Proxies(px)) = regions.clash.as_ref().map(|g| &g.body) else {
+        panic!("expected Proxies geometry");
+    };
+    assert!(px.grid_scrollbar.is_some());
+    assert!(px.ping_btn.is_some());
+    assert!(px.fastest_btn.is_some());
+    assert!(px.locate_btn.is_some());
+    assert!(px.delay_url_btn.is_some());
+
+    // Hovering an unselected card must NOT paint it with outer Surface color (no hover whiteout)
+    let sg_card = px
+        .node_hits
+        .iter()
+        .find(|&&(_, idx)| app.clash.filtered_nodes()[idx].name == "SG-AnyTLS")
+        .copied()
+        .expect("SG-AnyTLS card visible")
+        .0;
+    app.hover = Some(ratatui::layout::Position::new(sg_card.x + 2, sg_card.y));
+    let mut term = Terminal::new(TestBackend::new(120, 36)).unwrap();
+    term.draw(|f| app.draw(f)).unwrap();
+    let surface_col = super::render::tokens::color(&app.theme.active, Role::Surface);
+    assert_ne!(
+        term.backend().buffer()[(sg_card.x + 2, sg_card.y)].bg,
+        surface_col,
+        "hovered proxy card must not blend into outer Surface background"
+    );
+    app.hover = None;
+
+    // Single left-click on delay sub-rect pings SG-AnyTLS without changing active selection
+    let delay_rect = proxy_card_delay_hit(sg_card).expect("delay hit rect");
+    let ping_eff = app
+        .handle_mouse(click(delay_rect.x + 1, delay_rect.y), area)
+        .unwrap();
+    assert!(matches!(
+        ping_eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::TestNodeDelay { ref node, .. })
+        if node == "SG-AnyTLS"
+    ));
+    assert_eq!(app.clash.current_group().unwrap().now, "JP-Opt-02");
+    app.clash.testing_nodes.clear();
+
+    // Right-click on card body also pings without switching
+    let rclick_eff = app
+        .handle_mouse(right_click(sg_card.x + 2, sg_card.y), area)
+        .unwrap();
+    assert!(matches!(
+        rclick_eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::TestNodeDelay { ref node, .. })
+        if node == "SG-AnyTLS"
+    ));
+    app.clash.testing_nodes.clear();
+
+    // Single left-click on card body immediately selects SG-AnyTLS with optimistic UI update
+    let sel_eff = app
+        .handle_mouse(click(sg_card.x + 2, sg_card.y), area)
+        .unwrap();
+    assert!(matches!(
+        sel_eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SelectProxy { ref group, ref node })
+        if group == "Proxy" && node == "SG-AnyTLS"
+    ));
+    assert_eq!(app.clash.current_group().unwrap().now, "SG-AnyTLS");
+    assert_eq!(
+        app.clash.snapshot.groups[3].resolved_chain,
+        vec!["Proxy".to_owned(), "SG-AnyTLS".to_owned()]
+    );
+
+    // Clicking [f] fastest button on chain_bar selects HK-HY2-01 optimistically
+    let fastest_btn = px.fastest_btn.unwrap();
+    let fast_eff = app
+        .handle_mouse(click(fastest_btn.x + 1, fastest_btn.y), area)
+        .unwrap();
+    assert!(matches!(
+        fast_eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SelectProxy { ref group, ref node })
+        if group == "Proxy" && node == "HK-HY2-01"
+    ));
+    assert_eq!(app.clash.current_group().unwrap().now, "HK-HY2-01");
+
+    // Clicking [d] URL opens DelaySettings modal
+    let url_btn = px.delay_url_btn.unwrap();
+    app.handle_mouse(click(url_btn.x + 1, url_btn.y), area)
+        .unwrap();
+    assert!(matches!(
+        app.clash.modal,
+        Some(ClashModal::DelaySettings { .. })
+    ));
+    app.clash.modal = None;
+
+    // Right-clicking [o] sort chip flips sort direction; left-clicking cycles & resets ascending
+    let sort_chip = px.sort_chip.unwrap();
+    assert!(app.clash.proxy_sort_asc);
+    app.handle_mouse(right_click(sort_chip.x + 1, sort_chip.y), area)
+        .unwrap();
+    assert!(!app.clash.proxy_sort_asc);
+    app.handle_mouse(click(sort_chip.x + 1, sort_chip.y), area)
+        .unwrap();
+    assert_eq!(app.clash.proxy_sort, ProxySort::Delay);
+    assert!(app.clash.proxy_sort_asc);
+
+    // Live streaming group delay progress (`18/38`) shows inside [t] chip while testing
+    app.clash.testing_groups.insert("Proxy".into());
+    app.clash.apply_event(
+        ClashEvent::NodeDelayTick {
+            group: "Proxy".into(),
+            node: "SG-AnyTLS".into(),
+            delay_ms: Some(155),
+            completed: 18,
+            total: 38,
+        },
+        &app.ctx.i18n,
+    );
+    let testing_text = render_clash_frame_text(&mut app, 120, 36);
+    assert!(
+        testing_text.contains("18/38"),
+        "Testing chip should show live streaming progress:\n{testing_text}"
+    );
+
+    // URLTest pin/unfix toggle: Enter pins, second Enter on pinned node unfixes back to auto
+    app.clash.select_group_index(1); // Auto (URLTest)
+    assert_eq!(app.clash.current_group().unwrap().name, "Auto");
+    assert_eq!(app.clash.selected_node().unwrap().name, "HK-HY2-01");
+    let pin_eff = app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(matches!(
+        pin_eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::SelectProxy { ref group, ref node })
+        if group == "Auto" && node == "HK-HY2-01"
+    ));
+    assert_eq!(
+        app.clash.current_group().unwrap().fixed.as_deref(),
+        Some("HK-HY2-01")
+    );
+    let pinned_text = render_clash_frame_text(&mut app, 120, 36);
+    assert!(pinned_text.contains("固定") && pinned_text.contains("[x] 恢复自动"));
+
+    let unfix_eff = app.handle_key(key(KeyCode::Enter)).unwrap();
+    assert!(matches!(
+        unfix_eff,
+        super::state::Effect::ClashCmd(ClashMonitorCmd::UnfixGroup { ref group })
+        if group == "Auto"
+    ));
+    assert!(app.clash.current_group().unwrap().fixed.is_none());
+
+    // 4. High Contrast (solid_selection) + Plain ASCII render cleanly without panics or non-ASCII
+    app.preview_theme("high-contrast", Background::Detected((0, 0, 0)))
+        .unwrap();
+    app.clash.set_tab(ClashTab::Overview);
+    let _ = render_clash_frame_text(&mut app, 120, 36);
+    app.clash.set_tab(ClashTab::Proxies);
+    let _ = render_clash_frame_text(&mut app, 120, 36);
+    app.clash.set_tab(ClashTab::Profiles);
+    let _ = render_clash_frame_text(&mut app, 120, 36);
+
+    let (_temp_en, mut app_en) = test_app("en-US");
+    app_en.clash.snapshot = sample_snapshot();
+    app_en.clash.snapshot.groups[1].fixed = Some("HK-HY2-01".into());
+    app_en
+        .preview_theme("plain", Background::Detected((0, 0, 0)))
+        .unwrap();
+    app_en.open_clash(ClashTab::Proxies, false, false);
+    app_en.clash.select_group_index(1);
+    for (w, h) in [(120u16, 36u16), (80, 24), (59, 24), (40, 16)] {
+        for tab in [ClashTab::Overview, ClashTab::Proxies, ClashTab::Profiles] {
+            app_en.clash.set_tab(tab);
+            let txt = render_clash_frame_text(&mut app_en, w, h);
+            assert!(
+                txt.is_ascii(),
+                "non-ASCII in plain {tab:?} at {w}x{h}:\n{txt}"
+            );
+        }
+    }
+}

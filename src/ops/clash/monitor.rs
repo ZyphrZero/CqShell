@@ -1227,13 +1227,13 @@ impl ClashMonitor {
                     break;
                 }
 
-                // Automatically backfill missing `subscription-userinfo` once per session for a
-                // remote active profile without rewriting its YAML config or restarting Mihomo.
+                // Refresh `subscription-userinfo` headers once per session for the active remote
+                // profile without rewriting its YAML config or reloading Mihomo, keeping usage
+                // figures up to date even when the subscription YAML was downloaded days ago.
                 if active
                     && matches!(tab, ClashTab::Overview | ClashTab::Profiles)
                     && let Some(prof) = snap.active_profile()
                     && !prof.is_local
-                    && prof.userinfo.is_none()
                     && userinfo_probed_profiles.insert(prof.name.clone())
                 {
                     spawn_userinfo_backfill(&ctx, &evt_tx, &self_tx, prof.name.clone());

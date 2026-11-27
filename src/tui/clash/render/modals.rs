@@ -8,7 +8,7 @@
 
 use super::{draw_card_title, draw_pill_chip, fill_rect_bg, surface_bg};
 use crate::{
-    ops::clash::model::{IpQualityLevel, ServiceTarget, format_bytes_compact},
+    ops::clash::model::{IpQualityLevel, ServiceTarget, format_bytes},
     theme::{Level, Role},
     tui::{
         clash::{
@@ -313,9 +313,10 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, modal_alpha
                             .filter(|u| u.total > 0)
                             .map(|u| {
                                 format!(
-                                    " {}/{}",
-                                    format_bytes_compact(u.used()),
-                                    format_bytes_compact(u.total)
+                                    " | {}% {}/{}",
+                                    u.usage_percent(),
+                                    format_bytes(u.used()),
+                                    format_bytes(u.total)
                                 )
                             })
                             .unwrap_or_default();
@@ -325,6 +326,21 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, modal_alpha
                             pp.node_count,
                             i.text("clash.unit.nodes")
                         );
+                        let meta_style = pp
+                            .userinfo
+                            .filter(|u| u.total > 0)
+                            .map(|u| {
+                                let pct = u.usage_percent();
+                                let role = if u.is_over_quota() || pct >= 90 {
+                                    Role::Danger
+                                } else if pct >= 75 {
+                                    Role::Warning
+                                } else {
+                                    Role::Text3
+                                };
+                                tokens::fg(theme, role).bg(rbg)
+                            })
+                            .unwrap_or_else(|| tokens::text(theme, Level::Tertiary).bg(rbg));
                         let mw = meta.width().min(rect.width as usize * 3 / 5);
                         let nw = (rect.width as usize).saturating_sub(mw + 3);
                         buf.set_stringn(
@@ -338,7 +354,7 @@ pub(in crate::tui) fn draw(app: &App, frame: &mut Frame, area: Rect, modal_alpha
                             buf,
                             rect,
                             &clip_ascii_safe(&meta, mw, ascii),
-                            tokens::text(theme, Level::Tertiary).bg(rbg),
+                            meta_style,
                         );
                     }
                 }

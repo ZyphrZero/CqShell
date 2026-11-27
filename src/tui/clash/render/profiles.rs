@@ -8,9 +8,7 @@ use super::{
     surface_bg,
 };
 use crate::{
-    ops::clash::model::{
-        UserinfoSource, format_bytes, format_bytes_compact, format_relative_epoch,
-    },
+    ops::clash::model::{UserinfoSource, format_bytes, format_bytes_compact, format_relative_age},
     theme::{Level, Role},
     tui::{
         clash::layout::ProfilesGeom,
@@ -150,11 +148,18 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ProfilesGeom) {
                 let iw = rect.width.saturating_sub(3) as usize;
 
                 // Row 0: Name + expire badge + active/age on right
+                let effective_info = prof.userinfo.or_else(|| {
+                    if prof.active {
+                        cl.snapshot.effective_active_userinfo().map(|(u, _)| u)
+                    } else {
+                        None
+                    }
+                });
                 let age = if is_busy {
                     format!("{} {}", app.spin(), i.text("clash.key.updating"))
                 } else {
                     prof.updated_epoch
-                        .map(|ts| format_relative_epoch(ts, now_epoch))
+                        .map(|ts| format_relative_age(ts, now_epoch, i))
                         .unwrap_or_else(|| "-".into())
                 };
                 let right_tag = if prof.active {
@@ -163,7 +168,7 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ProfilesGeom) {
                     age
                 };
                 let mut title_line = prof.name.clone();
-                if let Some(exp) = prof.userinfo.and_then(|u| u.expire_date()) {
+                if let Some(exp) = effective_info.and_then(|u| u.expire_date()) {
                     title_line.push_str(&format!("  [{exp}]"));
                 }
                 let name_w = iw.saturating_sub(right_tag.width() + 2);
@@ -193,19 +198,40 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ProfilesGeom) {
 
                 // Row 1: Traffic quota or host + file size
                 if rect.height >= 2 {
-                    let meta = if let Some(info) = prof.userinfo.filter(|u| u.total > 0) {
-                        format!(
-                            "{} / {}  ({}%) {sep} {}",
-                            format_bytes_compact(info.used()),
-                            format_bytes_compact(info.total),
-                            (info.ratio() * 100.0).round() as u64,
+                    let meta = if let Some(info) = effective_info.filter(|u| u.total > 0) {
+                        let pct = info.usage_percent();
+                        let full_rem = format!(
+                            "{pct}% {} {sep} {} / {} {sep} {} {}",
+                            i.text("clash.profile.used"),
+                            format_bytes(info.used()),
+                            format_bytes(info.total),
+                            i.text("clash.profile.rem_short"),
+                            format_bytes(info.remaining()),
+                        );
+                        let full = format!(
+                            "{pct}% {} {sep} {} / {} {sep} {}",
+                            i.text("clash.profile.used"),
+                            format_bytes(info.used()),
+                            format_bytes(info.total),
                             prof.host
-                        )
-                    } else if let Some(info) = prof.userinfo.filter(|u| u.used() > 0) {
+                        );
+                        if full_rem.width() <= iw {
+                            full_rem
+                        } else if full.width() <= iw {
+                            full
+                        } else {
+                            format!(
+                                "{pct}% {} / {} {sep} {}",
+                                format_bytes_compact(info.used()),
+                                format_bytes_compact(info.total),
+                                prof.host
+                            )
+                        }
+                    } else if let Some(info) = effective_info.filter(|u| u.used() > 0) {
                         format!(
                             "{} {} {sep} {}",
                             i.text("clash.profile.used"),
-                            format_bytes_compact(info.used()),
+                            format_bytes(info.used()),
                             prof.host
                         )
                     } else if let Some(sz) = prof.file_bytes {
@@ -224,10 +250,10 @@ pub(super) fn draw(app: &App, frame: &mut Frame, geom: &ProfilesGeom) {
 
                 // Row 2: Quota progress bar if available
                 if rect.height >= 3
-                    && let Some(info) = prof.userinfo.filter(|u| u.total > 0)
+                    && let Some(info) = effective_info.filter(|u| u.total > 0)
                 {
                     let ratio = info.ratio();
-                    let role = if ratio >= 0.9 {
+                    let role = if info.is_over_quota() || ratio >= 0.9 {
                         Role::Danger
                     } else if ratio >= 0.75 {
                         Role::Warning
@@ -366,8 +392,8 @@ fn draw_profile_inspector(app: &App, frame: &mut Frame, area: ratatui::layout::R
             });
         if let Some((info, source)) = effective {
             if info.total > 0 {
-                let pct = (info.ratio() * 100.0).round() as u64;
-                let fill_role = if pct >= 90 {
+                let pct = info.usage_percent();
+                let fill_role = if info.is_over_quota() || pct >= 90 {
                     Role::Danger
                 } else if pct >= 75 {
                     Role::Warning
@@ -383,8 +409,8 @@ fn draw_profile_inspector(app: &App, frame: &mut Frame, area: ratatui::layout::R
                     i.text("clash.profile.quota"),
                     &format!(
                         "{} / {} ({pct}%)",
-                        format_bytes_compact(info.used()),
-                        format_bytes_compact(info.total)
+                        format_bytes(info.used()),
+                        format_bytes(info.total)
                     ),
                     Some(fill_role),
                     theme,

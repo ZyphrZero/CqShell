@@ -379,6 +379,51 @@ pub(super) fn surface_bg(theme: &Theme, role: Role) -> Color {
     }
 }
 
+pub(super) fn blend_role_bg(
+    theme: &Theme,
+    base: Role,
+    tint: Role,
+    amount: f64,
+    fallback: Role,
+) -> Color {
+    if !theme.flags.paint_bg {
+        return Color::Reset;
+    }
+    match (theme.palette.get(base).rgb(), theme.palette.get(tint).rgb()) {
+        (Some(a), Some(b)) => {
+            let (r, g, bl) = crate::theme::derive::mix(a, b, amount);
+            Color::Rgb(r, g, bl)
+        }
+        _ => tokens::color(theme, fallback),
+    }
+}
+
+#[cfg(test)]
+pub(in crate::tui) fn progress_track_fg_for_test(theme: &Theme, bg: Color) -> Color {
+    progress_track_fg(theme, bg)
+}
+
+pub(super) fn progress_track_fg(theme: &Theme, bg: Color) -> Color {
+    if theme.flags.ascii {
+        return tokens::color(theme, Role::Text3);
+    }
+    if let (Some(border), Some(text3)) = (theme.palette.border.rgb(), theme.palette.text3.rgb()) {
+        let base_t = if theme.light { 0.35 } else { 0.28 };
+        let mut candidate = crate::theme::derive::mix(border, text3, base_t);
+        if let Color::Rgb(br, bg_g, bb) = bg {
+            let bg_rgb = (br, bg_g, bb);
+            if crate::theme::derive::contrast(candidate, bg_rgb) < 1.5 {
+                candidate = crate::theme::derive::mix(border, text3, 0.72);
+            }
+            if crate::theme::derive::contrast(candidate, bg_rgb) < 1.5 {
+                candidate = text3;
+            }
+        }
+        return Color::Rgb(candidate.0, candidate.1, candidate.2);
+    }
+    tokens::color(theme, Role::Text3)
+}
+
 pub(super) fn fill_rect_bg(buf: &mut Buffer, rect: Rect, bg: Color) {
     for y in rect.y..rect.bottom() {
         for x in rect.x..rect.right() {
@@ -506,15 +551,85 @@ pub(super) fn draw_progress_bar(
         return;
     }
     let ratio = ratio.clamp(0.0, 1.0);
-    let filled = ((bar.width as f64) * ratio).round() as u16;
-    let filled = filled.min(bar.width);
-    let (on_ch, off_ch) = if theme.flags.ascii {
-        ('#', '-')
+
+    if theme.flags.ascii {
+        let on_style = tokens::fg(theme, fill_role)
+            .bg(bg)
+            .add_modifier(Modifier::BOLD);
+        let off_style = tokens::text(theme, Level::Tertiary).bg(bg);
+        if bar.width >= 4 {
+            let inner_w = bar.width - 2;
+            let mut filled = ((inner_w as f64) * ratio).round() as u16;
+            if ratio > 0.005 && filled == 0 {
+                filled = 1;
+            }
+            if ratio < 0.995 && inner_w >= 4 && filled >= inner_w {
+                filled = inner_w - 1;
+            }
+            filled = filled.min(inner_w);
+            let bracket_style = tokens::text(theme, Level::Secondary).bg(bg);
+            buf[(bar.x, bar.y)].set_char('[').set_style(bracket_style);
+            buf[(bar.right() - 1, bar.y)]
+                .set_char(']')
+                .set_style(bracket_style);
+            for col in 0..inner_w {
+                let cell = &mut buf[(bar.x + 1 + col, bar.y)];
+                if col < filled {
+                    cell.set_char('#').set_style(on_style);
+                } else {
+                    cell.set_char('-').set_style(off_style);
+                }
+            }
+        } else {
+            let filled = (((bar.width as f64) * ratio).round() as u16).min(bar.width);
+            for col in 0..bar.width {
+                let cell = &mut buf[(bar.x + col, bar.y)];
+                if col < filled {
+                    cell.set_char('#').set_style(on_style);
+                } else {
+                    cell.set_char('-').set_style(off_style);
+                }
+            }
+        }
+        return;
+    }
+
+    let mut filled = ((bar.width as f64) * ratio).round() as u16;
+    if ratio > 0.005 && filled == 0 {
+        filled = 1;
+    }
+    if ratio < 0.995 && bar.width >= 4 && filled >= bar.width {
+        filled = bar.width - 1;
+    }
+    filled = filled.min(bar.width);
+
+    let (on_ch, off_ch) = if theme.style.uses_segmented_gauge() {
+        ('▪', '▫')
+    } else if theme.style == crate::theme::UiStyle::Heavy {
+        ('▅', '▅')
     } else {
-        ('━', '─')
+        ('▄', '▄')
     };
-    let on_style = tokens::fg(theme, fill_role).bg(bg);
-    let off_style = tokens::fg(theme, Role::Rule).bg(bg);
+    let solid_on_sel = theme.flags.solid_selection && bg == tokens::color(theme, Role::Selection);
+    let (on_style, off_style) = if solid_on_sel {
+        let on_fg = tokens::color(theme, Role::OnAccent);
+        let off_fg = match (theme.palette.selection.rgb(), theme.palette.on_accent.rgb()) {
+            (Some(sel), Some(oa)) => {
+                let (r, g, b) = crate::theme::derive::mix(sel, oa, 0.35);
+                Color::Rgb(r, g, b)
+            }
+            _ => tokens::color(theme, Role::Border),
+        };
+        (
+            Style::default().fg(on_fg).bg(bg),
+            Style::default().fg(off_fg).bg(bg),
+        )
+    } else {
+        (
+            tokens::fg(theme, fill_role).bg(bg),
+            Style::default().fg(progress_track_fg(theme, bg)).bg(bg),
+        )
+    };
     for col in 0..bar.width {
         let cell = &mut buf[(bar.x + col, bar.y)];
         if col < filled {

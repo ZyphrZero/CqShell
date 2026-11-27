@@ -450,6 +450,7 @@ pub(in crate::tui) struct ClashState {
     pub delay_url: String,
     pub delay_timeout_ms: u64,
     pub testing_groups: BTreeSet<String>,
+    pub testing_group_progress: BTreeMap<String, (usize, usize)>,
     pub testing_nodes: BTreeSet<String>,
     pub last_grid_cols: Cell<usize>,
 
@@ -527,6 +528,7 @@ impl Default for ClashState {
             delay_url: DEFAULT_DELAY_URL.to_owned(),
             delay_timeout_ms: 5000,
             testing_groups: BTreeSet::new(),
+            testing_group_progress: BTreeMap::new(),
             testing_nodes: BTreeSet::new(),
             last_grid_cols: Cell::new(1),
             profile_cursor: 0,
@@ -567,6 +569,9 @@ impl ClashState {
             self.traffic_fullscreen = false;
             self.conn_inspector_fullscreen = false;
             self.tools_log_fullscreen = false;
+            if tab == ClashTab::Proxies && !self.locate_active_node() {
+                self.node_cursor = 0;
+            }
             self.clamp_cursors();
         }
     }
@@ -704,7 +709,9 @@ impl ClashState {
             return;
         }
         self.group_cursor = idx.min(len - 1);
-        self.node_cursor = 0;
+        if !self.locate_active_node() {
+            self.node_cursor = 0;
+        }
     }
 
     pub fn cycle_group(&mut self, forward: bool) {
@@ -717,7 +724,93 @@ impl ClashState {
         } else {
             (self.group_cursor + len - 1) % len
         };
-        self.node_cursor = 0;
+        if !self.locate_active_node() {
+            self.node_cursor = 0;
+        }
+    }
+
+    /// Optimistically update `group.now`, `group.fixed`, and derived resolved exit chains so
+    /// switching nodes renders immediately before Mihomo's next controller snapshot arrives.
+    pub fn apply_optimistic_select(&mut self, group_name: &str, node_name: &str) {
+        let mut updated = false;
+        for g in &mut self.snapshot.groups {
+            if g.name == group_name {
+                g.now = node_name.to_owned();
+                if g.kind.supports_unfix() {
+                    g.fixed = Some(node_name.to_owned());
+                }
+                updated = true;
+            }
+            for m in &mut g.members {
+                if m.is_group && m.name == group_name {
+                    m.now = Some(node_name.to_owned());
+                }
+            }
+        }
+        if updated {
+            self.recompute_resolved_chains();
+        }
+    }
+
+    /// Optimistically clear a pinned selection on an automatic (`URLTest`/`Fallback`) group.
+    pub fn apply_optimistic_unfix(&mut self, group_name: &str) {
+        for g in &mut self.snapshot.groups {
+            if g.name == group_name && g.kind.supports_unfix() {
+                g.fixed = None;
+            }
+        }
+    }
+
+    fn recompute_resolved_chains(&mut self) {
+        let now_map: BTreeMap<String, String> = self
+            .snapshot
+            .groups
+            .iter()
+            .map(|g| (g.name.clone(), g.now.clone()))
+            .collect();
+        let max_hops = now_map.len().saturating_add(2);
+        for g in &mut self.snapshot.groups {
+            let mut chain = Vec::new();
+            let mut cur = g.name.as_str();
+            for _ in 0..max_hops {
+                let Some(next) = now_map.get(cur).filter(|s| !s.is_empty()) else {
+                    break;
+                };
+                if chain.iter().any(|seen: &String| seen == next) {
+                    break;
+                }
+                chain.push(next.clone());
+                cur = next.as_str();
+            }
+            g.resolved_chain = chain;
+        }
+    }
+
+    /// Best known latency (ms) for a policy group's currently resolved exit node.
+    pub fn group_resolved_delay(&self, group: &ProxyGroupItem) -> Option<u64> {
+        let target = group
+            .resolved_chain
+            .last()
+            .map(String::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(group.now.as_str());
+        if target.is_empty() {
+            return None;
+        }
+        if let Some(ms) = group
+            .members
+            .iter()
+            .find(|m| m.name == target)
+            .and_then(|m| m.delay_ms)
+        {
+            return Some(ms);
+        }
+        self.snapshot
+            .groups
+            .iter()
+            .flat_map(|g| g.members.iter())
+            .find(|m| m.name == target && m.delay_ms.is_some())
+            .and_then(|m| m.delay_ms)
     }
 
     /// Filtered and sorted nodes in the currently selected policy group.
@@ -1046,11 +1139,16 @@ impl ClashState {
                 None
             }
             ClashEvent::NodeDelayTick {
-                group: _,
+                group,
                 node,
                 delay_ms,
-                ..
+                completed,
+                total,
             } => {
+                if total > 0 {
+                    self.testing_group_progress
+                        .insert(group, (completed, total));
+                }
                 for g in &mut self.snapshot.groups {
                     for m in &mut g.members {
                         if m.name == node {
@@ -1063,6 +1161,7 @@ impl ClashState {
             }
             ClashEvent::GroupDelayDone { group, result } => {
                 self.testing_groups.remove(&group);
+                self.testing_group_progress.remove(&group);
                 match result {
                     Ok(delays) => {
                         let mut reachable = 0usize;

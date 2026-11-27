@@ -213,6 +213,19 @@ impl SubscriptionUserinfo {
         self.total.saturating_sub(self.used())
     }
 
+    pub fn is_over_quota(&self) -> bool {
+        self.total > 0 && self.used() > self.total
+    }
+
+    /// Unclamped usage percentage rounded to the nearest integer (may exceed 100 when over quota).
+    pub fn usage_percent(&self) -> u64 {
+        if self.total == 0 {
+            0
+        } else {
+            ((self.used() as f64 / self.total as f64) * 100.0).round() as u64
+        }
+    }
+
     pub fn ratio(&self) -> f64 {
         if self.total == 0 {
             0.0
@@ -1188,6 +1201,7 @@ pub fn format_epoch_ymd(epoch_secs: u64) -> String {
 }
 
 /// Format a relative age from a past Unix epoch timestamp (7-bit ASCII).
+#[cfg(test)]
 pub fn format_relative_epoch(epoch_secs: u64, now_epoch_secs: u64) -> String {
     let diff = now_epoch_secs.saturating_sub(epoch_secs);
     if diff < 60 {
@@ -1198,6 +1212,29 @@ pub fn format_relative_epoch(epoch_secs: u64, now_epoch_secs: u64) -> String {
         format!("{}h ago", diff / 3600)
     } else {
         format!("{}d ago", diff / 86_400)
+    }
+}
+
+/// Format a localized relative age from a past Unix epoch timestamp (`en-US` output is 7-bit ASCII).
+pub fn format_relative_age(
+    epoch_secs: u64,
+    now_epoch_secs: u64,
+    i18n: &crate::i18n::I18n,
+) -> String {
+    let diff = now_epoch_secs.saturating_sub(epoch_secs);
+    if diff < 10 {
+        i18n.text("clash.time.just_now").to_owned()
+    } else if diff < 60 {
+        i18n.format("clash.time.secs_ago", &[("n", &diff.to_string())])
+    } else if diff < 3600 {
+        i18n.format("clash.time.mins_ago", &[("n", &(diff / 60).to_string())])
+    } else if diff < 86_400 {
+        i18n.format("clash.time.hours_ago", &[("n", &(diff / 3600).to_string())])
+    } else {
+        i18n.format(
+            "clash.time.days_ago",
+            &[("n", &(diff / 86_400).to_string())],
+        )
     }
 }
 
@@ -1367,6 +1404,27 @@ Subscription-Userinfo: upload=1073741824; download=2147483648; total=10737418240
         assert_eq!(format_speed_axis(250 * 1024), "250K/s");
         assert_eq!(format_speed_axis(2 * 1024 * 1024), "2M/s");
         assert!(format_speed_axis(1_572_864).is_ascii());
+
+        let en = crate::i18n::I18n::load(Some("en-US"), None).unwrap();
+        let zh = crate::i18n::I18n::load(Some("zh-CN"), None).unwrap();
+        let now = 1_795_000_000;
+        for delta in [0, 30, 120, 7200, 3 * 86_400] {
+            let s = format_relative_age(now - delta, now, &en);
+            assert!(s.is_ascii(), "non-ASCII relative age in en-US: {s}");
+        }
+        assert_eq!(format_relative_age(now - 3 * 86_400, now, &zh), "3天前");
+        assert_eq!(format_relative_age(now - 5, now, &zh), "刚刚");
+
+        let over = SubscriptionUserinfo {
+            upload: 600,
+            download: 600,
+            total: 1000,
+            expire: None,
+        };
+        assert!(over.is_over_quota());
+        assert_eq!(over.usage_percent(), 120);
+        assert!((over.ratio() - 1.0).abs() < 1e-9);
+        assert_eq!(over.remaining(), 0);
     }
 
     #[test]

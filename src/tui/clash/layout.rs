@@ -82,6 +82,8 @@ pub(in crate::tui) struct ProxiesGeom {
     pub group_pills: Vec<GroupPillHit>,
     pub group_overflow_left: bool,
     pub group_overflow_right: bool,
+    pub group_prev_hit: Option<Rect>,
+    pub group_next_hit: Option<Rect>,
     pub group_picker_btn: Option<Rect>,
     pub toolbar: Rect,
     pub filter_bar: Rect,
@@ -90,8 +92,37 @@ pub(in crate::tui) struct ProxiesGeom {
     pub hide_chip: Option<Rect>,
     pub providers_btn: Option<Rect>,
     pub chain_bar: Rect,
+    pub unfix_btn: Option<Rect>,
+    pub ping_btn: Option<Rect>,
+    pub fastest_btn: Option<Rect>,
+    pub locate_btn: Option<Rect>,
+    pub delay_url_btn: Option<Rect>,
     pub grid_area: Rect,
+    pub grid_scrollbar: Option<Rect>,
+    pub grid_scroll_rows: usize,
+    pub grid_visible_rows: usize,
+    pub grid_total_rows: usize,
+    pub visible_node_range: (usize, usize),
     pub node_hits: Vec<(Rect, usize)>,
+}
+
+/// Shared hit-test rectangle for a proxy node card's right-aligned latency badge.
+/// Clicking this sub-region triggers a single-node delay test without switching the active node.
+pub(in crate::tui) fn proxy_card_delay_hit(card: Rect) -> Option<Rect> {
+    if card.height >= 2 && card.width >= 16 {
+        let w = 8u16.min(card.width.saturating_sub(8));
+        Some(Rect::new(
+            card.right().saturating_sub(w + 1),
+            card.y + 1,
+            w,
+            1,
+        ))
+    } else if card.height == 1 && card.width >= 20 {
+        let w = 8u16.min(card.width.saturating_sub(12));
+        Some(Rect::new(card.right().saturating_sub(w + 1), card.y, w, 1))
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1014,6 +1045,18 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
         .unwrap_or(w);
     let group_bar = Rect::new(x, y, gbar_w, 1);
     let (group_pills, group_overflow_left, group_overflow_right) = build_group_pills(group_bar, cl);
+    let group_prev_hit = (group_overflow_left && group_bar.width >= 2).then_some(Rect::new(
+        group_bar.x,
+        group_bar.y,
+        2,
+        1,
+    ));
+    let group_next_hit = (group_overflow_right && group_bar.width >= 2).then_some(Rect::new(
+        group_bar.right().saturating_sub(2),
+        group_bar.y,
+        2,
+        1,
+    ));
     y = y.saturating_add(1).min(body.bottom());
 
     // Row 1: Filter + action toolbar (`/` filter | `[t]` Test | `[o]` Sort | `[h]` Hide | `[P]` Providers)
@@ -1059,7 +1102,19 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
             sort_chip = Some(Rect::new(right_edge, toolbar.y, sw, 1));
             right_edge = right_edge.saturating_sub(1);
         }
-        let test_lbl = format!(" [t] {} ", i.text("clash.key.test_group"));
+        let active_group_name = cl.current_group().map(|g| g.name.as_str());
+        let testing = active_group_name.is_some_and(|n| cl.testing_groups.contains(n));
+        let test_lbl = if testing {
+            if let Some((done, total)) =
+                active_group_name.and_then(|n| cl.testing_group_progress.get(n))
+            {
+                format!(" * {done}/{total} ")
+            } else {
+                format!(" * {} ", i.text("clash.key.testing"))
+            }
+        } else {
+            format!(" [t] {} ", i.text("clash.key.test_group"))
+        };
         let tw = test_lbl.width() as u16;
         if right_edge >= x + 8 + tw {
             right_edge -= tw;
@@ -1070,11 +1125,61 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
     let filter_bar = Rect::new(x, toolbar.y, right_edge.saturating_sub(x), toolbar.height);
     y = y.saturating_add(1).min(body.bottom());
 
-    // Row 2: Active group summary & resolved chain bar
+    // Row 2: Active group summary & resolved chain bar + right-aligned clickable quick actions
     let chain_bar = Rect::new(x, y, w, u16::from(y < body.bottom()));
+    let mut unfix_btn = None;
+    let mut ping_btn = None;
+    let mut fastest_btn = None;
+    let mut locate_btn = None;
+    let mut delay_url_btn = None;
+    if chain_bar.height > 0
+        && w >= 52
+        && let Some(group) = cl.current_group()
+    {
+        let mut cx = chain_bar.right();
+        let min_left = x + if w >= 72 { 24 } else { 18 };
+        let is_pinned = group.fixed.is_some() && group.kind.supports_unfix();
+
+        let url_lbl = " [d] URL ";
+        let uw = url_lbl.width() as u16;
+        if cx >= min_left + uw {
+            cx -= uw;
+            delay_url_btn = Some(Rect::new(cx, chain_bar.y, uw, 1));
+            cx = cx.saturating_sub(1);
+        }
+        let loc_lbl = format!(" [c] {} ", i.text("clash.key.locate"));
+        let lw = loc_lbl.width() as u16;
+        if cx >= min_left + lw {
+            cx -= lw;
+            locate_btn = Some(Rect::new(cx, chain_bar.y, lw, 1));
+            cx = cx.saturating_sub(1);
+        }
+        let fast_lbl = format!(" [f] {} ", i.text("clash.key.fastest"));
+        let fw = fast_lbl.width() as u16;
+        if cx >= min_left + fw {
+            cx -= fw;
+            fastest_btn = Some(Rect::new(cx, chain_bar.y, fw, 1));
+            cx = cx.saturating_sub(1);
+        }
+        let ping_lbl = format!(" [p] {} ", i.text("clash.key.ping_node"));
+        let pw = ping_lbl.width() as u16;
+        if cx >= min_left + pw {
+            cx -= pw;
+            ping_btn = Some(Rect::new(cx, chain_bar.y, pw, 1));
+            cx = cx.saturating_sub(1);
+        }
+        if is_pinned {
+            let unfix_lbl = format!(" [x] {} ", i.text("clash.key.unfix"));
+            let xw = unfix_lbl.width() as u16;
+            if cx >= min_left + xw {
+                cx -= xw;
+                unfix_btn = Some(Rect::new(cx, chain_bar.y, xw, 1));
+            }
+        }
+    }
     y = y.saturating_add(1).min(body.bottom());
 
-    // Remaining area: Multi-column responsive node card grid (FlClash style)
+    // Remaining area: Multi-column responsive node card grid (separated 2-row floating tiles)
     let grid_area = Rect::new(x, y, w, body.bottom().saturating_sub(y));
     let cols = if grid_area.width >= 124 {
         4
@@ -1087,29 +1192,46 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
     };
     cl.last_grid_cols.set(cols);
 
-    let card_h: u16 = if cols == 1 && grid_area.height < 12 {
-        1
+    let (card_h, v_gap): (u16, u16) = if cols == 1 && grid_area.height < 12 {
+        (1, 0)
     } else if cols == 1 {
-        2
+        (2, u16::from(grid_area.height >= 14))
     } else {
-        3
+        (2, 1)
     };
+    let row_stride = card_h + v_gap;
     let nodes = cl.filtered_nodes();
     let total_rows = nodes.len().div_ceil(cols);
-    let visible_rows = (grid_area.height / card_h).max(1) as usize;
+    let visible_rows = if grid_area.height >= card_h {
+        ((grid_area.height + v_gap) / row_stride).max(1) as usize
+    } else {
+        1
+    };
     let cursor_row = cl.node_cursor / cols;
     let scroll_rows = list_offset(total_rows, cursor_row, visible_rows);
 
+    let scrollable = total_rows > visible_rows && grid_area.width >= 20 && grid_area.height >= 3;
+    let grid_scrollbar = scrollable.then_some(Rect::new(
+        grid_area.right().saturating_sub(1),
+        grid_area.y,
+        1,
+        grid_area.height,
+    ));
+    let content_w = if scrollable {
+        grid_area.width.saturating_sub(2)
+    } else {
+        grid_area.width
+    };
     let gap = if cols > 1 { 1u16 } else { 0u16 };
     let total_gap = gap.saturating_mul(cols.saturating_sub(1) as u16);
-    let card_w = grid_area.width.saturating_sub(total_gap) / (cols as u16);
+    let card_w = content_w.saturating_sub(total_gap) / (cols as u16);
     let mut node_hits = Vec::new();
     for r in 0..visible_rows {
         let abs_row = scroll_rows + r;
         if abs_row >= total_rows {
             break;
         }
-        let cy = grid_area.y + (r as u16) * card_h;
+        let cy = grid_area.y + (r as u16) * row_stride;
         if cy + card_h > grid_area.bottom() {
             break;
         }
@@ -1122,12 +1244,18 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
             node_hits.push((Rect::new(cx, cy, card_w, card_h), idx));
         }
     }
+    let visible_node_range = match (node_hits.first(), node_hits.last()) {
+        (Some(&(_, first)), Some(&(_, last))) => (first + 1, last + 1),
+        _ => (0, 0),
+    };
 
     ProxiesGeom {
         group_bar,
         group_pills,
         group_overflow_left,
         group_overflow_right,
+        group_prev_hit,
+        group_next_hit,
         group_picker_btn,
         toolbar,
         filter_bar,
@@ -1136,7 +1264,17 @@ fn build_proxies(body: Rect, cl: &ClashState, i: &I18n) -> ProxiesGeom {
         hide_chip,
         providers_btn,
         chain_bar,
+        unfix_btn,
+        ping_btn,
+        fastest_btn,
+        locate_btn,
+        delay_url_btn,
         grid_area,
+        grid_scrollbar,
+        grid_scroll_rows: scroll_rows,
+        grid_visible_rows: visible_rows,
+        grid_total_rows: total_rows,
+        visible_node_range,
         node_hits,
     }
 }

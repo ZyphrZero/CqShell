@@ -1,7 +1,7 @@
 //! Keyboard and mouse event routing for the dedicated Mihomo visual management workspace.
 
 use super::{
-    layout::{ClashBodyGeom, ClashModalGeometry, OutboundRowAction},
+    layout::{ClashBodyGeom, ClashModalGeometry, OutboundRowAction, proxy_card_delay_hit},
     state::{ClashConfirmAction, ClashModal, ToolEntry},
 };
 use crate::{
@@ -753,22 +753,10 @@ impl App {
             KeyCode::Home => self.clash.node_cursor = 0,
             KeyCode::End if node_count > 0 => self.clash.node_cursor = node_count - 1,
 
-            // Select node (Selector / URLTest / Fallback)
+            // Select node (Selector / URLTest / Fallback); re-selecting an already-pinned
+            // node on an automatic group unfixes it back to automatic mode.
             KeyCode::Enter => {
-                if let (Some(group), Some(node)) =
-                    (self.clash.current_group(), self.clash.selected_node())
-                {
-                    if !group.kind.supports_select() {
-                        self.clash_toast_key("clash.toast.group_readonly", Tone::Warning);
-                    } else {
-                        let g = group.name.clone();
-                        let n = node.name.clone();
-                        return Ok(Effect::ClashCmd(ClashMonitorCmd::SelectProxy {
-                            group: g,
-                            node: n,
-                        }));
-                    }
-                }
+                return Ok(self.clash_select_current_node());
             }
 
             // One-click group delay test
@@ -787,42 +775,17 @@ impl App {
 
             // Single-node delay test
             KeyCode::Char('p') => {
-                if let (Some(group), Some(node)) =
-                    (self.clash.current_group(), self.clash.selected_node())
-                {
-                    let g = group.name.clone();
-                    let n = node.name.clone();
-                    if self.clash.testing_nodes.insert(n.clone()) {
-                        return Ok(Effect::ClashCmd(ClashMonitorCmd::TestNodeDelay {
-                            group: g,
-                            node: n,
-                            url: self.clash.delay_url.clone(),
-                            timeout_ms: self.clash.delay_timeout_ms,
-                        }));
-                    }
-                }
+                return Ok(self.clash_ping_current_node());
             }
 
             // Explicit one-click fastest reachable node selection
             KeyCode::Char('f') => {
-                if let Some((g, n, _ms)) = self.clash.fastest_node_in_current_group() {
-                    return Ok(Effect::ClashCmd(ClashMonitorCmd::SelectProxy {
-                        group: g,
-                        node: n,
-                    }));
-                }
-                self.clash_toast_key("clash.toast.no_tested_nodes", Tone::Warning);
+                return Ok(self.clash_select_fastest_node());
             }
 
             // Unfix pinned URLTest / Fallback group back to automatic
             KeyCode::Char('x') => {
-                if let Some(group) = self.clash.current_group() {
-                    if group.kind.supports_unfix() {
-                        let g = group.name.clone();
-                        return Ok(Effect::ClashCmd(ClashMonitorCmd::UnfixGroup { group: g }));
-                    }
-                    self.clash_toast_key("clash.toast.unfix_auto_only", Tone::Info);
-                }
+                return Ok(self.clash_unfix_current_group());
             }
 
             // Sort cycle / flip direction
@@ -882,6 +845,72 @@ impl App {
             _ => {}
         }
         Ok(Effect::None)
+    }
+
+    fn clash_select_current_node(&mut self) -> Effect {
+        let Some((g, n, supports_select, is_already_pinned)) =
+            self.clash.current_group().and_then(|group| {
+                self.clash.selected_node().map(|node| {
+                    (
+                        group.name.clone(),
+                        node.name.clone(),
+                        group.kind.supports_select(),
+                        group.kind.supports_unfix()
+                            && group.fixed.as_deref() == Some(node.name.as_str()),
+                    )
+                })
+            })
+        else {
+            return Effect::None;
+        };
+        if !supports_select {
+            self.clash_toast_key("clash.toast.group_readonly", Tone::Warning);
+            return Effect::None;
+        }
+        if is_already_pinned {
+            self.clash.apply_optimistic_unfix(&g);
+            return Effect::ClashCmd(ClashMonitorCmd::UnfixGroup { group: g });
+        }
+        self.clash.apply_optimistic_select(&g, &n);
+        Effect::ClashCmd(ClashMonitorCmd::SelectProxy { group: g, node: n })
+    }
+
+    fn clash_ping_current_node(&mut self) -> Effect {
+        if let (Some(group), Some(node)) = (self.clash.current_group(), self.clash.selected_node())
+        {
+            let g = group.name.clone();
+            let n = node.name.clone();
+            if self.clash.testing_nodes.insert(n.clone()) {
+                return Effect::ClashCmd(ClashMonitorCmd::TestNodeDelay {
+                    group: g,
+                    node: n,
+                    url: self.clash.delay_url.clone(),
+                    timeout_ms: self.clash.delay_timeout_ms,
+                });
+            }
+        }
+        Effect::None
+    }
+
+    fn clash_select_fastest_node(&mut self) -> Effect {
+        if let Some((g, n, _ms)) = self.clash.fastest_node_in_current_group() {
+            self.clash.apply_optimistic_select(&g, &n);
+            return Effect::ClashCmd(ClashMonitorCmd::SelectProxy { group: g, node: n });
+        }
+        self.clash_toast_key("clash.toast.no_tested_nodes", Tone::Warning);
+        Effect::None
+    }
+
+    fn clash_unfix_current_group(&mut self) -> Effect {
+        if let Some(group) = self.clash.current_group() {
+            if group.kind.supports_unfix() {
+                let g = group.name.clone();
+                self.clash.apply_optimistic_unfix(&g);
+                return Effect::ClashCmd(ClashMonitorCmd::UnfixGroup { group: g });
+            }
+            self.clash_toast_key("clash.toast.unfix_auto_only", Tone::Info);
+        }
+        Effect::None
     }
 
     fn clash_profiles_key(&mut self, key: KeyEvent, idle: bool) -> Result<Effect> {
@@ -1858,29 +1887,38 @@ impl App {
             return Ok(Effect::None);
         };
         let pos = Position::new(event.column, event.row);
-        match event.kind {
+        let right_click = match event.kind {
             MouseEventKind::Moved => {
                 self.hover = Some(pos);
                 return Ok(Effect::None);
             }
-            MouseEventKind::ScrollUp => {
-                return Ok(self.clash_scroll(true));
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let up = matches!(event.kind, MouseEventKind::ScrollUp);
+                if let ClashBodyGeom::Proxies(px) = &geom.body
+                    && px.group_bar.contains(pos)
+                {
+                    self.clash.cycle_group(!up);
+                    return Ok(Effect::None);
+                }
+                return Ok(self.clash_scroll(up));
             }
-            MouseEventKind::ScrollDown => {
-                return Ok(self.clash_scroll(false));
-            }
-            MouseEventKind::Down(MouseButton::Left) => {}
+            MouseEventKind::Down(MouseButton::Left) => false,
+            MouseEventKind::Down(MouseButton::Right) => true,
             _ => return Ok(Effect::None),
-        }
+        };
 
-        // Top tab bar & focus button
-        for pill in &geom.tab_pills {
-            if pill.rect.contains(pos) {
-                return Ok(self.switch_clash_tab(pill.tab));
+        // Top tab bar & focus button (left-click only)
+        if !right_click {
+            for pill in &geom.tab_pills {
+                if pill.rect.contains(pos) {
+                    return Ok(self.switch_clash_tab(pill.tab));
+                }
             }
-        }
-        if geom.focus_btn.is_some_and(|r| r.contains(pos)) {
-            self.clash.fullscreen = !self.clash.fullscreen;
+            if geom.focus_btn.is_some_and(|r| r.contains(pos)) {
+                self.clash.fullscreen = !self.clash.fullscreen;
+                return Ok(Effect::None);
+            }
+        } else if !matches!(geom.body, ClashBodyGeom::Proxies(_)) {
             return Ok(Effect::None);
         }
 
@@ -2022,62 +2060,95 @@ impl App {
                 }
             }
             ClashBodyGeom::Proxies(px) => {
-                for pill in &px.group_pills {
-                    if pill.rect.contains(pos) {
-                        self.clash.select_group_index(pill.group_idx);
+                if !right_click {
+                    if px.group_prev_hit.is_some_and(|r| r.contains(pos)) {
+                        self.clash.cycle_group(false);
+                        return Ok(Effect::None);
+                    }
+                    if px.group_next_hit.is_some_and(|r| r.contains(pos)) {
+                        self.clash.cycle_group(true);
+                        return Ok(Effect::None);
+                    }
+                    for pill in &px.group_pills {
+                        if pill.rect.contains(pos) {
+                            self.clash.select_group_index(pill.group_idx);
+                            return Ok(Effect::None);
+                        }
+                    }
+                    if px.group_picker_btn.is_some_and(|r| r.contains(pos)) {
+                        self.clash.modal = Some(ClashModal::GroupPicker {
+                            cursor: self.clash.group_cursor,
+                        });
+                        return Ok(Effect::None);
+                    }
+                    if px.test_btn.is_some_and(|r| r.contains(pos))
+                        && let Some(group) = self.clash.current_group()
+                    {
+                        let g = group.name.clone();
+                        if self.clash.testing_groups.insert(g.clone()) {
+                            return Ok(Effect::ClashCmd(ClashMonitorCmd::TestGroupDelay {
+                                group: g,
+                                url: self.clash.delay_url.clone(),
+                                timeout_ms: self.clash.delay_timeout_ms,
+                            }));
+                        }
+                    }
+                    if px.hide_chip.is_some_and(|r| r.contains(pos)) {
+                        self.clash.hide_timeout = !self.clash.hide_timeout;
+                        self.clash.clamp_cursors();
+                        return Ok(Effect::None);
+                    }
+                    if px.providers_btn.is_some_and(|r| r.contains(pos)) {
+                        self.clash.modal = Some(ClashModal::Providers {
+                            show_rules: false,
+                            cursor: 0,
+                        });
+                        return Ok(Effect::None);
+                    }
+                    if px.unfix_btn.is_some_and(|r| r.contains(pos)) {
+                        return Ok(self.clash_unfix_current_group());
+                    }
+                    if px.ping_btn.is_some_and(|r| r.contains(pos)) {
+                        return Ok(self.clash_ping_current_node());
+                    }
+                    if px.fastest_btn.is_some_and(|r| r.contains(pos)) {
+                        return Ok(self.clash_select_fastest_node());
+                    }
+                    if px.locate_btn.is_some_and(|r| r.contains(pos)) {
+                        if !self.clash.locate_active_node() {
+                            self.clash_toast_key("clash.toast.locate_miss", Tone::Info);
+                        }
+                        return Ok(Effect::None);
+                    }
+                    if px.delay_url_btn.is_some_and(|r| r.contains(pos)) {
+                        self.clash.modal = Some(ClashModal::DelaySettings {
+                            url: InputBuffer::new(self.clash.delay_url.clone()),
+                            timeout: InputBuffer::new(self.clash.delay_timeout_ms.to_string()),
+                            active_field: 0,
+                            error: None,
+                        });
                         return Ok(Effect::None);
                     }
                 }
-                if px.group_picker_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.modal = Some(ClashModal::GroupPicker {
-                        cursor: self.clash.group_cursor,
-                    });
-                    return Ok(Effect::None);
-                }
-                if px.test_btn.is_some_and(|r| r.contains(pos))
-                    && let Some(group) = self.clash.current_group()
-                {
-                    let g = group.name.clone();
-                    if self.clash.testing_groups.insert(g.clone()) {
-                        return Ok(Effect::ClashCmd(ClashMonitorCmd::TestGroupDelay {
-                            group: g,
-                            url: self.clash.delay_url.clone(),
-                            timeout_ms: self.clash.delay_timeout_ms,
-                        }));
-                    }
-                }
                 if px.sort_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.proxy_sort = self.clash.proxy_sort.next();
+                    if right_click {
+                        self.clash.proxy_sort_asc = !self.clash.proxy_sort_asc;
+                    } else {
+                        self.clash.proxy_sort = self.clash.proxy_sort.next();
+                        self.clash.proxy_sort_asc = true;
+                    }
                     self.clash.clamp_cursors();
-                    return Ok(Effect::None);
-                }
-                if px.hide_chip.is_some_and(|r| r.contains(pos)) {
-                    self.clash.hide_timeout = !self.clash.hide_timeout;
-                    self.clash.clamp_cursors();
-                    return Ok(Effect::None);
-                }
-                if px.providers_btn.is_some_and(|r| r.contains(pos)) {
-                    self.clash.modal = Some(ClashModal::Providers {
-                        show_rules: false,
-                        cursor: 0,
-                    });
                     return Ok(Effect::None);
                 }
                 for &(rect, idx) in &px.node_hits {
                     if rect.contains(pos) {
-                        let already_focused = self.clash.node_cursor == idx;
                         self.clash.node_cursor = idx;
-                        if already_focused
-                            && let (Some(group), Some(node)) =
-                                (self.clash.current_group(), self.clash.selected_node())
-                            && group.kind.supports_select()
+                        if right_click
+                            || proxy_card_delay_hit(rect).is_some_and(|d| d.contains(pos))
                         {
-                            return Ok(Effect::ClashCmd(ClashMonitorCmd::SelectProxy {
-                                group: group.name.clone(),
-                                node: node.name.clone(),
-                            }));
+                            return Ok(self.clash_ping_current_node());
                         }
-                        return Ok(Effect::None);
+                        return Ok(self.clash_select_current_node());
                     }
                 }
             }
