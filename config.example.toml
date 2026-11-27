@@ -4,6 +4,7 @@ language = "zh-CN"
 # style = "auto"
 # transparent_bg = false
 # reduced_motion = false
+# ui_density = "auto"
 # sidebar_collapsed = false
 # detect_background = true
 # locale_dir = "/absolute/path/to/locales"

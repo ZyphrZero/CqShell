@@ -4,6 +4,30 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。各版本的独立发布说明见 [`docs/releases/`](docs/releases/)。
 
+## [v0.2.0] - 2026-11-27
+
+### 新增
+- **原生双传输 MCP 服务器与结构化 JSON 控制面**（零 `tokio`，保持单静态二进制与 MSRV `1.88.0`）：
+  - **stdio / SSH stdio 传输（`cqs mcp`）**：实现 JSON-RPC 2.0 换行分隔帧与 `2025-06-18` / `2025-03-26` / `2024-11-05` 协议协商，暴露 13 项工具、5 项静态资源、2 项资源模板与 4 项诊断 Prompt，内置 `--read-only`、`--allow-danger`、`--allow-group`、`--deny-action` 权限护栏、强制密钥脱敏与零自动重启保证。
+  - **原生 Streamable HTTP 传输（`cqs mcp serve`）**：基于 `std::net::TcpListener` 与有界工作线程池，默认监听回环 `127.0.0.1:18765/mcp` 与只读模式；内置 `0600` 高熵 Bearer 密钥与运行中零重启热轮换（`cqs mcp token status|init|rotate|set`）、非回环绑定强制鉴权、`Origin` 防 DNS Rebinding 校验、分块传输（`chunked`）与 `MCP-Session-Id` 会话生命周期管理；支持可选 `cqs-mcp.service` systemd 用户/系统常驻服务托管（`UMask=0077`，绝不经命令行传密钥）。
+  - **一键安装与脱敏复制入口**：新增 `cqs mcp install / uninstall`（原子增量合并 Claude Code `~/.claude.json`、Codex CLI `~/.codex/config.toml`、Cursor `~/.cursor/mcp.json` 与自定义 `--file` JSON，保留既有配置与修改前备份）、`cqs mcp config [--reveal]` 多格式配置片段生成、`ai` 分组新增「MCP 服务与接入」区块（9 项动作，总动作数增至 115 项），以及 TUI 全局 `Shift+M`「MCP 接入与脱敏密钥卡」（屏幕始终遮罩、OSC 52 一键复制与原地轮换）；禁止通过 MCP 协议本身自我调用 MCP 控制面变更动作以防提权。
+  - **结构化 JSON CLI**：新增 `cqs status [--section system|docker|mihomo|all] [--json]`、`cqs describe <id> [--json]`、`cqs choices <id> [--json]`，以及 `run` / `batch` 的 `--json`、`--dry-run` 与 `--params-json`（支持 `-` 标准输入）。
+- **全新 Mihomo 6 标签可视化工作台（`cqs mihomo`）**：
+  - 覆盖仪表盘（实时流量图谱、峰值/总量、模式切换与按需出站 IP 探测）、代理（可滚动策略组胶囊、多列节点卡片、单节点/整组延迟测速、多维排序、隐超时、选最快、自动组恢复与定位）、配置（订阅流量配额进度条、到期倒计时、批量更新与外部 Providers）、请求（运行中/已关闭/全部连接筛选与单连接关闭）、规则与工具（内嵌脱敏日志检索）。
+  - 新增 13 项流媒体与 AI 服务可用性/解锁巡检弹窗与出站 IP 质量画像弹窗（支持隐藏出站 IP 持久化）；支持核心 DNS 查询（`clash.dns.query`）、Fake-IP/DNS 缓存刷新（`clash.cache.flush`）、并发拨号/统一延迟/`find-process-mode` 设置与 `clash.stop` 强制终止选项；运行中修改配置自动热重载或安全重启生效，未开启本机控制接口时提供一键启用入口。
+- **独立 SOCKS5 / SOCKS5h 入站与脱敏凭据卡**：新增 `clash.socks.*` 可视化分栏预览配置表单，非回环绑定强制密码认证并生成 `0600` `socks5.auth`；新增全局 `Shift+S`「SOCKS5 / 5h 凭据卡」弹窗（屏幕始终遮罩、禁止明文渲染、仅 OSC 52 一键复制，关闭即清空内存）。
+- **仪表盘实时连接数统计**：概览仪表盘与 `cqs status` 新增 Linux 宿主机 TCP / UDP / `TIME_WAIT` 连接数（基于 `/proc/net/sockstat{,6}`），Mihomo 仪表盘与 `cqs_mihomo_snapshot` 新增活跃连接总数与 TCP / UDP 拆分统计并适配窄屏布局。
+- **自适应触控密度与小屏底部拇指操作栏**：新增 `ui_density`（`Auto` / `Compact` / `Touch`，可在外观抽屉按 `D` 切换并持久化）与竖屏/窄屏底部拇指快捷操作栏，优化移动端 SSH（含 `59×24`、`82×54`、`52×36`）触控体验。
+- **AI 服务与分流体检（`test.ai`）**：集成 `ipforai.cc/sh`（经 `sh -n` 语法预检），默认关闭在线分享短链（`--no-share`），支持 `standard` / `detail` / `summary` / `markdown` 四种模式及指定目标 IP 检测。
+
+### 变更
+- 统一交互式二次确认为简洁的 `y/n` 流程，移除表单提交后的冗余重复确认提示。
+- 全面优化 TUI 与后台监控性能：`actions::specs_slice()` / `OnceLock` 静态缓存、配置文件指纹缓存消除渲染热路径每帧磁盘解析、`Monitor::snapshot_if_changed()` 跳过空闲重绘与拷贝、静态探测结果按二进制指纹缓存。
+
+### 修复
+- 彻底修复 `crossterm 0.29` 在已断开 PTY（`/dev/pts/* (deleted)`）上导致的 100% CPU 死循环：Unix 端统一经 `poll_terminal_event()`（`libc::poll` + `FIONREAD` 预检）与零唤醒 `HangupWatchdog` 守护，并在断连时跳过退出转义序列，自建管道与测试 PTY 均设置 `FD_CLOEXEC`。
+- 补充剩余子进程启动路径的瞬态 `ETXTBSY` 自动退避重试，提升 Linux 并发写入后立即执行的稳定性。
+
 ## [v0.1.8] - 2026-11-24
 
 ### 修复
@@ -87,7 +111,8 @@
 - 支持 Pi、Claude Code、Codex 官方独立二进制校验安装（无需 Node.js / npm）及常用系统工具独立安装。
 - 支持按需查询公网 IP/ISP、一键优化批处理清单与事务化备份恢复。
 
-[Unreleased]: https://github.com/ZyphrZero/CqShell/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/ZyphrZero/CqShell/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/ZyphrZero/CqShell/compare/v0.1.8...v0.2.0
 [v0.1.8]: https://github.com/ZyphrZero/CqShell/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/ZyphrZero/CqShell/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/ZyphrZero/CqShell/compare/v0.1.5...v0.1.6

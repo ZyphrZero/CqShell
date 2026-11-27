@@ -17,7 +17,7 @@
 
 ---
 
-**CqShell (`cqs`)** is a single-binary Rust / Ratatui server operations toolbox for **Debian and Ubuntu**. It brings system maintenance, mirror benchmarking, BBRv3 kernel management, TCP tuning, SSH hardening, a dedicated Docker TUI workspace, full-stack Mihomo proxy management, standalone AI agent CLI installers, prompt customization, and server benchmarks into one responsive, recoverable bilingual TUI and scriptable CLI.
+**CqShell (`cqs`)** is a single-binary Rust / Ratatui server operations toolbox for **Debian and Ubuntu**. It brings system maintenance, mirror benchmarking, BBRv3 kernel management, TCP tuning, SSH hardening, dedicated 6-tab Docker and Mihomo proxy TUI workspaces, standalone AI agent CLI installers, native dual-transport MCP interfaces, prompt customization, and server benchmarks into one responsive, recoverable bilingual TUI and scriptable CLI.
 
 ## Screenshots
 
@@ -58,10 +58,11 @@
 ## Highlights
 
 - **Single Static Binary**: Prebuilt **Linux x86_64 and ARM64** musl binaries with zero Rust, Python, or Node.js runtime requirements and embedded Simplified Chinese & English catalogs.
-- **Modern Sidebar Shell TUI**: Dedicated Bento Overview dashboard, collapsible sidebar, fuzzy command palette (`/` / `Ctrl+K`), borderless plain-text copy view (`V`), full mouse/keyboard support, and 4 responsive breakpoints down to **`40×16`** (including mobile SSH clients such as iOS Termius).
-- **Decoupled Themes & UI Styles**: **8 built-in color themes × 8 UI design languages**, automatic terminal light/dark detection, live preview drawer (`T`), transparent terminal background (`B`), reduced motion (`M`), and custom TOML themes.
-- **Dedicated 6-Tab Docker TUI Workspace**: Launch directly via `cqs docker` with Focus / Embedded dual modes across Containers, Compose, Images, Volumes, Networks, and Daemon — powered by native CLI JSON output with zero idle daemon overhead.
-- **100 Structured Operations**: 11 reorderable modules plus a pinned **One-Click Optimization** checklist sharing one validation, privilege, and execution engine across TUI and CLI.
+- **Modern Sidebar Shell TUI**: Dedicated Bento Overview dashboard (with host TCP / UDP / `TIME_WAIT` connection counts), collapsible sidebar, fuzzy command palette (`/` / `Ctrl+K`), borderless plain-text copy view (`V`), full mouse/keyboard support, and 4 responsive breakpoints down to **`40×16`** with adaptive touch density and a mobile bottom thumb bar (tailored for iOS Termius and narrow SSH screens).
+- **Decoupled Themes & UI Styles**: **8 built-in color themes × 8 UI design languages**, automatic terminal light/dark detection, live preview drawer (`T`), transparent terminal background (`B`), reduced motion (`M`), touch density (`D`), and custom TOML themes.
+- **Dedicated 6-Tab Docker & Mihomo Workspaces**: Launch directly via `cqs docker` (Containers / Compose / Images / Volumes / Networks / Daemon) or `cqs mihomo` (Overview / Proxies / Profiles / Connections / Rules / Tools) with Focus / Embedded dual modes — powered by native CLI JSON and direct controller calls with zero idle daemon overhead.
+- **115 Structured Operations**: 11 reorderable modules plus a pinned **One-Click Optimization** checklist sharing one validation, privilege, and execution engine across TUI and CLI.
+- **Native AI Interfaces (Dual-Transport MCP + Structured JSON)**: Zero-`tokio` native MCP server supporting both **stdio / SSH stdio (`cqs mcp`)** and **Streamable HTTP + `0600` Bearer tokens (`cqs mcp serve` / optional `cqs-mcp.service` systemd unit)**, one-click local client install/uninstall (`cqs mcp install` for **Claude Code / Codex CLI / Cursor / custom JSON**), live hot token rotation, the global **`Shift+M`** masked OSC 52 TUI access card, and structured JSON CLI controls with three-tier privilege guardrails, anti-self-escalation, and mandatory secret masking.
 - **Transactional Safety**: HTTPS-only downloads with SHA-256 verification, `flock` locks, config validation before commit, atomic replacements, before-image recovery journals, non-interactive `apt` safeguards, tiered confirmations, and zero implicit reboots.
 
 ---
@@ -94,6 +95,8 @@ curl -fsSL "${GH_PROXY%/}/https://raw.githubusercontent.com/ZyphrZero/CqShell/ma
 cqs --lang en-US          # Launch interactive TUI (read-only / user-scoped actions)
 sudo cqs --lang en-US     # Manage system-wide operations as root
 cqs docker                # Open fullscreen Docker TUI workspace directly
+cqs mihomo                # Open fullscreen 6-tab Mihomo TUI workspace directly
+cqs mcp --read-only       # Start native MCP stdio server (use cqs mcp serve for Streamable HTTP)
 sudo cqs update           # Verified atomic self-update to latest stable release
 sudo cqs --uninstall      # Remove default command (preserves configs & recovery data)
 ```
@@ -109,7 +112,7 @@ Append options after `bash -s --`:
 
 | Purpose | Append |
 | --- | --- |
-| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.1.8` |
+| Pin a specific release (including when a gateway lacks API support or for prereleases) | `--version v0.2.0` |
 | Install into a custom absolute directory | `--install-dir /opt/cqs` |
 | Install for the current user (also omit `sudo`) | `--install-dir "$HOME/.local/bin"` |
 
@@ -148,20 +151,20 @@ See [docs/RELEASING.md](docs/RELEASING.md) for publishing, CI workflows, and mir
 
 ## Feature Overview
 
-The sidebar pins **Overview (`H`)** and **Optimization (`O`)**, followed by 11 reorderable modules totaling **100** CLI/TUI actions:
+The sidebar pins **Overview (`H`)** and **Optimization (`O`)**, followed by 11 reorderable modules totaling **115** CLI/TUI actions:
 
 | Module | Capabilities |
 | --- | --- |
 | **Optimization** | Checklist-based batch workflow; press `A` for the recommended preset (package updates + standard cleanup + TCP tuning + BBR) with step-by-step progress and timings |
-| **System** | System overview, on-demand public IP/ISP lookup, non-interactive apt update & cleanup, **LinuxMirrors benchmark/switch/restore**, timezone, SWAP, `fail2ban` |
+| **System** | System overview (with host TCP / UDP / `TIME_WAIT` connection counts), on-demand public IP/ISP lookup, non-interactive apt update & cleanup, **LinuxMirrors benchmark/switch/restore**, timezone, SWAP, `fail2ban` |
 | **Network** | BBR status, 4 default qdiscs (`fq`, `fq_codel`, `fq_pie`, `cake`), bandwidth/RTT/cgroup-aware TCP buffer tuning & rollback, **GitHub acceleration proxy** |
 | **Kernel** | BBRv3 Standard / Max kernel installation (latest matching or pinned `x.y.z`), installed kernel inventory, **one-time GRUB boot switch**, safe removal of non-running third-party kernels |
 | **SSH** | Port updates with active listener verification (preserving `Match`/`Include`), public key import & password auth lockdown |
 | **Docker** | **Dedicated 6-tab Docker TUI workspace** (Containers / Compose / Images / Volumes / Networks / Daemon) + install, registry mirrors, IPv6, cleanup & uninstall |
 | **Tools** | Individual installers for `curl`, `wget`, `nano`, `unzip`, `tar`, `tmux`, `iftop`, `btop`, `gdu`, `fzf`, `git`, `gh`, plus install-all |
-| **Agent Tools** | Official standalone Linux binary install/update & status checks for **Pi (`pi.dev`)**, **Claude Code**, and **Codex CLI** (zero Node.js/npm) |
+| **Agent Tools** | Official standalone Linux binary install/update & status checks for **Pi (`pi.dev`)**, **Claude Code**, and **Codex CLI** (zero Node.js/npm) + **Native MCP Server & Client Setup** (stdio / Streamable HTTP / `0600` Bearer tokens / systemd / one-click client installer & `Shift+M` masked access card) |
 | **Prompt** | Starship + Bash/Zsh prompt setup with 7 styles × 9 palettes, live TUI/CLI preview, Starship TOML viewer, and first-baseline restore |
-| **Mihomo Proxy** | 37 full-stack actions: core, HTTPS & local YAML subscriptions, 4 Web UIs, GeoData rule sets, hot-reload / mode / delay testing / connections, DNS / TUN / systemd & `clashctl` compatibility |
+| **Mihomo Proxy** | **Dedicated 6-tab visual workspace (`cqs mihomo`)** + 43 full-stack actions: core, HTTPS & local YAML subscriptions with quota bars, proxy benchmarking/sorting, live TCP/UDP connections & rules, 13-service unlock & outbound IP checks, 4 Web UIs, `Shift+S` masked SOCKS5 card, DNS query/cache flush, TUN/systemd & `clashctl` compatibility |
 | **Tests** | Speedtest, **xykt/IPQuality** (privacy mode by default), **ipforai.cc AI service check** (share-link upload off by default), NextTrace, YABS, connectivity & disk I/O benchmarks |
 | **CqShell** | Update checks, verified atomic self-update, and command install/uninstall |
 
@@ -182,10 +185,11 @@ Select **Docker** in the sidebar or launch directly with `cqs docker [--tab cont
 
 ### Mihomo Proxy & `clashctl` Compatibility
 
-The **Mihomo Proxy** module implements 41 pure-Rust actions using `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash` by default (overridable via `CQS_CLASH_*`):
+Select **Mihomo Proxy** in the sidebar or launch directly with `cqs mihomo [--tab overview|proxies|profiles|connections|rules|tools] [--embedded]` for the 6-tab visual workspace (pure Rust, 43 CLI/TUI actions) using `${XDG_DATA_HOME:-$HOME/.local/share}/cqs/clash` by default (overridable via `CQS_CLASH_*`):
 
+- **Dedicated 6-Tab Visual Workspace**: Supports both Embedded and fullscreen Focus (`z` / `F`) modes across **Overview** (live traffic atlas, active TCP / UDP connection counts, persistent mode switching, 13-service streaming/AI unlock checks, and on-demand outbound IP profile modal), **Proxies** (scrollable group pills, multi-column node cards, group/single latency tests, sorting, hide timeouts, pick fastest, auto-group pin/restore), **Profiles** (`subscription-userinfo` quota bars & expiry, batch updates, external Providers, and 4-file atomic rollback), **Connections** (active / 200 closed / all with rule pill filtering), **Rules**, and **Tools** (core DNS query & cache flush, auto hot-reload on live edits, one-click local controller enablement, plus embedded redacted log search/copy).
 - **Core & Transactional Subscriptions**: Verified official Mihomo binary installation, HTTPS subscriptions, and local YAML import (`clash.sub.import`), merging Mixin and validating with `mihomo -t` before atomic publication with before-image rollback.
-- **Visual SOCKS5 / SOCKS5h Inbound**: Dedicated `clash.socks.*` split-pane live preview form for standalone `cqs-socks5` listeners (port, `0.0.0.0` / `::` / `127.0.0.1` / interface IP, UDP relay, `DIRECT` server egress vs Mihomo routing rules), enforcing password authentication on non-loopback binds, writing a `0600` private credential card (`socks5.auth` with `socks5h://` and `socks5://` URIs), and hot-reloading live Mihomo instances with zero downtime.
+- **Visual SOCKS5 / SOCKS5h Inbound**: Dedicated `clash.socks.*` split-pane live preview form for standalone `cqs-socks5` listeners (port, `0.0.0.0` / `::` / `127.0.0.1` / interface IP, UDP relay, `DIRECT` server egress vs Mihomo routing rules), enforcing password authentication on non-loopback binds, writing a `0600` private credential file (`socks5.auth`), and surfacing a global **`Shift+S`** masked credential card in the TUI (always masked on screen, OSC 52 copy-only, zero plaintext rendering) with zero-downtime hot-reload on live instances.
 - **4 Verified Web Dashboards**: **Zashboard** (default), **MetaCubeXD**, **Yacd-Meta**, and **Razord-Meta**, bound to loopback by default for safe SSH port-forwarding access.
 - **Live Controller & GeoData**: Direct HTTP/1.1 controller integration for validated hot-reload (with rollback), instant `rule`/`global`/`direct` mode switching, concurrent proxy-group latency tests, active connection inspection/closing, and `MetaCubeX/meta-rules-dat` (`standard`/`lite`/`full`) GeoData updates.
 - **Core Settings, DNS, TUN & systemd**: Transactional management of `mixed-port`, `allow-lan`, IPv6, domain sniffing, `fake-ip`/`redir-host` DNS presets, masked Mixin inspection/reset, TUN settings, and user/system systemd units.
@@ -217,6 +221,8 @@ See [docs/MIHOMO.md](docs/MIHOMO.md) (Chinese) for detailed commands, recovery b
   cqs run ai.status
   ```
 
+- **Native MCP Server & One-Click Client Setup**: Open the **MCP Server & Access** section under `Agent Tools` or press global **`Shift+M`** for the masked MCP access card (always masked on screen, OSC 52 copy for JSON / Claude / Codex snippets and Bearer tokens, plus in-place token rotation). Use `cqs mcp install / uninstall` to register cleanly into local **Claude Code**, **Codex CLI**, **Cursor**, or custom `--file` JSON files; connect remotely via **SSH stdio** (zero open ports, reuses SSH keys) or **Streamable HTTP + `0600` Bearer tokens** (`cqs mcp serve`, optional `cqs-mcp.service` systemd unit, and hot token rotation). See [docs/AI_API.md](docs/AI_API.md).
+
 - **Common Tools & Prompt**: Individual or batch installation for 12 CLI utilities (including `git` and SHA-256-verified official `cli/cli` `.deb` releases for `gh`), plus Starship prompt customization for Bash/Zsh across 7 styles (`full`, `compact`, `box`, `ribbon`, `powerline`, `minimal`, `brackets`) and 9 palettes (`cyan`, `green`, `magenta`, `tokyo-night`, `catppuccin`, `rose-pine`, `nord`, `gruvbox`, `dracula`) with live TUI/CLI previews, Starship TOML inspection, and first-baseline restore.
 
 ---
@@ -245,7 +251,8 @@ See [docs/MIHOMO.md](docs/MIHOMO.md) (Chinese) for detailed commands, recovery b
 | `Enter` | Inspect, configure parameters, or execute |
 | `Space` / `X` / `A` | Optimization checklist: toggle item / review & run plan / apply recommended preset |
 | `Alt+↑` / `Alt+↓` | Reorder modules while idle (saved immediately) |
-| `T` (`B` / `M` in drawer) | Open live Appearance drawer (toggle transparent background / reduced motion) |
+| `T` (`B` / `M` / `D` in drawer) | Open live Appearance drawer (transparent background / reduced motion / touch density) |
+| `Shift+S` / `Shift+M` | Open masked SOCKS5 credential card / MCP access & token card (OSC 52 copy) |
 | `P` | Configure GitHub acceleration proxy |
 | `R` / `N` | Refresh local metrics / query public IP & ISP on demand |
 | `C` / `Y` / `V` | Copy command or logs / open borderless plain-text view for native drag selection |
@@ -297,6 +304,7 @@ theme = "auto"
 style = "auto"
 transparent_bg = false
 reduced_motion = false
+ui_density = "auto"
 sidebar_collapsed = false
 detect_background = true
 # locale_dir = "/absolute/path/to/locales"
@@ -322,8 +330,12 @@ cqs themes && cqs styles
 cqs update --check --json
 sudo cqs --gh-proxy default update
 
-# Native MCP stdio server & structured JSON dry-run/execution for AI agents (see docs/AI_API.md)
+# Native dual-transport MCP server, local client installer, token rotation & structured JSON CLI (see docs/AI_API.md)
 cqs mcp --read-only
+cqs mcp serve
+cqs mcp install --client claude --transport local_stdio --policy read_only
+cqs mcp config --transport http --client json
+cqs mcp token rotate
 sudo cqs run bbr.enable --json --dry-run --params-json '{"qdisc":"fq"}'
 sudo cqs --yes run bbr.enable --json --params-json '{"qdisc":"fq"}'
 
@@ -370,7 +382,7 @@ cqs --yes run clash.start
 | Document | Scope |
 | --- | --- |
 | [docs/TECHNICAL.md](docs/TECHNICAL.md) | Architecture, locks, transactional recovery & testing acceptance |
-| [docs/AI_API.md](docs/AI_API.md) | Native MCP stdio server, structured JSON CLI, safety guardrails & AI client setup |
+| [docs/AI_API.md](docs/AI_API.md) | Native dual-transport MCP (stdio + Streamable HTTP / Bearer / client installer), structured JSON CLI & safety guardrails |
 | [docs/THEMES.md](docs/THEMES.md) | Decoupled themes & styles, 20 color roles & custom theme authoring |
 | [docs/MIHOMO.md](docs/MIHOMO.md) | Mihomo actions, Web panels, controller, TUN/systemd & `clashctl` compatibility |
 | [docs/MIRRORS.md](docs/MIRRORS.md) | LinuxMirrors Lite integration scope & recovery |
